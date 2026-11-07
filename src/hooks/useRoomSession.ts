@@ -2,17 +2,30 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AVATAR_COLORS,
   AVATAR_STYLES,
-  LOUNGE_SEATS,
   createInitialPresenterState,
 } from '../constants/cinema'
+import {
+  computeRoomSeats,
+  createDefaultRoomCustomization,
+} from '../constants/hangout'
 import { RoomRealtimeService, hasSupabaseCredentials } from '../services/realtime'
+import {
+  clearLocalRoomCustomization,
+  fetchCloudRoomCustomization,
+  loadLocalRoomCustomization,
+  sanitizeRoomCustomization,
+  saveLocalRoomCustomization,
+  scheduleCloudRoomSave,
+} from '../services/roomStorage'
 import type {
   AvatarPose6DoF,
   AvatarStyleId,
   ChatMessage,
+  ComputedSeat,
   FloatingReaction,
   ParticipantProfile,
   PresenterState,
+  RoomCustomizationState,
   ScreenMode,
   TransportMode,
   WebRTCSignalMessage,
@@ -34,6 +47,17 @@ export interface JoinRoomOptions {
   isMuted: boolean
 }
 
+function isNewerCustomization(
+  incoming: RoomCustomizationState,
+  current: RoomCustomizationState,
+): boolean {
+  if (incoming.revision > current.revision) return true
+  if (incoming.revision === current.revision && incoming.updatedAt > current.updatedAt) {
+    return true
+  }
+  return false
+}
+
 export function useRoomSession(
   onWebRTCSignalRef: React.RefObject<((signal: WebRTCSignalMessage) => void) | null>,
 ) {
@@ -45,12 +69,22 @@ export function useRoomSession(
     hasSupabaseCredentials() ? 'supabase' : 'cloud-relay',
   )
 
+  const [roomCustomization, setRoomCustomization] = useState<RoomCustomizationState>(() =>
+    createDefaultRoomCustomization(),
+  )
+
+  const computedSeats = useMemo<ComputedSeat[]>(
+    () => computeRoomSeats(roomCustomization),
+    [roomCustomization],
+  )
+
   const [localProfile, setLocalProfile] = useState<ParticipantProfile>(() => ({
     userId: localUserId,
     displayName: 'Guest',
     avatarColor: AVATAR_COLORS[0].hex,
     avatarStyle: AVATAR_STYLES[0].id,
     seatIndex: 0,
+    seatId: 'furn-sofa-front:0',
     isHost: true,
     isMuted: false,
     inVR: false,
@@ -68,15 +102,30 @@ export function useRoomSession(
   const remotePosesRef = useRef<Map<string, AvatarPose6DoF>>(new Map())
   const serviceRef = useRef<RoomRealtimeService | null>(null)
   const presenterStateRef = useRef<PresenterState>(presenterState)
+  const roomCustomizationRef = useRef<RoomCustomizationState>(roomCustomization)
+  const computedSeatsRef = useRef<ComputedSeat[]>(computedSeats)
   const localProfileRef = useRef<ParticipantProfile>(localProfile)
+  const roomCodeRef = useRef<string>(roomCode)
 
   useEffect(() => {
     presenterStateRef.current = presenterState
   }, [presenterState])
 
   useEffect(() => {
+    roomCustomizationRef.current = roomCustomization
+  }, [roomCustomization])
+
+  useEffect(() => {
+    computedSeatsRef.current = computedSeats
+  }, [computedSeats])
+
+  useEffect(() => {
     localProfileRef.current = localProfile
   }, [localProfile])
+
+  useEffect(() => {
+    roomCodeRef.current = roomCode
+  }, [roomCode])
 
   // Prune expired floating 3D emoji reactions every 500ms
   useEffect(() => {
@@ -106,6 +155,71 @@ export function useRoomSession(
     ])
   }, [])
 
+  const updateLocalProfile = useCallback(
+    (patch: Partial<ParticipantProfile>) => {
+      setLocalProfile((prev) => {
+        const changed = (Object.keys(patch) as Array<keyof ParticipantProfile>).some(
+          (key) => patch[key] !== undefined && prev[key] !== patch[key],
+        )
+        if (!changed) return prev
+        const next = { ...prev, ...patch }
+        void serviceRef.current?.updatePresence(next)
+        return next
+      })
+      setParticipants((prev) => {
+        const me = prev.find((p) => p.userId === localUserId)
+        if (!me) return prev
+        const changed = (Object.keys(patch) as Array<keyof ParticipantProfile>).some(
+          (key) => patch[key] !== undefined && me[key] !== patch[key],
+        )
+        if (!changed) return prev
+        return prev.map((p) => (p.userId === localUserId ? { ...p, ...patch } : p))
+      })
+    },
+    [localUserId],
+  )
+
+  // Keep localProfile.seatId & seatIndex valid if furniture was deleted or reordered
+  useEffect(() => {
+    if (!joined || computedSeats.length === 0) return
+    const matchedById = localProfile.seatId
+      ? computedSeats.find((s) => s.id === localProfile.seatId)
+      : undefined
+
+    if (matchedById) {
+      if (matchedById.index !== localProfile.seatIndex) {
+        updateLocalProfile({ seatIndex: matchedById.index })
+      }
+      return
+    }
+
+    // Current seat furniture was removed -> pick first unoccupied seat
+    const takenIds = new Set(
+      participants
+        .filter((p) => p.userId !== localUserId && p.seatId)
+        .map((p) => p.seatId as string),
+    )
+    const fallbackSeat =
+      computedSeats.find((s) => !takenIds.has(s.id)) ??
+      computedSeats[localProfile.seatIndex % computedSeats.length] ??
+      computedSeats[0]
+
+    if (fallbackSeat) {
+      updateLocalProfile({
+        seatId: fallbackSeat.id,
+        seatIndex: fallbackSeat.index,
+      })
+    }
+  }, [
+    computedSeats,
+    joined,
+    localProfile.seatId,
+    localProfile.seatIndex,
+    localUserId,
+    participants,
+    updateLocalProfile,
+  ])
+
   const joinRoom = useCallback(
     async (opts: JoinRoomOptions) => {
       if (serviceRef.current) {
@@ -115,12 +229,18 @@ export function useRoomSession(
       remotePosesRef.current.clear()
 
       const normalizedCode = opts.roomCode.toUpperCase().trim() || 'LOUNGE-1'
+      const savedLocalLayout =
+        loadLocalRoomCustomization(normalizedCode) ?? createDefaultRoomCustomization()
+      const initialSeats = computeRoomSeats(savedLocalLayout)
+      const firstSeat = initialSeats[0]
+
       const initialProfile: ParticipantProfile = {
         userId: localUserId,
         displayName: opts.displayName.trim() || 'Cinema Guest',
         avatarColor: opts.avatarColor,
         avatarStyle: opts.avatarStyle,
         seatIndex: 0,
+        seatId: firstSeat?.id ?? 'furn-sofa-front:0',
         isHost: false,
         isMuted: opts.isMuted,
         inVR: opts.inVR,
@@ -128,16 +248,28 @@ export function useRoomSession(
       }
 
       setRoomCode(normalizedCode)
+      roomCodeRef.current = normalizedCode
+      setRoomCustomization(savedLocalLayout)
+      roomCustomizationRef.current = savedLocalLayout
       setLocalProfile(initialProfile)
       setParticipants([initialProfile])
       setPresenterState(createInitialPresenterState())
       setMessages([])
 
       let seatSettled = false
+      let announcedSavedLayout = false
 
       const service = new RoomRealtimeService(normalizedCode, initialProfile, {
         onConnectionStatus: (isOnline) => {
           setConnected(isOnline)
+          if (
+            isOnline &&
+            !announcedSavedLayout &&
+            roomCustomizationRef.current.revision > 0
+          ) {
+            announcedSavedLayout = true
+            service.broadcastRoomCustomization(roomCustomizationRef.current)
+          }
         },
         onParticipantsChange: (roster) => {
           // Oldest participant in the room acts as deterministic host
@@ -165,32 +297,42 @@ export function useRoomSession(
           // Auto-resolve seat collisions on initial join
           const me = hydrated.find((p) => p.userId === localUserId)
           if (me) {
-            const occupiedByEarlierPeer = hydrated.some(
-              (other) =>
-                other.userId !== localUserId &&
-                other.seatIndex === me.seatIndex &&
-                (other.joinedAt < me.joinedAt ||
-                  (other.joinedAt === me.joinedAt && other.userId < me.userId)),
-            )
+            const seatsNow = computedSeatsRef.current
+            const occupiedByEarlierPeer = hydrated.some((other) => {
+              if (other.userId === localUserId) return false
+              const sameSeat =
+                me.seatId && other.seatId
+                  ? other.seatId === me.seatId
+                  : other.seatIndex === me.seatIndex
+              if (!sameSeat) return false
+              return (
+                other.joinedAt < me.joinedAt ||
+                (other.joinedAt === me.joinedAt && other.userId < me.userId)
+              )
+            })
 
             if (!seatSettled || occupiedByEarlierPeer) {
               seatSettled = true
-              if (occupiedByEarlierPeer) {
-                const taken = new Set(
+              if (occupiedByEarlierPeer && seatsNow.length > 0) {
+                const takenIds = new Set(
                   hydrated
                     .filter((other) => other.userId !== localUserId)
-                    .map((other) => other.seatIndex),
+                    .map((other) => other.seatId ?? seatsNow[other.seatIndex]?.id)
+                    .filter(Boolean) as string[],
                 )
                 const freeSeat =
-                  LOUNGE_SEATS.find((s) => !taken.has(s.index))?.index ??
-                  hydrated.length % LOUNGE_SEATS.length
+                  seatsNow.find((s) => !takenIds.has(s.id)) ??
+                  seatsNow[hydrated.length % seatsNow.length] ??
+                  seatsNow[0]
                 setLocalProfile((prev) => ({
                   ...prev,
-                  seatIndex: freeSeat,
+                  seatIndex: freeSeat.index,
+                  seatId: freeSeat.id,
                   isHost: hostId === localUserId,
                 }))
                 void service.updatePresence({
-                  seatIndex: freeSeat,
+                  seatIndex: freeSeat.index,
+                  seatId: freeSeat.id,
                   isHost: hostId === localUserId,
                 })
                 return
@@ -235,6 +377,16 @@ export function useRoomSession(
             return incoming
           })
         },
+        onRoomCustomization: (incomingRaw) => {
+          const incoming = sanitizeRoomCustomization(incomingRaw)
+          if (!incoming) return
+          setRoomCustomization((prev) => {
+            if (!isNewerCustomization(incoming, prev)) return prev
+            roomCustomizationRef.current = incoming
+            saveLocalRoomCustomization(normalizedCode, incoming)
+            return incoming
+          })
+        },
         onRoomStateRequest: () => {
           const current = presenterStateRef.current
           const me = localProfileRef.current
@@ -252,6 +404,11 @@ export function useRoomSession(
               currentTime: current.currentTime + elapsed,
               updatedAt: Date.now(),
             })
+          }
+
+          const currentCustom = roomCustomizationRef.current
+          if (currentCustom.revision > 0 && me.isHost) {
+            service.broadcastRoomCustomization(currentCustom)
           }
         },
         onChatMessage: (msg) => {
@@ -275,6 +432,18 @@ export function useRoomSession(
       setTransportMode(service.mode)
       setJoined(true)
       await service.connect()
+
+      // Optional cloud room_layouts table check in background
+      void fetchCloudRoomCustomization(normalizedCode).then((cloudState) => {
+        if (!cloudState || serviceRef.current !== service) return
+        setRoomCustomization((prev) => {
+          if (!isNewerCustomization(cloudState, prev)) return prev
+          roomCustomizationRef.current = cloudState
+          saveLocalRoomCustomization(normalizedCode, cloudState)
+          service.broadcastRoomCustomization(cloudState)
+          return cloudState
+        })
+      })
 
       appendSystemMessage(
         `Joined room ${normalizedCode} (${
@@ -303,37 +472,109 @@ export function useRoomSession(
     }
   }, [])
 
-  const updateLocalProfile = useCallback((patch: Partial<ParticipantProfile>) => {
-    setLocalProfile((prev) => {
-      const changed = (Object.keys(patch) as Array<keyof ParticipantProfile>).some(
-        (key) => patch[key] !== undefined && prev[key] !== patch[key],
-      )
-      if (!changed) return prev
-      const next = { ...prev, ...patch }
-      void serviceRef.current?.updatePresence(next)
-      return next
-    })
-    setParticipants((prev) => {
-      const me = prev.find((p) => p.userId === localUserId)
-      if (!me) return prev
-      const changed = (Object.keys(patch) as Array<keyof ParticipantProfile>).some(
-        (key) => patch[key] !== undefined && me[key] !== patch[key],
-      )
-      if (!changed) return prev
-      return prev.map((p) => (p.userId === localUserId ? { ...p, ...patch } : p))
-    })
-  }, [localUserId])
-
   const selectSeat = useCallback(
-    (seatIndex: number) => {
-      if (seatIndex < 0 || seatIndex >= LOUNGE_SEATS.length) return
-      const occupied = participants.some(
-        (p) => p.userId !== localUserId && p.seatIndex === seatIndex,
-      )
+    (seatIdOrIndex: string | number) => {
+      const seatsNow = computedSeatsRef.current
+      if (seatsNow.length === 0) return
+
+      const targetSeat =
+        typeof seatIdOrIndex === 'string'
+          ? seatsNow.find((s) => s.id === seatIdOrIndex)
+          : seatsNow[seatIdOrIndex]
+
+      if (!targetSeat) return
+
+      const occupied = participants.some((p) => {
+        if (p.userId === localUserId) return false
+        if (p.seatId) return p.seatId === targetSeat.id
+        return p.seatIndex === targetSeat.index
+      })
       if (occupied) return
-      updateLocalProfile({ seatIndex })
+
+      updateLocalProfile({
+        seatIndex: targetSeat.index,
+        seatId: targetSeat.id,
+      })
     },
     [localUserId, participants, updateLocalProfile],
+  )
+
+  const updateRoomCustomization = useCallback(
+    (
+      updater: (
+        prev: RoomCustomizationState,
+      ) => Omit<RoomCustomizationState, 'revision' | 'updatedAt' | 'updatedBy'>,
+    ) => {
+      const current = roomCustomizationRef.current
+      const draft = updater(current)
+      const next: RoomCustomizationState = {
+        ...draft,
+        revision: current.revision + 1,
+        updatedAt: Date.now(),
+        updatedBy: localProfileRef.current.displayName,
+      }
+      roomCustomizationRef.current = next
+      setRoomCustomization(next)
+
+      const activeRoom = roomCodeRef.current
+      if (activeRoom) {
+        saveLocalRoomCustomization(activeRoom, next)
+        scheduleCloudRoomSave(activeRoom, next)
+      }
+      serviceRef.current?.broadcastRoomCustomization(next)
+    },
+    [],
+  )
+
+  const resetRoomCustomization = useCallback(() => {
+    const defaults = createDefaultRoomCustomization()
+    const current = roomCustomizationRef.current
+    const next: RoomCustomizationState = {
+      ...defaults,
+      revision: current.revision + 1,
+      updatedAt: Date.now(),
+      updatedBy: localProfileRef.current.displayName,
+    }
+    roomCustomizationRef.current = next
+    setRoomCustomization(next)
+
+    const activeRoom = roomCodeRef.current
+    if (activeRoom) {
+      clearLocalRoomCustomization(activeRoom)
+      saveLocalRoomCustomization(activeRoom, next)
+      scheduleCloudRoomSave(activeRoom, next)
+    }
+    serviceRef.current?.broadcastRoomCustomization(next)
+    appendSystemMessage(`${localProfileRef.current.displayName} reset the room layout to default.`)
+  }, [appendSystemMessage])
+
+  const importRoomCustomizationJson = useCallback(
+    (rawJson: string): boolean => {
+      try {
+        const parsed = sanitizeRoomCustomization(JSON.parse(rawJson))
+        if (!parsed) return false
+        const current = roomCustomizationRef.current
+        const next: RoomCustomizationState = {
+          ...parsed,
+          revision: current.revision + 1,
+          updatedAt: Date.now(),
+          updatedBy: localProfileRef.current.displayName,
+        }
+        roomCustomizationRef.current = next
+        setRoomCustomization(next)
+        const activeRoom = roomCodeRef.current
+        if (activeRoom) {
+          saveLocalRoomCustomization(activeRoom, next)
+          scheduleCloudRoomSave(activeRoom, next)
+        }
+        serviceRef.current?.broadcastRoomCustomization(next)
+        appendSystemMessage(`${localProfileRef.current.displayName} loaded a custom room blueprint.`)
+        return true
+      } catch {
+        return false
+      }
+    },
+    [appendSystemMessage],
   )
 
   const publishPresenterState = useCallback((next: PresenterState) => {
@@ -457,11 +698,19 @@ export function useRoomSession(
   const sendReaction = useCallback(
     (emoji: string, originOverride?: [number, number, number]) => {
       const me = localProfileRef.current
-      const seat = LOUNGE_SEATS[me.seatIndex] ?? LOUNGE_SEATS[0]
+      const seatsNow = computedSeatsRef.current
+      const seat =
+        (me.seatId ? seatsNow.find((s) => s.id === me.seatId) : undefined) ??
+        seatsNow[me.seatIndex] ??
+        seatsNow[0]
+      const basePos: [number, number, number] = seat
+        ? [seat.position[0], seat.position[1] + seat.seatHeightOffset, seat.position[2]]
+        : [0, 0, 0.5]
+
       const origin: [number, number, number] = originOverride ?? [
-        seat.position[0] + (Math.random() - 0.5) * 0.35,
-        seat.position[1] + 1.35,
-        seat.position[2] - 0.25,
+        basePos[0] + (Math.random() - 0.5) * 0.35,
+        basePos[1] + 1.35,
+        basePos[2] - 0.25,
       ]
       const reaction: FloatingReaction = {
         id: `rx-${localUserId}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -494,6 +743,8 @@ export function useRoomSession(
     localProfile,
     participants,
     presenterState,
+    roomCustomization,
+    computedSeats,
     isLocalPresenter,
     canTakeControl,
     messages,
@@ -503,6 +754,9 @@ export function useRoomSession(
     leaveRoom,
     updateLocalProfile,
     selectSeat,
+    updateRoomCustomization,
+    resetRoomCustomization,
+    importRoomCustomizationJson,
     takeControl,
     releaseControl,
     toggleHostLock,

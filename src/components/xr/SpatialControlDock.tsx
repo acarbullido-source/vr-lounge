@@ -113,11 +113,15 @@ export interface SpatialControlDockProps {
   localDuration: number
   chatPanelOpen: boolean
   youtubeBrowserOpen: boolean
+  buildModeOpen: boolean
   youtubeSearchQuery: string
+  posterInitialValue?: string
   keyboardMode: VRKeyboardMode | null
   onSetKeyboardMode: (mode: VRKeyboardMode | null) => void
   onToggleYouTubeBrowser: () => void
+  onToggleBuildMode: () => void
   onSubmitYouTubeSearch: (query: string) => void
+  onSubmitPosterValue?: (val: string) => void
   onTakeControl: () => void
   onReleaseControl: () => void
   onTogglePlayPause: () => void
@@ -145,11 +149,15 @@ export function SpatialControlDock({
   localDuration,
   chatPanelOpen,
   youtubeBrowserOpen,
+  buildModeOpen,
   youtubeSearchQuery,
+  posterInitialValue = '',
   keyboardMode,
   onSetKeyboardMode,
   onToggleYouTubeBrowser,
+  onToggleBuildMode,
   onSubmitYouTubeSearch,
+  onSubmitPosterValue,
   onTakeControl,
   onReleaseControl,
   onTogglePlayPause,
@@ -197,7 +205,9 @@ export function SpatialControlDock({
                 ? presenterState.mediaUrl
                 : keyboardMode === 'youtube'
                   ? youtubeSearchQuery
-                  : ''
+                  : keyboardMode === 'poster'
+                    ? posterInitialValue
+                    : ''
             }
             onSubmitUrl={(url, title) => {
               onSelectStreamUrl(url, title)
@@ -209,6 +219,10 @@ export function SpatialControlDock({
             }}
             onSubmitYouTubeSearch={(query) => {
               onSubmitYouTubeSearch(query)
+              onSetKeyboardMode(null)
+            }}
+            onSubmitPosterValue={(val) => {
+              onSubmitPosterValue?.(val)
               onSetKeyboardMode(null)
             }}
             onClose={() => onSetKeyboardMode(null)}
@@ -227,18 +241,18 @@ export function SpatialControlDock({
         <meshBasicMaterial color="#E5A93C" />
       </mesh>
 
-      {/* Top Row: Presenter Control Handoff + YouTube VR Deck + Source Switchers + Minimize */}
+      {/* Top Row: Presenter Control Handoff + YouTube VR Deck + Source Switchers + Build + Minimize */}
       <DockButton
-        label={isLocalPresenter ? 'Release Screen' : 'Take Control'}
+        label={isLocalPresenter ? 'Release' : 'Control'}
         sublabel={
           isLocalPresenter
-            ? 'You are presenting'
+            ? 'Presenting'
             : presenterState.presenterName
-              ? `Active: ${presenterState.presenterName.slice(0, 10)}`
-              : 'Claim presenter'
+              ? `${presenterState.presenterName.slice(0, 9)}`
+              : 'Claim screen'
         }
-        position={[-0.46, 0.165, 0.016]}
-        width={0.27}
+        position={[-0.49, 0.165, 0.016]}
+        width={0.21}
         variant={isLocalPresenter ? 'active' : 'primary'}
         disabled={!isLocalPresenter && !canTakeControl}
         onClick={isLocalPresenter ? onReleaseControl : onTakeControl}
@@ -246,9 +260,9 @@ export function SpatialControlDock({
 
       <DockButton
         label="▶ YouTube"
-        sublabel="Browse in VR"
-        position={[-0.175, 0.165, 0.016]}
-        width={0.26}
+        sublabel="VR Browse"
+        position={[-0.255, 0.165, 0.016]}
+        width={0.22}
         variant={youtubeBrowserOpen ? 'primary' : 'danger'}
         onClick={onToggleYouTubeBrowser}
       />
@@ -256,8 +270,8 @@ export function SpatialControlDock({
       <DockButton
         label="URL / HLS"
         sublabel="Direct Link"
-        position={[0.085, 0.165, 0.016]}
-        width={0.22}
+        position={[-0.035, 0.165, 0.016]}
+        width={0.19}
         variant={keyboardMode === 'url' ? 'primary' : 'default'}
         onClick={() => {
           if (!isLocalPresenter && canTakeControl) {
@@ -270,16 +284,25 @@ export function SpatialControlDock({
       <DockButton
         label="Share Tab"
         sublabel="PC WebRTC"
-        position={[0.325, 0.165, 0.016]}
-        width={0.22}
+        position={[0.165, 0.165, 0.016]}
+        width={0.18}
         variant={presenterState.screenMode === 'tab-stream' && isLocalPresenter ? 'primary' : 'default'}
         onClick={onStartTabShare}
       />
 
       <DockButton
+        label={buildModeOpen ? '🛠 Done' : '🛠 Build'}
+        sublabel="Customize"
+        position={[0.365, 0.165, 0.016]}
+        width={0.19}
+        variant={buildModeOpen ? 'primary' : 'active'}
+        onClick={onToggleBuildMode}
+      />
+
+      <DockButton
         label="Hide ▾"
-        position={[0.525, 0.165, 0.016]}
-        width={0.14}
+        position={[0.535, 0.165, 0.016]}
+        width={0.12}
         onClick={() => setMinimized(true)}
       />
 

@@ -3,10 +3,10 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { useXR, useXRInputSourceState } from '@react-three/xr'
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
-import { LOUNGE_SEATS } from '../../constants/cinema'
 import type {
   AvatarPose6DoF,
   AvatarStyleId,
+  ComputedSeat,
   ParticipantProfile,
   Transform6DoF,
 } from '../../types/lounge'
@@ -15,11 +15,36 @@ export interface AvatarManagerProps {
   joined: boolean
   localProfile: ParticipantProfile
   participants: ParticipantProfile[]
+  computedSeats: ComputedSeat[]
   activePresenterId: string | null
   remotePosesRef: React.RefObject<Map<string, AvatarPose6DoF>>
   remoteVoiceStreams: Record<string, MediaStream>
   voiceVolume: number
   broadcastPose: (pose: AvatarPose6DoF) => void
+}
+
+function resolveParticipantSeat(
+  participant: Pick<ParticipantProfile, 'seatId' | 'seatIndex'>,
+  computedSeats: ComputedSeat[],
+): ComputedSeat {
+  const byId = participant.seatId
+    ? computedSeats.find((s) => s.id === participant.seatId)
+    : undefined
+  return (
+    byId ??
+    computedSeats[participant.seatIndex] ??
+    computedSeats[0] ?? {
+      id: 'fallback:0',
+      index: 0,
+      furnitureId: 'fallback',
+      furnitureType: 'fallback',
+      label: 'Lounge Spot 1',
+      position: [0, 0, 0.5],
+      localCushionOffset: [0, 0, 0],
+      seatHeightOffset: 0,
+      rotationY: 0,
+    }
+  )
 }
 
 function VisorHeadGeometry({
@@ -78,6 +103,7 @@ function VisorHeadGeometry({
 
 interface RemoteAvatarProps {
   participant: ParticipantProfile
+  computedSeats: ComputedSeat[]
   isPresenter: boolean
   remotePosesRef: React.RefObject<Map<string, AvatarPose6DoF>>
   voiceStream: MediaStream | undefined
@@ -87,6 +113,7 @@ interface RemoteAvatarProps {
 
 function RemoteAvatar({
   participant,
+  computedSeats,
   isPresenter,
   remotePosesRef,
   voiceStream,
@@ -103,11 +130,12 @@ function RemoteAvatar({
   const analyserRef = useRef<AnalyserNode | null>(null)
   const freqBinsRef = useRef<Uint8Array<ArrayBuffer> | null>(null)
 
-  const seat = LOUNGE_SEATS[participant.seatIndex] ?? LOUNGE_SEATS[0]
+  const seat = resolveParticipantSeat(participant, computedSeats)
+  const seatHeadY = seat.position[1] + seat.seatHeightOffset + 1.16
 
   const targetHeadPos = useMemo(
-    () => new THREE.Vector3(seat.position[0], seat.position[1] + 1.16, seat.position[2]),
-    [seat.position],
+    () => new THREE.Vector3(seat.position[0], seatHeadY, seat.position[2]),
+    [seat.position, seatHeadY],
   )
   const targetHeadQuat = useMemo(() => {
     const q = new THREE.Quaternion()
@@ -202,7 +230,7 @@ function RemoteAvatar({
         pose.head.quaternion[3],
       )
     } else {
-      targetHeadPos.set(seat.position[0], seat.position[1] + 1.16, seat.position[2])
+      targetHeadPos.set(seat.position[0], seatHeadY, seat.position[2])
       targetHeadQuat.setFromEuler(tmpEuler.set(0, seat.rotationY, 0))
     }
 
@@ -398,6 +426,7 @@ export function AvatarManager({
   joined,
   localProfile,
   participants,
+  computedSeats,
   activePresenterId,
   remotePosesRef,
   remoteVoiceStreams,
@@ -439,7 +468,7 @@ export function AvatarManager({
     if (nowElapsed - lastBroadcastTimeRef.current < 0.05) return
     lastBroadcastTimeRef.current = nowElapsed
 
-    const seat = LOUNGE_SEATS[localProfile.seatIndex] ?? LOUNGE_SEATS[0]
+    const seat = resolveParticipantSeat(localProfile, computedSeats)
 
     if (inXRSession) {
       camera.getWorldPosition(scratchHeadPos)
@@ -448,7 +477,7 @@ export function AvatarManager({
       // Desktop mode: anchor avatar body at chosen lounge chair while mirroring camera look direction
       scratchHeadPos.set(
         seat.position[0],
-        seat.position[1] + 1.16,
+        seat.position[1] + seat.seatHeightOffset + 1.16,
         seat.position[2],
       )
       camera.getWorldQuaternion(scratchHeadQuat)
@@ -511,7 +540,8 @@ export function AvatarManager({
       },
       leftHand: leftTransform,
       rightHand: rightTransform,
-      seatIndex: localProfile.seatIndex,
+      seatIndex: seat.index,
+      seatId: seat.id,
       inVR: inXRSession,
       timestamp: Date.now(),
     })
@@ -528,6 +558,7 @@ export function AvatarManager({
         <RemoteAvatar
           key={remote.userId}
           participant={remote}
+          computedSeats={computedSeats}
           isPresenter={remote.userId === activePresenterId}
           remotePosesRef={remotePosesRef}
           voiceStream={remoteVoiceStreams[remote.userId]}

@@ -6,6 +6,7 @@ import type {
   FloatingReaction,
   ParticipantProfile,
   PresenterState,
+  RoomCustomizationState,
   TransportMode,
   WebRTCSignalMessage,
 } from '../types/lounge'
@@ -14,6 +15,7 @@ export interface RealtimeCallbacks {
   onParticipantsChange: (participants: ParticipantProfile[]) => void
   onPoseUpdate: (pose: AvatarPose6DoF) => void
   onPresenterState: (state: PresenterState) => void
+  onRoomCustomization?: (state: RoomCustomizationState) => void
   onRoomStateRequest: (requesterId: string) => void
   onChatMessage: (message: ChatMessage) => void
   onReaction: (reaction: FloatingReaction) => void
@@ -26,6 +28,7 @@ interface RelayEnvelope {
   type:
     | 'pose-update'
     | 'presenter-state'
+    | 'room-customization'
     | 'request-room-state'
     | 'chat-message'
     | 'emoji-reaction'
@@ -178,6 +181,7 @@ export class RoomRealtimeService {
                 avatarColor: latest.avatarColor,
                 avatarStyle: latest.avatarStyle,
                 seatIndex: latest.seatIndex,
+                seatId: latest.seatId,
                 isHost: latest.isHost,
                 isMuted: latest.isMuted,
                 inVR: latest.inVR,
@@ -197,6 +201,11 @@ export class RoomRealtimeService {
       .on('broadcast', { event: 'presenter-state' }, ({ payload }) => {
         if (!this.destroyed && payload) {
           this.callbacks.onPresenterState(payload as PresenterState)
+        }
+      })
+      .on('broadcast', { event: 'room-customization' }, ({ payload }) => {
+        if (!this.destroyed && payload) {
+          this.callbacks.onRoomCustomization?.(payload as RoomCustomizationState)
         }
       })
       .on('broadcast', { event: 'request-room-state' }, ({ payload }) => {
@@ -415,6 +424,9 @@ export class RoomRealtimeService {
       case 'presenter-state':
         this.callbacks.onPresenterState(env.payload as PresenterState)
         break
+      case 'room-customization':
+        this.callbacks.onRoomCustomization?.(env.payload as RoomCustomizationState)
+        break
       case 'request-room-state': {
         const req = env.payload as { requesterId: string }
         if (req?.requesterId) this.callbacks.onRoomStateRequest(req.requesterId)
@@ -516,6 +528,19 @@ export class RoomRealtimeService {
       })
     } else {
       this.publishRelay('presenter-state', state)
+    }
+  }
+
+  broadcastRoomCustomization(state: RoomCustomizationState): void {
+    if (this.destroyed) return
+    if (this.supabaseChannel) {
+      void this.supabaseChannel.send({
+        type: 'broadcast',
+        event: 'room-customization',
+        payload: state,
+      })
+    } else {
+      this.publishRelay('room-customization', state)
     }
   }
 

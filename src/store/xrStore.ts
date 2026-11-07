@@ -98,7 +98,19 @@ async function installQuest3SimulatorAndEnter(): Promise<{
       cachedNativeVRSupported = true
       notifySupportListeners()
     }
-    await xrStore.enterVR()
+    try {
+      await xrStore.enterVR()
+    } catch (firstErr) {
+      const msg = firstErr instanceof Error ? firstErr.message : String(firstErr)
+      if (msg.includes('not connected to three.js')) {
+        await new Promise<void>((r) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => r())),
+        )
+        await xrStore.enterVR()
+      } else {
+        throw firstErr
+      }
+    }
     return { ok: true, usedEmulator: true }
   } catch (err) {
     const message =

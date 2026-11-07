@@ -1,5 +1,5 @@
 import { OrbitControls } from '@react-three/drei'
-import { Canvas, useThree } from '@react-three/fiber'
+import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import {
   IfInSessionMode,
   PointerEvents,
@@ -13,6 +13,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -20,19 +21,39 @@ import {
 import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { CompanionOverlay } from './components/ui/CompanionOverlay'
+import { PasscodeGate } from './components/ui/PasscodeGate'
 import { AvatarManager } from './components/xr/AvatarManager'
+import { BuildModePanel3D } from './components/xr/BuildModePanel3D'
 import { CinemaRoom } from './components/xr/CinemaRoom'
 import { SpatialChatPanel } from './components/xr/SpatialChatPanel'
 import { SpatialControlDock } from './components/xr/SpatialControlDock'
 import type { VRKeyboardMode } from './components/xr/VRKeyboard3D'
 import { YouTubeBrowser3D } from './components/xr/YouTubeBrowser3D'
-import { LOUNGE_SEATS, SCREEN_CONFIG } from './constants/cinema'
+import {
+  LIGHTING_PRESETS,
+  ROOM_SIZE_SPECS,
+  getCatalogEntry,
+} from './constants/hangout'
 import { useMediaScreen } from './hooks/useMediaScreen'
 import { useRoomSession, type JoinRoomOptions } from './hooks/useRoomSession'
 import { useWebRTC } from './hooks/useWebRTC'
+import {
+  isDeviceUnlocked,
+  isPasscodeGateEnabled,
+  lockDevicePasscode,
+} from './services/passcode'
 import type { YouTubeVideoItem } from './services/youtube'
 import { exitVRSession, xrStore } from './store/xrStore'
-import type { WebRTCSignalMessage } from './types/lounge'
+import type {
+  ComputedSeat,
+  FurnitureCatalogId,
+  LightingPresetId,
+  PlacedFurnitureItem,
+  RoomArchitectureConfig,
+  RoomLightingConfig,
+  RoomScreenTransform,
+  WebRTCSignalMessage,
+} from './types/lounge'
 
 class CanvasRootBoundary extends Component<
   { children: ReactNode },
@@ -50,9 +71,7 @@ class CanvasRootBoundary extends Component<
 
   render() {
     if (this.state.hasError) {
-      return (
-        <ambientLight intensity={1.2} />
-      )
+      return <ambientLight intensity={1.2} />
     }
     return this.props.children
   }
@@ -79,7 +98,8 @@ class SceneSectionBoundary extends Component<
 }
 
 interface SeatRigProps {
-  seatIndex: number
+  seat: ComputedSeat
+  screenCenter: [number, number, number]
   recenterVersion: number
   onInVRChange: (inVR: boolean) => void
   children?: React.ReactNode
@@ -87,11 +107,12 @@ interface SeatRigProps {
 
 /**
  * Manages both:
- * 1. `<XROrigin>` placement & physical headset recentering inside immersive VR
- * 2. `<OrbitControls>` seated eye-level camera inside Desktop / Companion mode
+ * 1. Smoothly damped `<XROrigin>` placement & physical headset recentering inside immersive VR
+ * 2. Smoothly transitioning `<OrbitControls>` seated eye-level camera inside Desktop / Companion mode
  */
 function SeatCameraAndOriginRig({
-  seatIndex,
+  seat,
+  screenCenter,
   recenterVersion,
   onInVRChange,
   children,
@@ -101,10 +122,17 @@ function SeatCameraAndOriginRig({
   const inVR = Boolean(xrSession)
 
   const originRef = useRef<THREE.Group>(null)
+  const dockGroupRef = useRef<THREE.Group>(null)
   const orbitRef = useRef<OrbitControlsImpl>(null)
   const [vrLocalOffset, setVrLocalOffset] = useState<[number, number, number]>([0, 0, 0])
 
-  const seat = LOUNGE_SEATS[seatIndex] ?? LOUNGE_SEATS[0]
+  const desktopTransitionRemainingRef = useRef(0)
+  const desiredCamPos = useMemo(() => new THREE.Vector3(), [])
+  const desiredLookTarget = useMemo(() => new THREE.Vector3(), [])
+  const desiredOriginPos = useMemo(() => new THREE.Vector3(), [])
+  const desiredDockPos = useMemo(() => new THREE.Vector3(), [])
+  const desiredSeatQuat = useMemo(() => new THREE.Quaternion(), [])
+  const tmpEuler = useMemo(() => new THREE.Euler(), [])
 
   const onInVRChangeRef = useRef(onInVRChange)
   onInVRChangeRef.current = onInVRChange
@@ -113,34 +141,24 @@ function SeatCameraAndOriginRig({
     onInVRChangeRef.current(inVR)
   }, [inVR])
 
-  // Reset VR local offset when hopping to a new lounge seat
+  // Reset VR local drift offset when hopping to a different seat cushion
   useEffect(() => {
     setVrLocalOffset([0, 0, 0])
-  }, [seatIndex])
+  }, [seat.id])
 
-  // Position desktop camera cleanly in the selected lounge chair facing the screen
+  // Trigger smooth ~0.45s desktop camera glide whenever seat or recenter changes
   useEffect(() => {
     if (inVR) return
-    camera.position.set(
-      seat.position[0],
-      seat.position[1] + 1.24,
-      seat.position[2] + 0.12,
-    )
-    if (orbitRef.current) {
-      orbitRef.current.target.set(
-        SCREEN_CONFIG.center[0],
-        SCREEN_CONFIG.center[1] - 0.35,
-        SCREEN_CONFIG.center[2] + 1.5,
-      )
-      orbitRef.current.update()
-    } else {
-      camera.lookAt(
-        SCREEN_CONFIG.center[0],
-        SCREEN_CONFIG.center[1] - 0.35,
-        SCREEN_CONFIG.center[2] + 1.5,
-      )
-    }
-  }, [camera, inVR, recenterVersion, seat.position])
+    desktopTransitionRemainingRef.current = 0.45
+  }, [
+    inVR,
+    recenterVersion,
+    seat.id,
+    seat.position[0],
+    seat.position[1],
+    seat.position[2],
+    seat.seatHeightOffset,
+  ])
 
   // Calibrate physical headset horizontal drift relative to seat when Recenter is clicked in VR
   useEffect(() => {
@@ -152,20 +170,85 @@ function SeatCameraAndOriginRig({
     setVrLocalOffset((prev) => [prev[0] + dx, 0, prev[2] + dz])
   }, [camera, inVR, recenterVersion, seat.position])
 
+  useFrame((_, delta) => {
+    const dt = Math.min(delta, 0.1)
+    const rigAlpha = 1 - Math.exp(-11 * dt)
+    const seatDeltaY = Math.max(0, seat.seatHeightOffset - 0.38)
+    const ergonomicFloorY = seat.position[1] + seatDeltaY
+
+    desiredOriginPos.set(
+      seat.position[0] + vrLocalOffset[0],
+      ergonomicFloorY + 0.06,
+      seat.position[2] + vrLocalOffset[2],
+    )
+    desiredDockPos.set(seat.position[0], ergonomicFloorY, seat.position[2])
+    desiredSeatQuat.setFromEuler(tmpEuler.set(0, seat.rotationY, 0))
+
+    if (originRef.current) {
+      originRef.current.position.lerp(desiredOriginPos, rigAlpha)
+      originRef.current.quaternion.slerp(desiredSeatQuat, rigAlpha)
+    }
+
+    if (dockGroupRef.current) {
+      dockGroupRef.current.position.lerp(desiredDockPos, rigAlpha)
+      dockGroupRef.current.quaternion.slerp(desiredSeatQuat, rigAlpha)
+    }
+
+    if (!inVR && desktopTransitionRemainingRef.current > 0) {
+      desktopTransitionRemainingRef.current = Math.max(
+        0,
+        desktopTransitionRemainingRef.current - dt,
+      )
+      const camAlpha = 1 - Math.exp(-9.5 * dt)
+      const backSin = Math.sin(seat.rotationY)
+      const backCos = Math.cos(seat.rotationY)
+
+      desiredCamPos.set(
+        seat.position[0] + backSin * 0.14,
+        ergonomicFloorY + 1.38,
+        seat.position[2] + backCos * 0.14,
+      )
+      desiredLookTarget.set(
+        screenCenter[0],
+        screenCenter[1] - 0.35,
+        screenCenter[2] + 1.4,
+      )
+
+      camera.position.lerp(desiredCamPos, camAlpha)
+      if (orbitRef.current) {
+        orbitRef.current.target.lerp(desiredLookTarget, camAlpha)
+        orbitRef.current.update()
+      } else {
+        camera.lookAt(desiredLookTarget)
+      }
+    }
+  })
+
+  const initialErgonomicFloorY =
+    seat.position[1] + Math.max(0, seat.seatHeightOffset - 0.38)
+
   return (
     <>
       <XROrigin
         ref={originRef}
         position={[
           seat.position[0] + vrLocalOffset[0],
-          seat.position[1] + 0.08,
+          initialErgonomicFloorY + 0.06,
           seat.position[2] + vrLocalOffset[2],
         ]}
         rotation={[0, seat.rotationY, 0]}
       />
 
-      {/* Ergonomic Spatial Dock anchored directly at the user's lounge chair */}
-      <group position={seat.position} rotation={[0, seat.rotationY, 0]}>
+      {/* Ergonomic Spatial Dock & VR Panels anchored directly at the user's dynamic seat */}
+      <group
+        ref={dockGroupRef}
+        position={[
+          seat.position[0],
+          initialErgonomicFloorY,
+          seat.position[2],
+        ]}
+        rotation={[0, seat.rotationY, 0]}
+      >
         {children}
       </group>
 
@@ -174,10 +257,10 @@ function SeatCameraAndOriginRig({
         <OrbitControls
           ref={orbitRef}
           enablePan={false}
-          minDistance={2.5}
-          maxDistance={12.5}
-          minPolarAngle={Math.PI * 0.24}
-          maxPolarAngle={Math.PI * 0.68}
+          minDistance={2.2}
+          maxDistance={15.5}
+          minPolarAngle={Math.PI * 0.22}
+          maxPolarAngle={Math.PI * 0.72}
           rotateSpeed={0.62}
         />
       </IfInSessionMode>
@@ -187,6 +270,11 @@ function SeatCameraAndOriginRig({
 
 export function App() {
   const signalHandlerRef = useRef<((signal: WebRTCSignalMessage) => void) | null>(null)
+
+  const [passcodeUnlocked, setPasscodeUnlocked] = useState<boolean>(() =>
+    isDeviceUnlocked(),
+  )
+  const passcodeEnabled = isPasscodeGateEnabled()
 
   const [selectedMicId, setSelectedMicId] = useState('')
   const [selectedSpeakerId, setSelectedSpeakerId] = useState('')
@@ -198,6 +286,9 @@ export function App() {
   const [youtubeBrowserOpen, setYoutubeBrowserOpen] = useState(false)
   const [youtubeSearchQuery, setYoutubeSearchQuery] = useState('')
   const [youtubeSearchTrigger, setYoutubeSearchTrigger] = useState(0)
+  const [buildMode, setBuildMode] = useState(false)
+  const [selectedFurnitureId, setSelectedFurnitureId] = useState<string | null>(null)
+  const [editingPosterItemId, setEditingPosterItemId] = useState<string | null>(null)
   const [keyboardMode, setKeyboardMode] = useState<VRKeyboardMode | null>(null)
   const [statusBanner, setStatusBanner] = useState<string | null>(null)
   const [usingSimulator, setUsingSimulator] = useState(false)
@@ -209,11 +300,26 @@ export function App() {
     isLocalPresenter: roomIsLocalPresenter,
     presenterState: roomPresenterState,
     localProfile: roomLocalProfile,
+    roomCustomization,
+    computedSeats,
     takeControl: roomTakeControl,
     updatePresenterMedia: roomUpdatePresenterMedia,
     updateLocalProfile: roomUpdateLocalProfile,
+    updateRoomCustomization: roomUpdateCustomization,
+    resetRoomCustomization: roomResetCustomization,
+    importRoomCustomizationJson: roomImportBlueprintJson,
     joinRoom: roomJoinRoom,
   } = room
+
+  const activeSeat = useMemo<ComputedSeat>(() => {
+    const byId = roomLocalProfile.seatId
+      ? computedSeats.find((s) => s.id === roomLocalProfile.seatId)
+      : undefined
+    return byId ?? computedSeats[roomLocalProfile.seatIndex] ?? computedSeats[0]
+  }, [computedSeats, roomLocalProfile.seatId, roomLocalProfile.seatIndex])
+
+  const skyBgColor =
+    LIGHTING_PRESETS[roomCustomization.lighting.preset]?.skyBg ?? '#111724'
 
   const handleScreenShareEndedByBrowser = useCallback(() => {
     if (roomIsLocalPresenter && roomPresenterState.screenMode === 'tab-stream') {
@@ -450,7 +556,9 @@ export function App() {
   const handleToggleYouTubeBrowser = useCallback(() => {
     setYoutubeBrowserOpen((open) => {
       const next = !open
-      if (!next) {
+      if (next) {
+        setBuildMode(false)
+      } else {
         setKeyboardMode((m) => (m === 'youtube' ? null : m))
       }
       return next
@@ -458,6 +566,7 @@ export function App() {
   }, [])
 
   const handleOpenYouTubeBrowser = useCallback(() => {
+    setBuildMode(false)
     setYoutubeBrowserOpen(true)
   }, [])
 
@@ -493,9 +602,247 @@ export function App() {
     [handleLoadStreamUrl],
   )
 
+  // =========================================================================
+  // HANGOUT BUILDER, ARCHITECTURE, SCREEN & MOOD HANDLERS
+  // =========================================================================
+
+  const handleToggleBuildMode = useCallback((enabled?: boolean) => {
+    setBuildMode((prev) => {
+      const next = typeof enabled === 'boolean' ? enabled : !prev
+      if (next) {
+        setYoutubeBrowserOpen(false)
+      } else {
+        setSelectedFurnitureId(null)
+        setEditingPosterItemId(null)
+        setKeyboardMode((m) => (m === 'poster' ? null : m))
+      }
+      return next
+    })
+  }, [])
+
+  const handleSpawnFurniture = useCallback(
+    (type: FurnitureCatalogId) => {
+      const entry = getCatalogEntry(type)
+      const newId = `furn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+
+      roomUpdateCustomization((prev) => {
+        const sizeSpec =
+          ROOM_SIZE_SPECS[prev.architecture.sizePreset] ?? ROOM_SIZE_SPECS.classic
+        const halfW = sizeSpec.width / 2
+
+        let spawnPos: [number, number, number]
+        let spawnRotY = 0
+
+        if (entry.placementSurface === 'wall') {
+          const wallItemsCount = prev.furniture.filter(
+            (f) => getCatalogEntry(f.type).placementSurface === 'wall',
+          ).length
+          const mountLeft = wallItemsCount % 2 === 0
+          const wallX = mountLeft ? -(halfW - 0.1) : halfW - 0.1
+          const wallZ = Number(
+            Math.max(
+              sizeSpec.frontZ + 2.2,
+              Math.min(sizeSpec.backZ - 2.2, activeSeat.position[2] - 0.8),
+            ).toFixed(2),
+          )
+          spawnPos = [Number(wallX.toFixed(2)), 2.75, wallZ]
+          spawnRotY = mountLeft ? Math.PI / 2 : -Math.PI / 2
+        } else {
+          // Spawn ~2.0m in front of the user's current seat with slight jitter to avoid exact overlap
+          const jitterX = (prev.furniture.length % 3 - 1) * 0.45
+          const rawX =
+            activeSeat.position[0] - Math.sin(activeSeat.rotationY) * 2.0 + jitterX
+          const rawZ =
+            activeSeat.position[2] - Math.cos(activeSeat.rotationY) * 2.0
+          const clampedX = Number(
+            Math.max(-(halfW - 0.9), Math.min(halfW - 0.9, rawX)).toFixed(2),
+          )
+          const clampedZ = Number(
+            Math.max(
+              sizeSpec.frontZ + 1.2,
+              Math.min(sizeSpec.backZ - 1.2, rawZ),
+            ).toFixed(2),
+          )
+          const onBalcony =
+            prev.architecture.rearBalcony &&
+            Math.abs(clampedX) < 4.7 &&
+            clampedZ > sizeSpec.balconyZ - 1.65 &&
+            clampedZ < sizeSpec.balconyZ + 1.65
+          spawnPos = [clampedX, onBalcony ? 0.38 : 0, clampedZ]
+          spawnRotY = Number(activeSeat.rotationY.toFixed(4))
+        }
+
+        const newItem: PlacedFurnitureItem = {
+          id: newId,
+          type,
+          position: spawnPos,
+          rotationY: spawnRotY,
+          scale: 1,
+          color: entry.defaultColor,
+          imageUrl: entry.defaultImageUrl,
+          label: entry.defaultLabel,
+        }
+
+        return {
+          ...prev,
+          furniture: [...prev.furniture, newItem],
+        }
+      })
+
+      setBuildMode(true)
+      setSelectedFurnitureId(newId)
+    },
+    [activeSeat.position, activeSeat.rotationY, roomUpdateCustomization],
+  )
+
+  const handleUpdateFurnitureItem = useCallback(
+    (id: string, patch: Partial<PlacedFurnitureItem>) => {
+      roomUpdateCustomization((prev) => ({
+        ...prev,
+        furniture: prev.furniture.map((item) =>
+          item.id === id ? { ...item, ...patch } : item,
+        ),
+      }))
+    },
+    [roomUpdateCustomization],
+  )
+
+  const handleDuplicateFurnitureItem = useCallback(
+    (id: string) => {
+      let clonedId: string | null = null
+      roomUpdateCustomization((prev) => {
+        const source = prev.furniture.find((f) => f.id === id)
+        if (!source) return prev
+        clonedId = `furn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+        const isWall = getCatalogEntry(source.type).placementSurface === 'wall'
+        const clone: PlacedFurnitureItem = {
+          ...source,
+          id: clonedId,
+          position: isWall
+            ? [
+                source.position[0],
+                source.position[1],
+                Number((source.position[2] + 1.6).toFixed(2)),
+              ]
+            : [
+                Number((source.position[0] + 0.95).toFixed(2)),
+                source.position[1],
+                Number((source.position[2] + 0.35).toFixed(2)),
+              ],
+        }
+        return {
+          ...prev,
+          furniture: [...prev.furniture, clone],
+        }
+      })
+      if (clonedId) setSelectedFurnitureId(clonedId)
+    },
+    [roomUpdateCustomization],
+  )
+
+  const handleDeleteFurnitureItem = useCallback(
+    (id: string) => {
+      roomUpdateCustomization((prev) => ({
+        ...prev,
+        furniture: prev.furniture.filter((item) => item.id !== id),
+      }))
+      setSelectedFurnitureId((curr) => (curr === id ? null : curr))
+    },
+    [roomUpdateCustomization],
+  )
+
+  const handleEditFurnitureMediaInVR = useCallback((id: string) => {
+    setEditingPosterItemId(id)
+    setKeyboardMode('poster')
+  }, [])
+
+  const handleSubmitPosterKeyboardValue = useCallback(
+    (val: string) => {
+      const targetId = editingPosterItemId ?? selectedFurnitureId
+      if (!targetId) return
+      roomUpdateCustomization((prev) => ({
+        ...prev,
+        furniture: prev.furniture.map((item) => {
+          if (item.id !== targetId) return item
+          if (item.type === 'neon-sign') {
+            return { ...item, label: val.toUpperCase().slice(0, 16) }
+          }
+          return { ...item, imageUrl: val }
+        }),
+      }))
+      setEditingPosterItemId(null)
+    },
+    [editingPosterItemId, roomUpdateCustomization, selectedFurnitureId],
+  )
+
+  const handleUpdateArchitecture = useCallback(
+    (patch: Partial<RoomArchitectureConfig>) => {
+      roomUpdateCustomization((prev) => ({
+        ...prev,
+        architecture: {
+          ...prev.architecture,
+          ...patch,
+        },
+      }))
+    },
+    [roomUpdateCustomization],
+  )
+
+  const handleUpdateLighting = useCallback(
+    (patch: Partial<RoomLightingConfig>) => {
+      roomUpdateCustomization((prev) => ({
+        ...prev,
+        lighting: {
+          ...prev.lighting,
+          ...patch,
+        },
+      }))
+    },
+    [roomUpdateCustomization],
+  )
+
+  const handleApplyLightingPreset = useCallback(
+    (presetId: LightingPresetId) => {
+      const spec = LIGHTING_PRESETS[presetId]
+      if (!spec) return
+      roomUpdateCustomization((prev) => ({
+        ...prev,
+        lighting: {
+          ...prev.lighting,
+          preset: presetId,
+          brightness: spec.brightness,
+          accentColor: spec.accentColor,
+          ambientTint: spec.ambientTint,
+        },
+      }))
+    },
+    [roomUpdateCustomization],
+  )
+
+  const handleUpdateScreen = useCallback(
+    (patch: Partial<RoomScreenTransform>) => {
+      roomUpdateCustomization((prev) => ({
+        ...prev,
+        screen: {
+          ...prev.screen,
+          ...patch,
+        },
+      }))
+    },
+    [roomUpdateCustomization],
+  )
+
+  const editingPosterInitialValue = useMemo(() => {
+    const targetId = editingPosterItemId ?? selectedFurnitureId
+    if (!targetId) return ''
+    const item = roomCustomization.furniture.find((f) => f.id === targetId)
+    if (!item) return ''
+    return item.type === 'neon-sign' ? (item.label ?? '') : (item.imageUrl ?? '')
+  }, [editingPosterItemId, roomCustomization.furniture, selectedFurnitureId])
+
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#080a0d]">
-      {/* Persistent WebGL / WebXR Canvas (mounted behind Lobby so store.enterVR() works on first click) */}
+      {/* Persistent WebGL / WebXR Canvas (mounted behind Gate & Lobby so store.enterVR() works on click 0) */}
       <Canvas
         events={noEvents}
         dpr={[1, 1.75]}
@@ -503,10 +850,10 @@ export function App() {
           antialias: true,
           powerPreference: 'high-performance',
         }}
-        camera={{ fov: 62, near: 0.08, far: 60, position: [0, 1.35, 1.2] }}
+        camera={{ fov: 62, near: 0.08, far: 65, position: [0, 1.35, 1.2] }}
       >
-        <color attach="background" args={['#111724']} />
-        <fog attach="fog" args={['#111724', 16, 38]} />
+        <color attach="background" args={[skyBgColor]} />
+        <fog attach="fog" args={[skyBgColor, 18, 44]} />
 
         <CanvasRootBoundary>
           <XR store={xrStore}>
@@ -514,7 +861,8 @@ export function App() {
 
             {/* Keep XROrigin & core CinemaRoom outside Suspense so VR renders on Frame 0 */}
             <SeatCameraAndOriginRig
-              seatIndex={room.localProfile.seatIndex}
+              seat={activeSeat}
+              screenCenter={roomCustomization.screen.position}
               recenterVersion={recenterVersion}
               onInVRChange={handleInVRChange}
             >
@@ -537,6 +885,24 @@ export function App() {
                   </SceneSectionBoundary>
 
                   <SceneSectionBoundary>
+                    <BuildModePanel3D
+                      visible={buildMode && inVRSession}
+                      customization={roomCustomization}
+                      selectedFurnitureId={selectedFurnitureId}
+                      onSpawnFurniture={handleSpawnFurniture}
+                      onUpdateFurnitureItem={handleUpdateFurnitureItem}
+                      onDeleteFurnitureItem={handleDeleteFurnitureItem}
+                      onEditFurnitureMedia={handleEditFurnitureMediaInVR}
+                      onUpdateArchitecture={handleUpdateArchitecture}
+                      onUpdateLighting={handleUpdateLighting}
+                      onApplyLightingPreset={handleApplyLightingPreset}
+                      onUpdateScreen={handleUpdateScreen}
+                      onResetRoom={roomResetCustomization}
+                      onClose={() => handleToggleBuildMode(false)}
+                    />
+                  </SceneSectionBoundary>
+
+                  <SceneSectionBoundary>
                     <SpatialControlDock
                       presenterState={room.presenterState}
                       isLocalPresenter={room.isLocalPresenter}
@@ -548,11 +914,15 @@ export function App() {
                       localDuration={media.localDuration}
                       chatPanelOpen={spatialChatOpen}
                       youtubeBrowserOpen={youtubeBrowserOpen}
+                      buildModeOpen={buildMode}
                       youtubeSearchQuery={youtubeSearchQuery}
+                      posterInitialValue={editingPosterInitialValue}
                       keyboardMode={keyboardMode}
                       onSetKeyboardMode={setKeyboardMode}
                       onToggleYouTubeBrowser={handleToggleYouTubeBrowser}
+                      onToggleBuildMode={() => handleToggleBuildMode()}
                       onSubmitYouTubeSearch={handleSubmitYouTubeSearch}
+                      onSubmitPosterValue={handleSubmitPosterKeyboardValue}
                       onTakeControl={() => room.takeControl()}
                       onReleaseControl={() => {
                         webrtc.stopTabShare()
@@ -579,19 +949,29 @@ export function App() {
             <CinemaRoom
               roomCode={room.roomCode}
               presenterState={room.presenterState}
+              roomCustomization={roomCustomization}
+              computedSeats={computedSeats}
               videoTexture={media.videoTexture}
               hasVideoFrames={media.hasVideoFrames}
               isResolvingMedia={media.isResolvingMedia}
               activeStreamQuality={media.activeStreamQuality}
               mediaError={media.mediaError}
               needsAudioUnlock={media.needsAudioUnlock}
+              localSeatId={room.localProfile.seatId}
               localSeatIndex={room.localProfile.seatIndex}
               participants={room.participants}
               canTakeControl={room.canTakeControl}
+              buildMode={buildMode}
+              selectedFurnitureId={selectedFurnitureId}
               onTakeControl={() => room.takeControl()}
               onOpenYouTubeBrowser={room.joined ? handleOpenYouTubeBrowser : undefined}
               onUnlockAudio={media.unlockAudio}
               onSelectSeat={room.selectSeat}
+              onSelectFurniture={setSelectedFurnitureId}
+              onUpdateFurnitureItem={handleUpdateFurnitureItem}
+              onDuplicateFurnitureItem={handleDuplicateFurnitureItem}
+              onDeleteFurnitureItem={handleDeleteFurnitureItem}
+              onEditFurnitureMedia={handleEditFurnitureMediaInVR}
             />
 
             <SceneSectionBoundary>
@@ -599,6 +979,7 @@ export function App() {
                 joined={room.joined}
                 localProfile={room.localProfile}
                 participants={room.participants}
+                computedSeats={computedSeats}
                 activePresenterId={room.presenterState.activePresenterId}
                 remotePosesRef={room.remotePosesRef}
                 remoteVoiceStreams={webrtc.remoteVoiceStreams}
@@ -612,6 +993,7 @@ export function App() {
                 visible={room.joined && spatialChatOpen}
                 messages={room.messages}
                 reactions={room.reactions}
+                screenTransform={roomCustomization.screen}
                 onSendReaction={(emoji) => room.sendReaction(emoji)}
                 onOpenChatKeyboard={() => {
                   setSpatialChatOpen(true)
@@ -624,62 +1006,92 @@ export function App() {
         </CanvasRootBoundary>
       </Canvas>
 
+      {/* Secret Passcode Gate (blocks unauthenticated visitors before Lobby while keeping Canvas alive) */}
+      {!passcodeUnlocked && (
+        <PasscodeGate onUnlocked={() => setPasscodeUnlocked(true)} />
+      )}
+
       {/* 2D Lobby & Desktop Companion Presenter Bar */}
-      <CompanionOverlay
-        joined={room.joined}
-        connected={room.connected}
-        inVRSession={inVRSession}
-        roomCode={room.roomCode}
-        transportMode={room.transportMode}
-        localProfile={room.localProfile}
-        participants={room.participants}
-        presenterState={room.presenterState}
-        isLocalPresenter={room.isLocalPresenter}
-        canTakeControl={room.canTakeControl}
-        messages={room.messages}
-        audioInputs={webrtc.audioInputs}
-        audioOutputs={webrtc.audioOutputs}
-        selectedMicId={selectedMicId}
-        selectedSpeakerId={selectedSpeakerId}
-        micPermissionError={webrtc.micPermissionError}
-        localMicLevel={webrtc.localMicLevel}
-        isSharingTab={Boolean(webrtc.localScreenStream)}
-        cinemaVolume={cinemaVolume}
-        voiceVolume={voiceVolume}
-        localCurrentTime={media.localCurrentTime}
-        localDuration={media.localDuration}
-        mediaError={media.mediaError}
-        needsAudioUnlock={media.needsAudioUnlock}
-        statusBanner={statusBanner}
-        onDismissBanner={() => setStatusBanner(null)}
-        onSelectMic={setSelectedMicId}
-        onSelectSpeaker={setSelectedSpeakerId}
-        onJoinRoom={handleJoinRoom}
-        onEnterVR={handleEnterVR}
-        onLeaveRoom={async () => {
-          webrtc.stopTabShare()
-          await room.leaveRoom()
-        }}
-        onToggleMute={handleToggleMute}
-        onSelectSeat={room.selectSeat}
-        onRecenterSeat={() => setRecenterVersion((v) => v + 1)}
-        onTakeControl={() => room.takeControl()}
-        onReleaseControl={() => {
-          webrtc.stopTabShare()
-          room.releaseControl()
-        }}
-        onToggleHostLock={room.toggleHostLock}
-        onStartTabShare={handleStartTabShare}
-        onStopTabShare={handleStopTabShare}
-        onLoadStreamUrl={handleLoadStreamUrl}
-        onTogglePlayPause={handleTogglePlayPause}
-        onSeekTo={handleSeekTo}
-        onChangeCinemaVolume={setCinemaVolume}
-        onChangeVoiceVolume={setVoiceVolume}
-        onUnlockAudio={media.unlockAudio}
-        onSendChat={room.sendChatMessage}
-        onSendReaction={(emoji) => room.sendReaction(emoji)}
-      />
+      {passcodeUnlocked && (
+        <CompanionOverlay
+          joined={room.joined}
+          connected={room.connected}
+          inVRSession={inVRSession}
+          roomCode={room.roomCode}
+          transportMode={room.transportMode}
+          localProfile={room.localProfile}
+          participants={room.participants}
+          computedSeats={computedSeats}
+          roomCustomization={roomCustomization}
+          buildMode={buildMode}
+          selectedFurnitureId={selectedFurnitureId}
+          passcodeEnabled={passcodeEnabled}
+          presenterState={room.presenterState}
+          isLocalPresenter={room.isLocalPresenter}
+          canTakeControl={room.canTakeControl}
+          messages={room.messages}
+          audioInputs={webrtc.audioInputs}
+          audioOutputs={webrtc.audioOutputs}
+          selectedMicId={selectedMicId}
+          selectedSpeakerId={selectedSpeakerId}
+          micPermissionError={webrtc.micPermissionError}
+          localMicLevel={webrtc.localMicLevel}
+          isSharingTab={Boolean(webrtc.localScreenStream)}
+          cinemaVolume={cinemaVolume}
+          voiceVolume={voiceVolume}
+          localCurrentTime={media.localCurrentTime}
+          localDuration={media.localDuration}
+          mediaError={media.mediaError}
+          needsAudioUnlock={media.needsAudioUnlock}
+          statusBanner={statusBanner}
+          onDismissBanner={() => setStatusBanner(null)}
+          onLockPasscode={() => {
+            lockDevicePasscode()
+            setPasscodeUnlocked(false)
+          }}
+          onSelectMic={setSelectedMicId}
+          onSelectSpeaker={setSelectedSpeakerId}
+          onJoinRoom={handleJoinRoom}
+          onEnterVR={handleEnterVR}
+          onLeaveRoom={async () => {
+            webrtc.stopTabShare()
+            setBuildMode(false)
+            setSelectedFurnitureId(null)
+            await room.leaveRoom()
+          }}
+          onToggleMute={handleToggleMute}
+          onSelectSeat={room.selectSeat}
+          onRecenterSeat={() => setRecenterVersion((v) => v + 1)}
+          onToggleBuildMode={handleToggleBuildMode}
+          onSelectFurniture={setSelectedFurnitureId}
+          onSpawnFurniture={handleSpawnFurniture}
+          onUpdateFurnitureItem={handleUpdateFurnitureItem}
+          onDuplicateFurnitureItem={handleDuplicateFurnitureItem}
+          onDeleteFurnitureItem={handleDeleteFurnitureItem}
+          onUpdateArchitecture={handleUpdateArchitecture}
+          onUpdateLighting={handleUpdateLighting}
+          onApplyLightingPreset={handleApplyLightingPreset}
+          onUpdateScreen={handleUpdateScreen}
+          onResetRoom={roomResetCustomization}
+          onImportBlueprintJson={roomImportBlueprintJson}
+          onTakeControl={() => room.takeControl()}
+          onReleaseControl={() => {
+            webrtc.stopTabShare()
+            room.releaseControl()
+          }}
+          onToggleHostLock={room.toggleHostLock}
+          onStartTabShare={handleStartTabShare}
+          onStopTabShare={handleStopTabShare}
+          onLoadStreamUrl={handleLoadStreamUrl}
+          onTogglePlayPause={handleTogglePlayPause}
+          onSeekTo={handleSeekTo}
+          onChangeCinemaVolume={setCinemaVolume}
+          onChangeVoiceVolume={setVoiceVolume}
+          onUnlockAudio={media.unlockAudio}
+          onSendChat={room.sendChatMessage}
+          onSendReaction={(emoji) => room.sendReaction(emoji)}
+        />
+      )}
 
       {inVRSession && usingSimulator && (
         <button

@@ -1,9 +1,10 @@
 import { RoundedBox, Text } from '@react-three/drei'
 import { useEffect, useState } from 'react'
 import { SAMPLE_MEDIA_PRESETS } from '../../constants/cinema'
+import { POSTER_ART_PRESETS } from '../../constants/hangout'
 import type { SampleMediaPreset } from '../../types/lounge'
 
-export type VRKeyboardMode = 'url' | 'chat' | 'youtube'
+export type VRKeyboardMode = 'url' | 'chat' | 'youtube' | 'poster'
 
 export interface VRKeyboard3DProps {
   mode: VRKeyboardMode
@@ -11,6 +12,7 @@ export interface VRKeyboard3DProps {
   onSubmitUrl: (url: string, title?: string) => void
   onSubmitChat: (message: string) => void
   onSubmitYouTubeSearch?: (query: string) => void
+  onSubmitPosterValue?: (val: string) => void
   onClose: () => void
 }
 
@@ -96,6 +98,7 @@ export function VRKeyboard3D({
   onSubmitUrl,
   onSubmitChat,
   onSubmitYouTubeSearch,
+  onSubmitPosterValue,
   onClose,
 }: VRKeyboard3DProps) {
   const [buffer, setBuffer] = useState(initialValue)
@@ -105,7 +108,7 @@ export function VRKeyboard3D({
     setBuffer(initialValue)
   }, [initialValue, mode])
 
-  const hasTopPresetRow = mode === 'url' || mode === 'youtube'
+  const hasTopPresetRow = mode === 'url' || mode === 'youtube' || mode === 'poster'
 
   const appendText = (chunk: string) => {
     setBuffer((prev) => prev + chunk)
@@ -134,6 +137,8 @@ export function VRKeyboard3D({
       onSubmitYouTubeSearch?.(trimmed)
     } else if (mode === 'url') {
       onSubmitUrl(trimmed, 'Custom Stream')
+    } else if (mode === 'poster') {
+      onSubmitPosterValue?.(trimmed)
     } else {
       onSubmitChat(trimmed)
       setBuffer('')
@@ -163,7 +168,9 @@ export function VRKeyboard3D({
           ? 'SEARCH YOUTUBE OR PASTE VIDEO LINK'
           : mode === 'url'
             ? 'HEADSET URL & STREAM DECK (MP4 / HLS .M3U8)'
-            : 'COMPOSE SPATIAL CHAT MESSAGE'}
+            : mode === 'poster'
+              ? 'CUSTOM POSTER IMAGE URL OR NEON SIGN TEXT'
+              : 'COMPOSE SPATIAL CHAT MESSAGE'}
       </Text>
 
       <KeyCap3D
@@ -187,6 +194,28 @@ export function VRKeyboard3D({
                 width={0.3}
                 accent="muted"
                 onPress={() => handlePresetPick(preset)}
+              />
+            )
+          })}
+        </group>
+      )}
+
+      {/* Quick Art Presets when in Poster/Sign mode */}
+      {mode === 'poster' && (
+        <group position={[0, 0.285, 0.015]}>
+          {POSTER_ART_PRESETS.map((art, idx) => {
+            const xOffset = -0.48 + idx * 0.32
+            return (
+              <KeyCap3D
+                key={art.id}
+                label={art.label.slice(0, 15)}
+                position={[xOffset, 0, 0]}
+                width={0.3}
+                accent="muted"
+                onPress={() => {
+                  setBuffer(art.id)
+                  onSubmitPosterValue?.(art.id)
+                }}
               />
             )
           })}
@@ -236,7 +265,9 @@ export function VRKeyboard3D({
               ? 'Search YouTube videos, channels, or paste watch URL...'
               : mode === 'url'
                 ? 'https://example.com/stream.m3u8'
-                : 'Type a message to the room...'}
+                : mode === 'poster'
+                  ? 'Paste image URL (https://...) or type neon sign label...'
+                  : 'Type a message to the room...'}
         </Text>
       </group>
 
@@ -280,7 +311,7 @@ export function VRKeyboard3D({
               onPress={handleConfirm}
             />
           </>
-        ) : mode === 'url' ? (
+        ) : mode === 'url' || mode === 'poster' ? (
           <>
             <KeyCap3D
               label="https://"
@@ -290,18 +321,18 @@ export function VRKeyboard3D({
               onPress={() => appendText('https://')}
             />
             <KeyCap3D
-              label=".m3u8"
+              label={mode === 'poster' ? '.png' : '.m3u8'}
               position={[-0.29, 0, 0]}
               width={0.17}
               accent="muted"
-              onPress={() => appendText('.m3u8')}
+              onPress={() => appendText(mode === 'poster' ? '.png' : '.m3u8')}
             />
             <KeyCap3D
-              label=".mp4"
+              label={mode === 'poster' ? '.jpg' : '.mp4'}
               position={[-0.1, 0, 0]}
               width={0.16}
               accent="muted"
-              onPress={() => appendText('.mp4')}
+              onPress={() => appendText(mode === 'poster' ? '.jpg' : '.mp4')}
             />
             <KeyCap3D
               label="Paste"
@@ -318,7 +349,7 @@ export function VRKeyboard3D({
               onPress={() => setBuffer('')}
             />
             <KeyCap3D
-              label="Load URL"
+              label={mode === 'poster' ? 'Apply ✓' : 'Load URL'}
               position={[0.51, 0, 0]}
               width={0.21}
               accent="amber"
@@ -405,7 +436,13 @@ export function VRKeyboard3D({
         />
         <KeyCap3D
           label={
-            mode === 'youtube' ? 'Search ↵' : mode === 'url' ? 'Play ▶' : 'Send ↵'
+            mode === 'youtube'
+              ? 'Search ↵'
+              : mode === 'url'
+                ? 'Play ▶'
+                : mode === 'poster'
+                  ? 'Apply ↵'
+                  : 'Send ↵'
           }
           position={[0.54, 0, 0]}
           width={0.18}

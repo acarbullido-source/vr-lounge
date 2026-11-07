@@ -4,6 +4,7 @@ import {
   Crown,
   Glasses,
   Globe,
+  Hammer,
   Headphones,
   Link2,
   Lock,
@@ -31,7 +32,6 @@ import { useEffect, useRef, useState } from 'react'
 import {
   AVATAR_COLORS,
   AVATAR_STYLES,
-  LOUNGE_SEATS,
   QUICK_REACTIONS,
   SAMPLE_MEDIA_PRESETS,
   generateRoomCode,
@@ -57,10 +57,19 @@ import {
 import type {
   AvatarStyleId,
   ChatMessage,
+  ComputedSeat,
+  FurnitureCatalogId,
+  LightingPresetId,
   ParticipantProfile,
+  PlacedFurnitureItem,
   PresenterState,
+  RoomArchitectureConfig,
+  RoomCustomizationState,
+  RoomLightingConfig,
+  RoomScreenTransform,
   TransportMode,
 } from '../../types/lounge'
+import { BuildCatalogDrawer } from './BuildCatalogDrawer'
 
 function formatDuration(sec: number): string {
   if (!Number.isFinite(sec) || sec <= 0) return '0:00'
@@ -78,6 +87,11 @@ export interface CompanionOverlayProps {
   transportMode: TransportMode
   localProfile: ParticipantProfile
   participants: ParticipantProfile[]
+  computedSeats: ComputedSeat[]
+  roomCustomization: RoomCustomizationState
+  buildMode: boolean
+  selectedFurnitureId: string | null
+  passcodeEnabled: boolean
   presenterState: PresenterState
   isLocalPresenter: boolean
   canTakeControl: boolean
@@ -97,6 +111,7 @@ export interface CompanionOverlayProps {
   needsAudioUnlock: boolean
   statusBanner: string | null
   onDismissBanner: () => void
+  onLockPasscode: () => void
   onSelectMic: (id: string) => void
   onSelectSpeaker: (id: string) => void
   onJoinRoom: (
@@ -108,8 +123,20 @@ export interface CompanionOverlayProps {
   ) => Promise<void>
   onLeaveRoom: () => Promise<void>
   onToggleMute: () => void
-  onSelectSeat: (seatIndex: number) => void
+  onSelectSeat: (seatIdOrIndex: string | number) => void
   onRecenterSeat: () => void
+  onToggleBuildMode: (enabled: boolean) => void
+  onSelectFurniture: (id: string | null) => void
+  onSpawnFurniture: (type: FurnitureCatalogId) => void
+  onUpdateFurnitureItem: (id: string, patch: Partial<PlacedFurnitureItem>) => void
+  onDuplicateFurnitureItem: (id: string) => void
+  onDeleteFurnitureItem: (id: string) => void
+  onUpdateArchitecture: (patch: Partial<RoomArchitectureConfig>) => void
+  onUpdateLighting: (patch: Partial<RoomLightingConfig>) => void
+  onApplyLightingPreset: (preset: LightingPresetId) => void
+  onUpdateScreen: (patch: Partial<RoomScreenTransform>) => void
+  onResetRoom: () => void
+  onImportBlueprintJson: (jsonText: string) => boolean
   onTakeControl: () => void
   onReleaseControl: () => void
   onToggleHostLock: () => void
@@ -133,6 +160,11 @@ export function CompanionOverlay({
   transportMode,
   localProfile,
   participants,
+  computedSeats,
+  roomCustomization,
+  buildMode,
+  selectedFurnitureId,
+  passcodeEnabled,
   presenterState,
   isLocalPresenter,
   canTakeControl,
@@ -152,6 +184,7 @@ export function CompanionOverlay({
   needsAudioUnlock,
   statusBanner,
   onDismissBanner,
+  onLockPasscode,
   onSelectMic,
   onSelectSpeaker,
   onJoinRoom,
@@ -160,6 +193,18 @@ export function CompanionOverlay({
   onToggleMute,
   onSelectSeat,
   onRecenterSeat,
+  onToggleBuildMode,
+  onSelectFurniture,
+  onSpawnFurniture,
+  onUpdateFurnitureItem,
+  onDuplicateFurnitureItem,
+  onDeleteFurnitureItem,
+  onUpdateArchitecture,
+  onUpdateLighting,
+  onApplyLightingPreset,
+  onUpdateScreen,
+  onResetRoom,
+  onImportBlueprintJson,
   onTakeControl,
   onReleaseControl,
   onToggleHostLock,
@@ -190,6 +235,7 @@ export function CompanionOverlay({
 
   // In-room companion drawers
   const [urlDrawerOpen, setUrlDrawerOpen] = useState(false)
+  const [buildDrawerOpen, setBuildDrawerOpen] = useState(false)
   const [drawerTab, setDrawerTab] = useState<'youtube' | 'direct'>('youtube')
   const [ytCategory, setYtCategory] = useState<YouTubeCategory>('trending')
   const [ytQuery, setYtQuery] = useState('')
@@ -341,13 +387,13 @@ export function CompanionOverlay({
             <div>
               <div className="flex items-center gap-2.5">
                 <p className="font-mono text-xs uppercase tracking-[0.2em] text-[#e5a93c]">
-                  WebXR Spatial Screening Room
+                  Private WebXR Hangout &amp; Cinema
                 </p>
                 <span
                   id="vr-lounge-version-badge"
                   className="rounded-md border border-[#e5a93c]/35 bg-[#e5a93c]/12 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[#e5a93c]"
                 >
-                  v1.6
+                  v2.0
                 </span>
               </div>
               <h1
@@ -357,25 +403,40 @@ export function CompanionOverlay({
                 VR Lounge
               </h1>
               <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-[#c7c2b8]">
-                Step into a shared 3D cinema from Meta Quest 3 or desktop. Talk with spatial
-                voice, pass the remote with one click, and watch live browser tabs or
-                synchronized streams together.
+                Step into your customizable 3D hangout from Meta Quest 3 or desktop. Decorate
+                the room together, hop onto any couch or barstool, talk with spatial voice, and
+                watch YouTube or live browser tabs.
               </p>
             </div>
 
-            <div className="flex items-center gap-2.5 self-start rounded-xl border border-[#f4f1ea]/10 bg-[#080a0d]/70 px-3.5 py-2 text-xs">
-              <span
-                className={`h-2 w-2 rounded-full ${
-                  transportMode === 'supabase' || transportMode === 'cloud-relay'
-                    ? 'bg-[#49b384]'
-                    : 'bg-[#e5a93c]'
-                }`}
-              />
-              <span className="font-medium text-[#f4f1ea]">
-                {transportMode === 'supabase'
-                  ? 'Supabase Realtime Ready'
-                  : 'Global Cloud Rooms Ready'}
-              </span>
+            <div className="flex items-center gap-2 self-start">
+              <div className="flex items-center gap-2.5 rounded-xl border border-[#f4f1ea]/10 bg-[#080a0d]/70 px-3.5 py-2 text-xs">
+                <span
+                  className={`h-2 w-2 rounded-full ${
+                    transportMode === 'supabase' || transportMode === 'cloud-relay'
+                      ? 'bg-[#49b384]'
+                      : 'bg-[#e5a93c]'
+                  }`}
+                />
+                <span className="font-medium text-[#f4f1ea]">
+                  {transportMode === 'supabase'
+                    ? 'Supabase Realtime Ready'
+                    : 'Global Cloud Rooms Ready'}
+                </span>
+              </div>
+
+              {passcodeEnabled && (
+                <button
+                  id="btn-lock-passcode-device"
+                  type="button"
+                  onClick={onLockPasscode}
+                  title="Lock this device behind the secret passcode again"
+                  className="flex items-center gap-1.5 rounded-xl border border-[#f4f1ea]/10 bg-[#080a0d]/70 px-3 py-2 text-xs text-[#c7c2b8] transition hover:border-[#e5a93c]/50 hover:text-[#f4f1ea]"
+                >
+                  <Lock className="h-3.5 w-3.5 text-[#e5a93c]" />
+                  <span>Lock</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -744,17 +805,19 @@ export function CompanionOverlay({
         <div className="lounge-dock-bar flex items-center gap-2 rounded-xl px-2.5 py-1.5">
           <select
             id="select-hud-seat"
-            aria-label="Select theater seat"
-            value={localProfile.seatIndex}
-            onChange={(e) => onSelectSeat(Number(e.target.value))}
-            className="lounge-input rounded-lg px-2.5 py-1 text-xs"
+            aria-label="Select lounge seat"
+            value={localProfile.seatId ?? computedSeats[localProfile.seatIndex]?.id ?? ''}
+            onChange={(e) => onSelectSeat(e.target.value)}
+            className="lounge-input max-w-[185px] truncate rounded-lg px-2.5 py-1 text-xs"
           >
-            {LOUNGE_SEATS.map((seat) => {
-              const takenByOther = participants.some(
-                (p) => p.userId !== localProfile.userId && p.seatIndex === seat.index,
-              )
+            {computedSeats.map((seat) => {
+              const takenByOther = participants.some((p) => {
+                if (p.userId === localProfile.userId) return false
+                if (p.seatId) return p.seatId === seat.id
+                return p.seatIndex === seat.index
+              })
               return (
-                <option key={seat.index} value={seat.index} disabled={takenByOther}>
+                <option key={seat.id} value={seat.id} disabled={takenByOther}>
                   {seat.label} {takenByOther ? '(Taken)' : ''}
                 </option>
               )
@@ -1299,9 +1362,33 @@ export function CompanionOverlay({
         </div>
       )}
 
+      {/* Hangout Room Builder, Architecture, Screen & Mood Studio Drawer */}
+      <BuildCatalogDrawer
+        open={buildDrawerOpen}
+        buildMode={buildMode}
+        customization={roomCustomization}
+        selectedFurnitureId={selectedFurnitureId}
+        onToggleBuildMode={onToggleBuildMode}
+        onSelectFurniture={onSelectFurniture}
+        onSpawnFurniture={onSpawnFurniture}
+        onUpdateFurnitureItem={onUpdateFurnitureItem}
+        onDuplicateFurnitureItem={onDuplicateFurnitureItem}
+        onDeleteFurnitureItem={onDeleteFurnitureItem}
+        onUpdateArchitecture={onUpdateArchitecture}
+        onUpdateLighting={onUpdateLighting}
+        onApplyLightingPreset={onApplyLightingPreset}
+        onUpdateScreen={onUpdateScreen}
+        onResetRoom={onResetRoom}
+        onImportBlueprintJson={onImportBlueprintJson}
+        onClose={() => {
+          setBuildDrawerOpen(false)
+          onToggleBuildMode(false)
+        }}
+      />
+
       {/* Bottom Companion Presenter & Watch-Party Dock */}
       <footer className="pointer-events-auto lounge-dock-bar mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-2.5 rounded-2xl px-3.5 py-2.5">
-        {/* Left: Presenter Handoff + Tab Share + URL Player */}
+        {/* Left: Presenter Handoff + Tab Share + URL Player + Customize Room */}
         <div className="flex flex-wrap items-center gap-2">
           <button
             id="btn-take-or-release-control"
@@ -1343,7 +1430,13 @@ export function CompanionOverlay({
             id="btn-open-url-player"
             type="button"
             disabled={!isLocalPresenter && !canTakeControl}
-            onClick={() => setUrlDrawerOpen((v) => !v)}
+            onClick={() => {
+              setUrlDrawerOpen((v) => {
+                const next = !v
+                if (next) setBuildDrawerOpen(false)
+                return next
+              })
+            }}
             className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition ${
               urlDrawerOpen
                 ? 'border-[#e5a93c] bg-[#e5a93c]/15 text-[#f4f1ea]'
@@ -1352,6 +1445,31 @@ export function CompanionOverlay({
           >
             <Tv className="h-3.5 w-3.5 text-[#e5a93c]" />
             <span>YouTube &amp; Streams</span>
+          </button>
+
+          <button
+            id="btn-open-customize-studio"
+            type="button"
+            onClick={() => {
+              setBuildDrawerOpen((v) => {
+                const next = !v
+                if (next) {
+                  setUrlDrawerOpen(false)
+                  onToggleBuildMode(true)
+                } else {
+                  onToggleBuildMode(false)
+                }
+                return next
+              })
+            }}
+            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition ${
+              buildDrawerOpen || buildMode
+                ? 'border-[#22d3ee] bg-[#22d3ee]/15 text-[#22d3ee]'
+                : 'border-[#f4f1ea]/12 bg-[#141922] text-[#f4f1ea] hover:border-[#22d3ee]/60'
+            }`}
+          >
+            <Hammer className="h-3.5 w-3.5 text-[#22d3ee]" />
+            <span>Customize Room</span>
           </button>
         </div>
 

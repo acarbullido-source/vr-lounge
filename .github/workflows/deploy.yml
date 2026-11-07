@@ -34,6 +34,7 @@ jobs:
 
       - name: Build production bundle
         env:
+          VITE_LOUNGE_PASSCODE: ${{ secrets.VITE_LOUNGE_PASSCODE || vars.VITE_LOUNGE_PASSCODE }}
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || vars.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || vars.VITE_SUPABASE_ANON_KEY }}
           VITE_METERED_API_KEY: ${{ secrets.VITE_METERED_API_KEY || vars.VITE_METERED_API_KEY }}

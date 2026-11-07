@@ -30,6 +30,7 @@ export interface AvatarPose6DoF {
   leftHand: Transform6DoF | null
   rightHand: Transform6DoF | null
   seatIndex: number
+  seatId?: string
   inVR: boolean
   timestamp: number
 }
@@ -40,6 +41,7 @@ export interface ParticipantProfile {
   avatarColor: string
   avatarStyle: AvatarStyleId
   seatIndex: number
+  seatId?: string
   isHost: boolean
   isMuted: boolean
   inVR: boolean
@@ -110,4 +112,101 @@ export interface WebRTCSignalMessage {
   sdp?: RTCSessionDescriptionInit
   candidate?: RTCIceCandidateInit
   timestamp: number
+}
+
+// ============================================================================
+// Customizable Hangout Space (v2.0) — Architecture, Furniture, Seating & Moods
+// ============================================================================
+
+export type RoomSizePreset = 'cozy' | 'classic' | 'grand'
+
+export type RoomMaterialThemeId =
+  | 'obsidian-theater'
+  | 'walnut-velvet'
+  | 'industrial-loft'
+  | 'neon-cyber'
+  | 'nordic-oak'
+
+export type CeilingStyleId = 'coffered' | 'skylight-stars' | 'industrial-beams'
+
+export type LightingPresetId =
+  | 'movie'
+  | 'cozy'
+  | 'neon-pub'
+  | 'midnight-lofi'
+  | 'daylight'
+
+export type FurnitureCategory = 'seating' | 'tables' | 'decor' | 'wall'
+
+export type FurnitureCatalogId =
+  | 'sofa-3'
+  | 'loveseat-2'
+  | 'armchair'
+  | 'beanbag'
+  | 'barstool'
+  | 'coffee-table'
+  | 'bar-counter'
+  | 'rug-plush'
+  | 'plant-monstera'
+  | 'lamp-floor'
+  | 'neon-sign'
+  | 'wall-poster'
+  | 'arcade-cabinet'
+  | 'popcorn-cart'
+
+export interface PlacedFurnitureItem {
+  id: string
+  type: FurnitureCatalogId
+  position: [number, number, number]
+  rotationY: number
+  scale: number
+  color: string
+  imageUrl?: string
+  label?: string
+}
+
+export interface RoomScreenTransform {
+  position: [number, number, number]
+  rotationY: number
+  scale: number
+  curved: boolean
+}
+
+export interface RoomArchitectureConfig {
+  sizePreset: RoomSizePreset
+  materialTheme: RoomMaterialThemeId
+  ceilingStyle: CeilingStyleId
+  leftBarAlcove: boolean
+  rightArcadeAlcove: boolean
+  rearBalcony: boolean
+}
+
+export interface RoomLightingConfig {
+  preset: LightingPresetId
+  brightness: number
+  accentColor: string
+  ambientTint: string
+  autoDimOnPlay: boolean
+}
+
+export interface RoomCustomizationState {
+  revision: number
+  updatedAt: number
+  updatedBy: string
+  architecture: RoomArchitectureConfig
+  lighting: RoomLightingConfig
+  screen: RoomScreenTransform
+  furniture: PlacedFurnitureItem[]
+}
+
+export interface ComputedSeat {
+  id: string
+  index: number
+  furnitureId: string
+  furnitureType: FurnitureCatalogId | 'fallback'
+  label: string
+  position: [number, number, number]
+  localCushionOffset: [number, number, number]
+  seatHeightOffset: number
+  rotationY: number
 }

@@ -33,7 +33,25 @@ Vite launches with `@vitejs/plugin-basic-ssl` and `--host` on `https://localhost
 
 Pushes to `main` automatically typecheck, lint, build vendor-split bundles, and deploy to GitHub Pages via [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml), while [`.github/workflows/supabase-keepalive.yml`](.github/workflows/supabase-keepalive.yml) keeps free-tier Supabase projects active year-round:
 
+- `VITE_LOUNGE_PASSCODE` — Optional secret passcode gate (renders a VR-laser & desktop keypad and remembers unlocked headsets/PCs in `localStorage`).
 - `VITE_SUPABASE_URL` & `VITE_SUPABASE_ANON_KEY` — Dedicated **Supabase Realtime** Presence & 20Hz Avatar Pose Broadcast channels (supports `sb_publishable_...` and legacy `anon` keys, with automatic Cloud Relay failover).
 - `VITE_METERED_API_KEY` (plus optional `VITE_METERED_DOMAIN` / `VITE_METERED_TURN_URL`) — **Metered.ca OpenRelay TURN** (UDP/TCP/TLS on ports 80 & 443) for friends behind strict NATs, college Wi-Fi, or mobile hotspots.
 - `VITE_YOUTUBE_PROXY_URL` — Optional custom Piped/Invidious relay override (defaults to persistent latency-ranked community relay failover).
+
+### Optional Server-Side Room Layout Table (Supabase)
+
+Room customizations (furniture, wall/floor themes, alcoves, screen transform, and lighting moods) automatically persist per `roomCode` in every participant's `localStorage` and sync across peers via Realtime Broadcast with **zero SQL setup required**. If you also want cloud database persistence when all browsers clear storage, run this optional snippet in your Supabase SQL Editor:
+
+```sql
+create table if not exists public.room_layouts (
+  room_code text primary key,
+  layout_json jsonb not null,
+  revision integer not null default 1,
+  updated_at timestamptz not null default now()
+);
+alter table public.room_layouts enable row level security;
+create policy "Allow public room layout sync" on public.room_layouts
+  for all to anon using (true) with check (true);
+```
+
 

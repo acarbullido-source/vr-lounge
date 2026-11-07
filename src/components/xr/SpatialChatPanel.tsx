@@ -48,6 +48,11 @@ export interface SpatialChatPanelProps {
   visible: boolean
   messages: ChatMessage[]
   reactions: FloatingReaction[]
+  screenTransform?: {
+    position: [number, number, number]
+    rotationY: number
+    scale: number
+  }
   onSendReaction: (emoji: string) => void
   onOpenChatKeyboard: () => void
   onClosePanel: () => void
@@ -57,12 +62,26 @@ export function SpatialChatPanel({
   visible,
   messages,
   reactions,
+  screenTransform,
   onSendReaction,
   onOpenChatKeyboard,
   onClosePanel,
 }: SpatialChatPanelProps) {
   const [hoveredBtn, setHoveredBtn] = useState<string | null>(null)
   const visibleMessages = messages.slice(-8)
+
+  const sc = screenTransform?.scale ?? 1
+  const sx = screenTransform?.position[0] ?? 0
+  const sy = screenTransform?.position[1] ?? 3.05
+  const sz = screenTransform?.position[2] ?? -6.45
+  const sRot = screenTransform?.rotationY ?? 0
+
+  const localOffsetX = 4.25 * sc + 1.15
+  const localOffsetZ = 1.8
+  const cos = Math.cos(sRot)
+  const sin = Math.sin(sRot)
+  const panelX = sx + localOffsetX * cos + localOffsetZ * sin
+  const panelZ = sz - localOffsetX * sin + localOffsetZ * cos
 
   return (
     <group name="spatial-chat-and-reactions">
@@ -71,9 +90,9 @@ export function SpatialChatPanel({
         <FloatingEmojiParticle key={rx.id} reaction={rx} />
       ))}
 
-      {/* Toggleable 3D Spatial Chat Panel beside the curved cinema screen */}
+      {/* Toggleable 3D Spatial Chat Panel beside the cinema screen */}
       {visible && (
-        <group position={[5.38, 2.65, -4.65]} rotation={[0, -0.44, 0]}>
+        <group position={[panelX, Math.max(1.9, sy - 0.4), panelZ]} rotation={[0, sRot - 0.44, 0]}>
           {/* Outer frame */}
           <RoundedBox args={[2.35, 3.15, 0.04]} radius={0.08} smoothness={3}>
             <meshStandardMaterial color="#0D1118" roughness={0.68} metalness={0.24} />
