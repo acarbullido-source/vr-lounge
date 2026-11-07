@@ -25,10 +25,12 @@ import { CinemaRoom } from './components/xr/CinemaRoom'
 import { SpatialChatPanel } from './components/xr/SpatialChatPanel'
 import { SpatialControlDock } from './components/xr/SpatialControlDock'
 import type { VRKeyboardMode } from './components/xr/VRKeyboard3D'
+import { YouTubeBrowser3D } from './components/xr/YouTubeBrowser3D'
 import { LOUNGE_SEATS, SCREEN_CONFIG } from './constants/cinema'
 import { useMediaScreen } from './hooks/useMediaScreen'
 import { useRoomSession, type JoinRoomOptions } from './hooks/useRoomSession'
 import { useWebRTC } from './hooks/useWebRTC'
+import type { YouTubeVideoItem } from './services/youtube'
 import { exitVRSession, xrStore } from './store/xrStore'
 import type { WebRTCSignalMessage } from './types/lounge'
 
@@ -193,6 +195,9 @@ export function App() {
   const [inVRSession, setInVRSession] = useState(false)
   const [recenterVersion, setRecenterVersion] = useState(0)
   const [spatialChatOpen, setSpatialChatOpen] = useState(true)
+  const [youtubeBrowserOpen, setYoutubeBrowserOpen] = useState(false)
+  const [youtubeSearchQuery, setYoutubeSearchQuery] = useState('')
+  const [youtubeSearchTrigger, setYoutubeSearchTrigger] = useState(0)
   const [keyboardMode, setKeyboardMode] = useState<VRKeyboardMode | null>(null)
   const [statusBanner, setStatusBanner] = useState<string | null>(null)
   const [usingSimulator, setUsingSimulator] = useState(false)
@@ -442,6 +447,52 @@ export function App() {
     roomUpdateLocalProfile({ isMuted: !roomLocalProfile.isMuted })
   }, [roomLocalProfile.isMuted, roomUpdateLocalProfile])
 
+  const handleToggleYouTubeBrowser = useCallback(() => {
+    setYoutubeBrowserOpen((open) => {
+      const next = !open
+      if (!next) {
+        setKeyboardMode((m) => (m === 'youtube' ? null : m))
+      }
+      return next
+    })
+  }, [])
+
+  const handleOpenYouTubeBrowser = useCallback(() => {
+    setYoutubeBrowserOpen(true)
+  }, [])
+
+  const handleCloseYouTubeBrowser = useCallback(() => {
+    setYoutubeBrowserOpen(false)
+    setKeyboardMode((m) => (m === 'youtube' ? null : m))
+  }, [])
+
+  const handleOpenYouTubeSearchKeyboard = useCallback(() => {
+    setYoutubeBrowserOpen(true)
+    setKeyboardMode((m) => (m === 'youtube' ? null : 'youtube'))
+  }, [])
+
+  const handleSubmitYouTubeSearch = useCallback((query: string) => {
+    setYoutubeSearchQuery(query.trim())
+    setYoutubeSearchTrigger((n) => n + 1)
+    setYoutubeBrowserOpen(true)
+  }, [])
+
+  const handleClearYouTubeSearch = useCallback(() => {
+    setYoutubeSearchQuery('')
+    setYoutubeSearchTrigger((n) => n + 1)
+  }, [])
+
+  const handleSelectYouTubeVideo = useCallback(
+    (video: YouTubeVideoItem, keepOpen: boolean) => {
+      handleLoadStreamUrl(video.playUrl, video.title, false)
+      if (!keepOpen) {
+        setYoutubeBrowserOpen(false)
+      }
+      setKeyboardMode(null)
+    },
+    [handleLoadStreamUrl],
+  )
+
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#080a0d]">
       {/* Persistent WebGL / WebXR Canvas (mounted behind Lobby so store.enterVR() works on first click) */}
@@ -468,38 +519,60 @@ export function App() {
               onInVRChange={handleInVRChange}
             >
               {room.joined && (
-                <SceneSectionBoundary>
-                  <SpatialControlDock
-                    presenterState={room.presenterState}
-                    isLocalPresenter={room.isLocalPresenter}
-                    canTakeControl={room.canTakeControl}
-                    isMuted={room.localProfile.isMuted}
-                    cinemaVolume={cinemaVolume}
-                    voiceVolume={voiceVolume}
-                    localCurrentTime={media.localCurrentTime}
-                    localDuration={media.localDuration}
-                    chatPanelOpen={spatialChatOpen}
-                    keyboardMode={keyboardMode}
-                    onSetKeyboardMode={setKeyboardMode}
-                    onTakeControl={() => room.takeControl()}
-                    onReleaseControl={() => {
-                      webrtc.stopTabShare()
-                      room.releaseControl()
-                    }}
-                    onTogglePlayPause={handleTogglePlayPause}
-                    onSeekRelative={handleSeekRelative}
-                    onSeekFraction={handleSeekFraction}
-                    onSelectStreamUrl={(url, title) => handleLoadStreamUrl(url, title, false)}
-                    onStartTabShare={() => void handleStartTabShare()}
-                    onToggleMute={handleToggleMute}
-                    onChangeCinemaVolume={setCinemaVolume}
-                    onChangeVoiceVolume={setVoiceVolume}
-                    onSendReaction={(emoji) => room.sendReaction(emoji)}
-                    onSendChatMessage={room.sendChatMessage}
-                    onToggleChatPanel={() => setSpatialChatOpen((v) => !v)}
-                    onRecenterSeat={() => setRecenterVersion((v) => v + 1)}
-                  />
-                </SceneSectionBoundary>
+                <>
+                  <SceneSectionBoundary>
+                    <YouTubeBrowser3D
+                      visible={youtubeBrowserOpen}
+                      keyboardOpenForSearch={keyboardMode === 'youtube'}
+                      searchQuery={youtubeSearchQuery}
+                      searchTrigger={youtubeSearchTrigger}
+                      activeMediaUrl={room.presenterState.mediaUrl}
+                      relatedVideos={media.relatedVideos}
+                      onOpenSearchKeyboard={handleOpenYouTubeSearchKeyboard}
+                      onVoiceSearchQuery={handleSubmitYouTubeSearch}
+                      onClearSearch={handleClearYouTubeSearch}
+                      onSelectVideo={handleSelectYouTubeVideo}
+                      onClose={handleCloseYouTubeBrowser}
+                    />
+                  </SceneSectionBoundary>
+
+                  <SceneSectionBoundary>
+                    <SpatialControlDock
+                      presenterState={room.presenterState}
+                      isLocalPresenter={room.isLocalPresenter}
+                      canTakeControl={room.canTakeControl}
+                      isMuted={room.localProfile.isMuted}
+                      cinemaVolume={cinemaVolume}
+                      voiceVolume={voiceVolume}
+                      localCurrentTime={media.localCurrentTime}
+                      localDuration={media.localDuration}
+                      chatPanelOpen={spatialChatOpen}
+                      youtubeBrowserOpen={youtubeBrowserOpen}
+                      youtubeSearchQuery={youtubeSearchQuery}
+                      keyboardMode={keyboardMode}
+                      onSetKeyboardMode={setKeyboardMode}
+                      onToggleYouTubeBrowser={handleToggleYouTubeBrowser}
+                      onSubmitYouTubeSearch={handleSubmitYouTubeSearch}
+                      onTakeControl={() => room.takeControl()}
+                      onReleaseControl={() => {
+                        webrtc.stopTabShare()
+                        room.releaseControl()
+                      }}
+                      onTogglePlayPause={handleTogglePlayPause}
+                      onSeekRelative={handleSeekRelative}
+                      onSeekFraction={handleSeekFraction}
+                      onSelectStreamUrl={(url, title) => handleLoadStreamUrl(url, title, false)}
+                      onStartTabShare={() => void handleStartTabShare()}
+                      onToggleMute={handleToggleMute}
+                      onChangeCinemaVolume={setCinemaVolume}
+                      onChangeVoiceVolume={setVoiceVolume}
+                      onSendReaction={(emoji) => room.sendReaction(emoji)}
+                      onSendChatMessage={room.sendChatMessage}
+                      onToggleChatPanel={() => setSpatialChatOpen((v) => !v)}
+                      onRecenterSeat={() => setRecenterVersion((v) => v + 1)}
+                    />
+                  </SceneSectionBoundary>
+                </>
               )}
             </SeatCameraAndOriginRig>
 
@@ -508,12 +581,15 @@ export function App() {
               presenterState={room.presenterState}
               videoTexture={media.videoTexture}
               hasVideoFrames={media.hasVideoFrames}
+              isResolvingMedia={media.isResolvingMedia}
+              activeStreamQuality={media.activeStreamQuality}
               mediaError={media.mediaError}
               needsAudioUnlock={media.needsAudioUnlock}
               localSeatIndex={room.localProfile.seatIndex}
               participants={room.participants}
               canTakeControl={room.canTakeControl}
               onTakeControl={() => room.takeControl()}
+              onOpenYouTubeBrowser={room.joined ? handleOpenYouTubeBrowser : undefined}
               onUnlockAudio={media.unlockAudio}
               onSelectSeat={room.selectSeat}
             />

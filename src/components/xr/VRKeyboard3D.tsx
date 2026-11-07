@@ -1,17 +1,25 @@
 import { RoundedBox, Text } from '@react-three/drei'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { SAMPLE_MEDIA_PRESETS } from '../../constants/cinema'
 import type { SampleMediaPreset } from '../../types/lounge'
 
-export type VRKeyboardMode = 'url' | 'chat'
+export type VRKeyboardMode = 'url' | 'chat' | 'youtube'
 
 export interface VRKeyboard3DProps {
   mode: VRKeyboardMode
   initialValue: string
   onSubmitUrl: (url: string, title?: string) => void
   onSubmitChat: (message: string) => void
+  onSubmitYouTubeSearch?: (query: string) => void
   onClose: () => void
 }
+
+const YOUTUBE_QUICK_CHIPS: ReadonlyArray<string> = [
+  '4K trailers',
+  'lofi beats',
+  'music video',
+  'sci-fi short',
+]
 
 const KEY_ROWS: ReadonlyArray<ReadonlyArray<string>> = [
   ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '_'],
@@ -87,10 +95,17 @@ export function VRKeyboard3D({
   initialValue,
   onSubmitUrl,
   onSubmitChat,
+  onSubmitYouTubeSearch,
   onClose,
 }: VRKeyboard3DProps) {
   const [buffer, setBuffer] = useState(initialValue)
   const [uppercase, setUppercase] = useState(false)
+
+  useEffect(() => {
+    setBuffer(initialValue)
+  }, [initialValue, mode])
+
+  const hasTopPresetRow = mode === 'url' || mode === 'youtube'
 
   const appendText = (chunk: string) => {
     setBuffer((prev) => prev + chunk)
@@ -115,7 +130,9 @@ export function VRKeyboard3D({
   const handleConfirm = () => {
     const trimmed = buffer.trim()
     if (!trimmed) return
-    if (mode === 'url') {
+    if (mode === 'youtube') {
+      onSubmitYouTubeSearch?.(trimmed)
+    } else if (mode === 'url') {
       onSubmitUrl(trimmed, 'Custom Stream')
     } else {
       onSubmitChat(trimmed)
@@ -126,26 +143,32 @@ export function VRKeyboard3D({
   return (
     <group name="vr-virtual-keyboard">
       {/* Main backing plate */}
-      <RoundedBox args={[1.38, mode === 'url' ? 0.92 : 0.68, 0.022]} radius={0.035} smoothness={3}>
+      <RoundedBox
+        args={[1.38, hasTopPresetRow ? 0.92 : 0.68, 0.022]}
+        radius={0.035}
+        smoothness={3}
+      >
         <meshStandardMaterial color="#0D1118" roughness={0.65} metalness={0.25} />
       </RoundedBox>
 
       {/* Header bar */}
       <Text
-        position={[-0.62, mode === 'url' ? 0.395 : 0.275, 0.015]}
+        position={[-0.62, hasTopPresetRow ? 0.395 : 0.275, 0.015]}
         fontSize={0.034}
         color="#E5A93C"
         anchorX="left"
         anchorY="middle"
       >
-        {mode === 'url'
-          ? 'HEADSET URL & STREAM DECK (MP4 / HLS .M3U8)'
-          : 'COMPOSE SPATIAL CHAT MESSAGE'}
+        {mode === 'youtube'
+          ? 'SEARCH YOUTUBE OR PASTE VIDEO LINK'
+          : mode === 'url'
+            ? 'HEADSET URL & STREAM DECK (MP4 / HLS .M3U8)'
+            : 'COMPOSE SPATIAL CHAT MESSAGE'}
       </Text>
 
       <KeyCap3D
         label="Close ✕"
-        position={[0.56, mode === 'url' ? 0.395 : 0.275, 0.015]}
+        position={[0.56, hasTopPresetRow ? 0.395 : 0.275, 0.015]}
         width={0.16}
         accent="muted"
         onPress={onClose}
@@ -170,8 +193,30 @@ export function VRKeyboard3D({
         </group>
       )}
 
+      {/* Quick Watch-Party Search Chips when in YouTube mode */}
+      {mode === 'youtube' && (
+        <group position={[0, 0.285, 0.015]}>
+          {YOUTUBE_QUICK_CHIPS.map((chip, idx) => {
+            const xOffset = -0.48 + idx * 0.32
+            return (
+              <KeyCap3D
+                key={chip}
+                label={`🔍 ${chip}`}
+                position={[xOffset, 0, 0]}
+                width={0.3}
+                accent="muted"
+                onPress={() => {
+                  setBuffer(chip)
+                  onSubmitYouTubeSearch?.(chip)
+                }}
+              />
+            )
+          })}
+        </group>
+      )}
+
       {/* Input readout field */}
-      <group position={[0, mode === 'url' ? 0.175 : 0.175, 0.014]}>
+      <group position={[0, 0.175, 0.014]}>
         <RoundedBox args={[1.26, 0.088, 0.012]} radius={0.018} smoothness={2}>
           <meshBasicMaterial color="#07090D" />
         </RoundedBox>
@@ -187,15 +232,55 @@ export function VRKeyboard3D({
             ? buffer.length > 52
               ? `…${buffer.slice(-52)}|`
               : `${buffer}|`
-            : mode === 'url'
-              ? 'https://example.com/stream.m3u8'
-              : 'Type a message to the room...'}
+            : mode === 'youtube'
+              ? 'Search YouTube videos, channels, or paste watch URL...'
+              : mode === 'url'
+                ? 'https://example.com/stream.m3u8'
+                : 'Type a message to the room...'}
         </Text>
       </group>
 
       {/* Shortcut tokens row */}
       <group position={[0, 0.085, 0.015]}>
-        {mode === 'url' ? (
+        {mode === 'youtube' ? (
+          <>
+            <KeyCap3D
+              label="4K"
+              position={[-0.51, 0, 0]}
+              width={0.16}
+              accent="muted"
+              onPress={() => appendText(' 4K')}
+            />
+            <KeyCap3D
+              label="live"
+              position={[-0.32, 0, 0]}
+              width={0.17}
+              accent="muted"
+              onPress={() => appendText(' live')}
+            />
+            <KeyCap3D
+              label="Paste"
+              position={[-0.11, 0, 0]}
+              width={0.19}
+              accent="muted"
+              onPress={() => void handlePasteClipboard()}
+            />
+            <KeyCap3D
+              label="Clear"
+              position={[0.11, 0, 0]}
+              width={0.18}
+              accent="muted"
+              onPress={() => setBuffer('')}
+            />
+            <KeyCap3D
+              label="Search YouTube 🔍"
+              position={[0.42, 0, 0]}
+              width={0.38}
+              accent="amber"
+              onPress={handleConfirm}
+            />
+          </>
+        ) : mode === 'url' ? (
           <>
             <KeyCap3D
               label="https://"
@@ -319,7 +404,9 @@ export function VRKeyboard3D({
           onPress={() => setBuffer((prev) => prev.slice(0, -1))}
         />
         <KeyCap3D
-          label={mode === 'url' ? 'Play ▶' : 'Send ↵'}
+          label={
+            mode === 'youtube' ? 'Search ↵' : mode === 'url' ? 'Play ▶' : 'Send ↵'
+          }
           position={[0.54, 0, 0]}
           width={0.18}
           accent="amber"

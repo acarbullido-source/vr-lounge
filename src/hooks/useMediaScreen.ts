@@ -1,24 +1,31 @@
 import Hls from 'hls.js'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
+import {
+  extractPeerTubeRef,
+  extractYouTubeVideoId,
+  isYouTubeWatchUrl,
+  resolvePeerTubeStreams,
+  resolveYouTubeStreams,
+  type ResolvedStreamCandidate,
+  type YouTubeVideoItem,
+} from '../services/youtube'
 import type { PresenterState } from '../types/lounge'
-
-function isYouTubeUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url)
-    const host = parsed.hostname.toLowerCase()
-    return (
-      host === 'youtu.be' ||
-      host.endsWith('youtube.com') ||
-      host.endsWith('youtube-nocookie.com')
-    )
-  } catch {
-    return false
-  }
-}
 
 function isHlsUrl(url: string): boolean {
   return /\.m3u8(\?|#|$)/i.test(url) || url.includes('mpegurl')
+}
+
+function hasLocalDevStreamProxy(): boolean {
+  if (typeof window === 'undefined') return false
+  const host = window.location.hostname.toLowerCase()
+  return (
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    /^192\.168\./.test(host) ||
+    /^10\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
+  )
 }
 
 export interface UseMediaScreenOptions {
@@ -32,10 +39,12 @@ export interface UseMediaScreenOptions {
 }
 
 let sharedVideoEl: HTMLVideoElement | null = null
+let sharedCompanionAudioEl: HTMLAudioElement | null = null
 let sharedVideoTex: THREE.VideoTexture | null = null
 
 function getCinemaScreenMedia(): {
   videoElement: HTMLVideoElement
+  companionAudioElement: HTMLAudioElement
   videoTexture: THREE.VideoTexture
 } {
   if (!sharedVideoEl) {
@@ -46,6 +55,13 @@ function getCinemaScreenMedia(): {
     el.autoplay = false
     sharedVideoEl = el
   }
+  if (!sharedCompanionAudioEl) {
+    const audio = document.createElement('audio')
+    audio.crossOrigin = 'anonymous'
+    audio.preload = 'auto'
+    audio.autoplay = false
+    sharedCompanionAudioEl = audio
+  }
   if (!sharedVideoTex) {
     const tex = new THREE.VideoTexture(sharedVideoEl)
     tex.colorSpace = THREE.SRGBColorSpace
@@ -54,7 +70,11 @@ function getCinemaScreenMedia(): {
     tex.generateMipmaps = false
     sharedVideoTex = tex
   }
-  return { videoElement: sharedVideoEl, videoTexture: sharedVideoTex }
+  return {
+    videoElement: sharedVideoEl,
+    companionAudioElement: sharedCompanionAudioEl,
+    videoTexture: sharedVideoTex,
+  }
 }
 
 export function useMediaScreen({
@@ -66,9 +86,12 @@ export function useMediaScreen({
   selectedSpeakerId,
   onPresenterProgress,
 }: UseMediaScreenOptions) {
-  const { videoElement, videoTexture } = getCinemaScreenMedia()
+  const { videoElement, companionAudioElement, videoTexture } = getCinemaScreenMedia()
 
   const [hasVideoFrames, setHasVideoFrames] = useState(false)
+  const [isResolvingMedia, setIsResolvingMedia] = useState(false)
+  const [activeStreamQuality, setActiveStreamQuality] = useState<string | null>(null)
+  const [relatedVideos, setRelatedVideos] = useState<YouTubeVideoItem[]>([])
   const [localCurrentTime, setLocalCurrentTime] = useState(0)
   const [localDuration, setLocalDuration] = useState(0)
   const [mediaError, setMediaError] = useState<string | null>(null)
@@ -77,23 +100,54 @@ export function useMediaScreen({
   const hlsRef = useRef<Hls | null>(null)
   const loadedSourceKeyRef = useRef<string>('')
   const autoProxiedUrlRef = useRef<string>('')
-  const progressCallbackRef = useRef(onPresenterProgress)
+  const candidatesRef = useRef<ResolvedStreamCandidate[]>([])
+  const candidateIndexRef = useRef<number>(0)
+  const hasCompanionAudioRef = useRef<boolean>(false)
+  const attachCandidateRef = useRef<((index: number) => void) | null>(null)
 
+  const progressCallbackRef = useRef(onPresenterProgress)
   useEffect(() => {
     progressCallbackRef.current = onPresenterProgress
   }, [onPresenterProgress])
 
+  const latestPlaybackRef = useRef({
+    currentTime: presenterState.currentTime,
+    isPlaying: presenterState.isPlaying,
+    cinemaVolume,
+  })
+  useEffect(() => {
+    latestPlaybackRef.current = {
+      currentTime: presenterState.currentTime,
+      isPlaying: presenterState.isPlaying,
+      cinemaVolume,
+    }
+  }, [cinemaVolume, presenterState.currentTime, presenterState.isPlaying])
+
   const isLocalPresenter = presenterState.activePresenterId === localUserId
+
+  const clearCompanionAudio = useCallback(() => {
+    hasCompanionAudioRef.current = false
+    companionAudioElement.pause()
+    companionAudioElement.removeAttribute('src')
+  }, [companionAudioElement])
 
   // Route audio output device when supported by Chromium
   useEffect(() => {
-    const sinkable = videoElement as HTMLVideoElement & {
+    const sinkableVideo = videoElement as HTMLVideoElement & {
       setSinkId?: (sinkId: string) => Promise<void>
     }
-    if (selectedSpeakerId && typeof sinkable.setSinkId === 'function') {
-      void sinkable.setSinkId(selectedSpeakerId).catch(() => undefined)
+    const sinkableAudio = companionAudioElement as HTMLAudioElement & {
+      setSinkId?: (sinkId: string) => Promise<void>
     }
-  }, [selectedSpeakerId, videoElement])
+    if (selectedSpeakerId) {
+      if (typeof sinkableVideo.setSinkId === 'function') {
+        void sinkableVideo.setSinkId(selectedSpeakerId).catch(() => undefined)
+      }
+      if (typeof sinkableAudio.setSinkId === 'function') {
+        void sinkableAudio.setSinkId(selectedSpeakerId).catch(() => undefined)
+      }
+    }
+  }, [companionAudioElement, selectedSpeakerId, videoElement])
 
   // Apply cinema volume (mute local presenter's own tab preview to prevent doubled audio)
   useEffect(() => {
@@ -102,12 +156,19 @@ export function useMediaScreen({
     if (muteSelfTabLoopback) {
       videoElement.muted = true
       videoElement.volume = 0
+      companionAudioElement.muted = true
+      companionAudioElement.volume = 0
     } else if (!needsAudioUnlock) {
-      videoElement.muted = cinemaVolume <= 0.001
-      videoElement.volume = Math.max(0, Math.min(1, cinemaVolume))
+      const muted = cinemaVolume <= 0.001
+      const clampedVol = Math.max(0, Math.min(1, cinemaVolume))
+      videoElement.muted = muted
+      videoElement.volume = clampedVol
+      companionAudioElement.muted = muted
+      companionAudioElement.volume = clampedVol
     }
   }, [
     cinemaVolume,
+    companionAudioElement,
     isLocalPresenter,
     needsAudioUnlock,
     presenterState.screenMode,
@@ -121,9 +182,116 @@ export function useMediaScreen({
     }
   }, [])
 
-  // Bind Mode 1 (WebRTC MediaStream) vs Mode 2 (MP4 / HLS / Proxied URL)
+  // Bind Mode 1 (WebRTC MediaStream) vs Mode 2 (MP4 / HLS / Native YouTube & Open Web Resolver)
   useEffect(() => {
     let cancelled = false
+    let sourceAttached = false
+
+    const applyCandidate = (index: number) => {
+      if (cancelled) return
+      const candidate = candidatesRef.current[index]
+      if (!candidate) return
+
+      candidateIndexRef.current = index
+      destroyHls()
+      clearCompanionAudio()
+      videoElement.srcObject = null
+      setMediaError(null)
+      setActiveStreamQuality(
+        candidate.provider !== 'Direct'
+          ? `${candidate.qualityLabel} · ${candidate.provider}`
+          : candidate.qualityLabel,
+      )
+
+      const canLocalProxy = hasLocalDevStreamProxy()
+      const shouldProxy =
+        presenterState.useCorsProxy ||
+        (canLocalProxy && autoProxiedUrlRef.current === candidate.streamUrl)
+      const finalUrl = shouldProxy
+        ? `/api/stream-proxy?url=${encodeURIComponent(candidate.streamUrl)}`
+        : candidate.streamUrl
+
+      if (candidate.audioUrl) {
+        hasCompanionAudioRef.current = true
+        const finalAudioUrl = shouldProxy
+          ? `/api/stream-proxy?url=${encodeURIComponent(candidate.audioUrl)}`
+          : candidate.audioUrl
+        companionAudioElement.src = finalAudioUrl
+        companionAudioElement.muted =
+          latestPlaybackRef.current.cinemaVolume <= 0.001
+        companionAudioElement.volume = Math.max(
+          0,
+          Math.min(1, latestPlaybackRef.current.cinemaVolume),
+        )
+        companionAudioElement.load()
+      }
+
+      if (candidate.kind === 'hls' || isHlsUrl(candidate.streamUrl)) {
+        if (Hls.isSupported()) {
+          const hls = new Hls({
+            enableWorker: true,
+            lowLatencyMode: false,
+          })
+          hlsRef.current = hls
+          hls.loadSource(finalUrl)
+          hls.attachMedia(videoElement)
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            if (cancelled) return
+            setHasVideoFrames(true)
+            const { currentTime, isPlaying } = latestPlaybackRef.current
+            if (currentTime > 0.5) {
+              videoElement.currentTime = currentTime
+            }
+            if (isPlaying) {
+              void videoElement.play().catch(() => {
+                videoElement.muted = true
+                companionAudioElement.muted = true
+                setNeedsAudioUnlock(true)
+                void videoElement.play().catch(() => undefined)
+              })
+            }
+          })
+          hls.on(Hls.Events.ERROR, (_event, data) => {
+            if (cancelled || !data.fatal) return
+            // Fail over to next stream candidate if available!
+            const nextIdx = candidateIndexRef.current + 1
+            if (nextIdx < candidatesRef.current.length) {
+              applyCandidate(nextIdx)
+              return
+            }
+            if (
+              canLocalProxy &&
+              autoProxiedUrlRef.current !== candidate.streamUrl &&
+              !presenterState.useCorsProxy
+            ) {
+              autoProxiedUrlRef.current = candidate.streamUrl
+              applyCandidate(candidateIndexRef.current)
+              return
+            }
+            setMediaError(
+              `HLS stream error (${data.details}). Try selecting another stream or switch relay.`,
+            )
+          })
+        } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
+          videoElement.src = finalUrl
+          videoElement.load()
+        } else {
+          const nextIdx = candidateIndexRef.current + 1
+          if (nextIdx < candidatesRef.current.length) {
+            applyCandidate(nextIdx)
+            return
+          }
+          setMediaError('HLS playback is not supported in this browser.')
+        }
+      } else {
+        videoElement.src = finalUrl
+        videoElement.load()
+      }
+    }
+
+    attachCandidateRef.current = (nextIndex: number) => {
+      applyCandidate(nextIndex)
+    }
 
     const attachMedia = async () => {
       const mode = presenterState.screenMode
@@ -131,10 +299,15 @@ export function useMediaScreen({
 
       if (mode === 'idle' || !activePresenterId) {
         destroyHls()
+        clearCompanionAudio()
+        candidatesRef.current = []
+        candidateIndexRef.current = 0
         loadedSourceKeyRef.current = ''
         videoElement.pause()
         videoElement.srcObject = null
         videoElement.removeAttribute('src')
+        setIsResolvingMedia(false)
+        setActiveStreamQuality(null)
         setHasVideoFrames(false)
         setMediaError(null)
         return
@@ -142,6 +315,11 @@ export function useMediaScreen({
 
       if (mode === 'tab-stream') {
         destroyHls()
+        clearCompanionAudio()
+        candidatesRef.current = []
+        setIsResolvingMedia(false)
+        setActiveStreamQuality('Live WebRTC Tab')
+
         const targetStream = isLocalPresenter
           ? localScreenStream
           : remoteScreenStreams[activePresenterId] ?? null
@@ -156,9 +334,11 @@ export function useMediaScreen({
         const streamKey = `stream:${targetStream.id}:${targetStream.getTracks().length}`
         if (loadedSourceKeyRef.current !== streamKey) {
           loadedSourceKeyRef.current = streamKey
+          sourceAttached = true
           videoElement.removeAttribute('src')
           videoElement.srcObject = targetStream
-          videoElement.muted = isLocalPresenter || cinemaVolume <= 0.001
+          videoElement.muted =
+            isLocalPresenter || latestPlaybackRef.current.cinemaVolume <= 0.001
           setMediaError(null)
         }
 
@@ -166,7 +346,6 @@ export function useMediaScreen({
           await videoElement.play()
           if (!cancelled) setHasVideoFrames(true)
         } catch {
-          // Retry muted to satisfy autoplay policy, then prompt audio unlock
           videoElement.muted = true
           await videoElement.play().catch(() => undefined)
           if (!cancelled) {
@@ -177,117 +356,134 @@ export function useMediaScreen({
         return
       }
 
-      // Mode 2: Synchronized URL Player
+      // Mode 2: Synchronized URL / Native YouTube / PeerTube Player
       const rawUrl = presenterState.mediaUrl.trim()
       if (!rawUrl) {
         setHasVideoFrames(false)
+        setIsResolvingMedia(false)
         return
       }
 
       const sourceKey = `url:${rawUrl}:proxy=${presenterState.useCorsProxy}`
       if (loadedSourceKeyRef.current === sourceKey) {
+        sourceAttached = true
         return
       }
+
       loadedSourceKeyRef.current = sourceKey
       setMediaError(null)
       setHasVideoFrames(false)
+      setActiveStreamQuality(null)
       destroyHls()
+      clearCompanionAudio()
       videoElement.srcObject = null
 
-      let effectiveUrl = rawUrl
+      const ytVideoId = isYouTubeWatchUrl(rawUrl)
+        ? extractYouTubeVideoId(rawUrl)
+        : null
+      const peerTubeRef = !ytVideoId ? extractPeerTubeRef(rawUrl) : null
 
-      if (isYouTubeUrl(rawUrl)) {
-        const ytResolver = (
-          import.meta.env.VITE_YOUTUBE_PROXY_URL as string | undefined
-        )?.trim()
-        if (!ytResolver) {
-          setMediaError(
-            'YouTube embeds restrict WebGL textures via CORS. Click "Share Browser Tab" (Mode 1) to watch YouTube/Netflix together, or configure VITE_YOUTUBE_PROXY_URL.',
-          )
-          return
-        }
+      if (ytVideoId) {
+        setIsResolvingMedia(true)
         try {
-          const resp = await fetch(`${ytResolver}${encodeURIComponent(rawUrl)}`)
-          if (!resp.ok) throw new Error(`Resolver HTTP ${resp.status}`)
-          const data = (await resp.json()) as { streamUrl?: string }
-          if (!data.streamUrl) throw new Error('Resolver returned no streamUrl')
-          effectiveUrl = data.streamUrl
+          // Support legacy ?url= custom endpoint if explicitly configured that way
+          const customEnv = (
+            import.meta.env.VITE_YOUTUBE_PROXY_URL as string | undefined
+          )?.trim()
+          if (customEnv && customEnv.includes('?')) {
+            const resp = await fetch(`${customEnv}${encodeURIComponent(rawUrl)}`)
+            if (!resp.ok) throw new Error(`Custom resolver HTTP ${resp.status}`)
+            const data = (await resp.json()) as { streamUrl?: string }
+            if (!data.streamUrl) throw new Error('Resolver returned no streamUrl')
+            if (cancelled) return
+            candidatesRef.current = [
+              {
+                streamUrl: data.streamUrl,
+                kind: isHlsUrl(data.streamUrl) ? 'hls' : 'mp4',
+                qualityLabel: 'Custom Proxy',
+                provider: 'Custom',
+              },
+            ]
+          } else {
+            const resolved = await resolveYouTubeStreams(ytVideoId)
+            if (cancelled) return
+            candidatesRef.current = resolved.candidates
+            if (resolved.relatedVideos.length > 0) {
+              setRelatedVideos(resolved.relatedVideos)
+            }
+          }
         } catch (err) {
           if (!cancelled) {
+            setIsResolvingMedia(false)
             setMediaError(
               err instanceof Error
-                ? `YouTube resolver failed: ${err.message}`
-                : 'Unable to resolve YouTube stream URL',
+                ? `Could not resolve YouTube stream (${err.message}). Try Open Web tab or another video.`
+                : 'Unable to resolve YouTube stream right now.',
             )
           }
           return
         }
+        if (cancelled) return
+        setIsResolvingMedia(false)
+        sourceAttached = true
+        applyCandidate(0)
+        return
       }
 
-      const shouldProxy =
-        presenterState.useCorsProxy || autoProxiedUrlRef.current === rawUrl
-      const finalUrl = shouldProxy
-        ? `/api/stream-proxy?url=${encodeURIComponent(effectiveUrl)}`
-        : effectiveUrl
-
-      if (isHlsUrl(effectiveUrl)) {
-        if (Hls.isSupported()) {
-          const hls = new Hls({
-            enableWorker: true,
-            lowLatencyMode: false,
-          })
-          hlsRef.current = hls
-          hls.loadSource(finalUrl)
-          hls.attachMedia(videoElement)
-          hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            if (cancelled) return
-            setHasVideoFrames(true)
-            if (presenterState.currentTime > 0.5) {
-              videoElement.currentTime = presenterState.currentTime
-            }
-            if (presenterState.isPlaying) {
-              void videoElement.play().catch(() => {
-                videoElement.muted = true
-                setNeedsAudioUnlock(true)
-                void videoElement.play().catch(() => undefined)
-              })
-            }
-          })
-          hls.on(Hls.Events.ERROR, (_event, data) => {
-            if (cancelled || !data.fatal) return
-            if (autoProxiedUrlRef.current !== rawUrl && !presenterState.useCorsProxy) {
-              autoProxiedUrlRef.current = rawUrl
-              loadedSourceKeyRef.current = ''
-              void attachMedia()
-              return
-            }
-            setMediaError(`HLS stream error (${data.details}). Try enabling CORS Proxy or Mode 1 Tab Share.`)
-          })
-        } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
-          videoElement.src = finalUrl
-          videoElement.load()
-        } else {
-          setMediaError('HLS playback is not supported in this browser.')
+      if (peerTubeRef) {
+        setIsResolvingMedia(true)
+        try {
+          const resolved = await resolvePeerTubeStreams(peerTubeRef)
+          if (cancelled) return
+          candidatesRef.current = resolved.candidates
+        } catch (err) {
+          if (!cancelled) {
+            setIsResolvingMedia(false)
+            setMediaError(
+              err instanceof Error
+                ? `Open Web stream error: ${err.message}`
+                : 'Unable to resolve Open Web video stream.',
+            )
+          }
+          return
         }
-      } else {
-        videoElement.src = finalUrl
-        videoElement.load()
+        if (cancelled) return
+        setIsResolvingMedia(false)
+        sourceAttached = true
+        applyCandidate(0)
+        return
       }
+
+      // Standard direct MP4 or HLS .m3u8 URL
+      setIsResolvingMedia(false)
+      candidatesRef.current = [
+        {
+          streamUrl: rawUrl,
+          kind: isHlsUrl(rawUrl) ? 'hls' : 'mp4',
+          qualityLabel: isHlsUrl(rawUrl) ? 'Adaptive HLS' : 'Direct MP4',
+          provider: 'Direct',
+        },
+      ]
+      sourceAttached = true
+      applyCandidate(0)
     }
 
     void attachMedia()
 
     return () => {
       cancelled = true
+      attachCandidateRef.current = null
+      if (!sourceAttached) {
+        loadedSourceKeyRef.current = ''
+      }
     }
   }, [
-    cinemaVolume,
+    clearCompanionAudio,
+    companionAudioElement,
     destroyHls,
     isLocalPresenter,
     localScreenStream,
     presenterState.activePresenterId,
-    presenterState.currentTime,
-    presenterState.isPlaying,
     presenterState.mediaUrl,
     presenterState.screenMode,
     presenterState.useCorsProxy,
@@ -297,7 +493,11 @@ export function useMediaScreen({
 
   // Synchronize Play/Pause & Drift Correction (> 0.5s) in Mode 2
   useEffect(() => {
-    if (presenterState.screenMode !== 'url-sync' || !presenterState.activePresenterId) {
+    if (
+      presenterState.screenMode !== 'url-sync' ||
+      !presenterState.activePresenterId ||
+      isResolvingMedia
+    ) {
       return
     }
 
@@ -313,6 +513,9 @@ export function useMediaScreen({
     ) {
       try {
         videoElement.currentTime = targetTime
+        if (hasCompanionAudioRef.current) {
+          companionAudioElement.currentTime = targetTime
+        }
       } catch {
         // Ignore seek before metadata loaded
       }
@@ -322,14 +525,25 @@ export function useMediaScreen({
       if (videoElement.paused) {
         void videoElement.play().catch(() => {
           videoElement.muted = true
+          companionAudioElement.muted = true
           setNeedsAudioUnlock(true)
           void videoElement.play().catch(() => undefined)
         })
       }
-    } else if (!videoElement.paused) {
-      videoElement.pause()
+      if (hasCompanionAudioRef.current && companionAudioElement.paused) {
+        void companionAudioElement.play().catch(() => undefined)
+      }
+    } else {
+      if (!videoElement.paused) {
+        videoElement.pause()
+      }
+      if (hasCompanionAudioRef.current && !companionAudioElement.paused) {
+        companionAudioElement.pause()
+      }
     }
   }, [
+    companionAudioElement,
+    isResolvingMedia,
     presenterState.activePresenterId,
     presenterState.currentTime,
     presenterState.isPlaying,
@@ -339,41 +553,119 @@ export function useMediaScreen({
     videoElement,
   ])
 
-  // Video element DOM events & presenter 2s drift heartbeat
+  // Video element DOM events, companion audio lip-sync & presenter 2s drift heartbeat
   useEffect(() => {
     const onLoadedData = () => {
       setHasVideoFrames(true)
       setLocalDuration(Number.isFinite(videoElement.duration) ? videoElement.duration : 0)
+      const { currentTime, isPlaying } = latestPlaybackRef.current
+      if (
+        presenterState.screenMode === 'url-sync' &&
+        currentTime > 0.5 &&
+        Math.abs(videoElement.currentTime - currentTime) > 0.6
+      ) {
+        try {
+          videoElement.currentTime = currentTime
+          if (hasCompanionAudioRef.current) {
+            companionAudioElement.currentTime = currentTime
+          }
+        } catch {
+          // Ignore
+        }
+      }
+      if (presenterState.screenMode === 'url-sync' && isPlaying && videoElement.paused) {
+        void videoElement.play().catch(() => {
+          videoElement.muted = true
+          companionAudioElement.muted = true
+          setNeedsAudioUnlock(true)
+          void videoElement.play().catch(() => undefined)
+        })
+      }
     }
+
+    const onPlay = () => {
+      if (hasCompanionAudioRef.current) {
+        if (Math.abs(companionAudioElement.currentTime - videoElement.currentTime) > 0.28) {
+          try {
+            companionAudioElement.currentTime = videoElement.currentTime
+          } catch {
+            // Ignore
+          }
+        }
+        void companionAudioElement.play().catch(() => undefined)
+      }
+    }
+
+    const onPause = () => {
+      if (hasCompanionAudioRef.current && !companionAudioElement.paused) {
+        companionAudioElement.pause()
+      }
+    }
+
+    const onSeeking = () => {
+      if (hasCompanionAudioRef.current) {
+        try {
+          companionAudioElement.currentTime = videoElement.currentTime
+        } catch {
+          // Ignore
+        }
+      }
+    }
+
     const onTimeUpdate = () => {
       setLocalCurrentTime(videoElement.currentTime)
       if (Number.isFinite(videoElement.duration) && videoElement.duration > 0) {
         setLocalDuration(videoElement.duration)
       }
-    }
-    const onError = () => {
-      const rawUrl = presenterState.mediaUrl.trim()
       if (
-        presenterState.screenMode === 'url-sync' &&
-        rawUrl &&
-        autoProxiedUrlRef.current !== rawUrl &&
+        hasCompanionAudioRef.current &&
+        !videoElement.paused &&
+        companionAudioElement.readyState >= 2 &&
+        Math.abs(companionAudioElement.currentTime - videoElement.currentTime) > 0.3
+      ) {
+        try {
+          companionAudioElement.currentTime = videoElement.currentTime
+        } catch {
+          // Ignore
+        }
+      }
+    }
+
+    const onError = () => {
+      if (presenterState.screenMode !== 'url-sync') return
+
+      // Try next resolved stream candidate first!
+      const nextIdx = candidateIndexRef.current + 1
+      if (nextIdx < candidatesRef.current.length && attachCandidateRef.current) {
+        attachCandidateRef.current(nextIdx)
+        return
+      }
+
+      const currentCandidate = candidatesRef.current[candidateIndexRef.current]
+      const targetStreamUrl = currentCandidate?.streamUrl || presenterState.mediaUrl.trim()
+
+      if (
+        hasLocalDevStreamProxy() &&
+        targetStreamUrl &&
+        autoProxiedUrlRef.current !== targetStreamUrl &&
         !presenterState.useCorsProxy
       ) {
-        autoProxiedUrlRef.current = rawUrl
-        loadedSourceKeyRef.current = ''
-        videoElement.src = `/api/stream-proxy?url=${encodeURIComponent(rawUrl)}`
+        autoProxiedUrlRef.current = targetStreamUrl
+        videoElement.src = `/api/stream-proxy?url=${encodeURIComponent(targetStreamUrl)}`
         videoElement.load()
         return
       }
-      if (presenterState.screenMode === 'url-sync') {
-        setMediaError(
-          'Unable to decode or fetch video URL with WebGL CORS headers. Try toggling Proxy or use "Share Browser Tab".',
-        )
-      }
+
+      setMediaError(
+        'Unable to decode or fetch video stream with WebGL CORS headers. Try another video or Open Web stream.',
+      )
     }
 
     videoElement.addEventListener('loadeddata', onLoadedData)
     videoElement.addEventListener('loadedmetadata', onLoadedData)
+    videoElement.addEventListener('play', onPlay)
+    videoElement.addEventListener('pause', onPause)
+    videoElement.addEventListener('seeking', onSeeking)
     videoElement.addEventListener('timeupdate', onTimeUpdate)
     videoElement.addEventListener('error', onError)
 
@@ -395,10 +687,14 @@ export function useMediaScreen({
       window.clearInterval(heartbeat)
       videoElement.removeEventListener('loadeddata', onLoadedData)
       videoElement.removeEventListener('loadedmetadata', onLoadedData)
+      videoElement.removeEventListener('play', onPlay)
+      videoElement.removeEventListener('pause', onPause)
+      videoElement.removeEventListener('seeking', onSeeking)
       videoElement.removeEventListener('timeupdate', onTimeUpdate)
       videoElement.removeEventListener('error', onError)
     }
   }, [
+    companionAudioElement,
     isLocalPresenter,
     presenterState.mediaUrl,
     presenterState.screenMode,
@@ -410,41 +706,62 @@ export function useMediaScreen({
     setNeedsAudioUnlock(false)
     const muteSelfTabLoopback =
       presenterState.screenMode === 'tab-stream' && isLocalPresenter
-    videoElement.muted = muteSelfTabLoopback || cinemaVolume <= 0.001
-    videoElement.volume = muteSelfTabLoopback
+    const muted = muteSelfTabLoopback || cinemaVolume <= 0.001
+    const vol = muteSelfTabLoopback
       ? 0
       : Math.max(0, Math.min(1, cinemaVolume))
+    videoElement.muted = muted
+    videoElement.volume = vol
+    companionAudioElement.muted = muted
+    companionAudioElement.volume = vol
     if (presenterState.isPlaying || presenterState.screenMode === 'tab-stream') {
       void videoElement.play().catch(() => undefined)
+      if (hasCompanionAudioRef.current) {
+        void companionAudioElement.play().catch(() => undefined)
+      }
     }
-  }, [cinemaVolume, isLocalPresenter, presenterState.isPlaying, presenterState.screenMode, videoElement])
+  }, [
+    cinemaVolume,
+    companionAudioElement,
+    isLocalPresenter,
+    presenterState.isPlaying,
+    presenterState.screenMode,
+    videoElement,
+  ])
 
   const seekLocalVideo = useCallback(
     (timeSeconds: number) => {
       const clamped = Math.max(0, timeSeconds)
       try {
         videoElement.currentTime = clamped
+        if (hasCompanionAudioRef.current) {
+          companionAudioElement.currentTime = clamped
+        }
         setLocalCurrentTime(clamped)
       } catch {
         // Ignore
       }
     },
-    [videoElement],
+    [companionAudioElement, videoElement],
   )
 
   useEffect(() => {
     return () => {
       destroyHls()
+      clearCompanionAudio()
       videoElement.pause()
       videoElement.srcObject = null
       videoElement.removeAttribute('src')
     }
-  }, [destroyHls, videoElement])
+  }, [clearCompanionAudio, destroyHls, videoElement])
 
   return {
     videoElement,
     videoTexture,
     hasVideoFrames,
+    isResolvingMedia,
+    activeStreamQuality,
+    relatedVideos,
     localCurrentTime,
     localDuration,
     mediaError,

@@ -10,12 +10,15 @@ export interface CinemaRoomProps {
   presenterState: PresenterState
   videoTexture: THREE.VideoTexture
   hasVideoFrames: boolean
+  isResolvingMedia?: boolean
+  activeStreamQuality?: string | null
   mediaError: string | null
   needsAudioUnlock: boolean
   localSeatIndex: number
   participants: ParticipantProfile[]
   canTakeControl: boolean
   onTakeControl: () => void
+  onOpenYouTubeBrowser?: () => void
   onUnlockAudio: () => void
   onSelectSeat: (seatIndex: number) => void
 }
@@ -174,17 +177,21 @@ export function CinemaRoom({
   presenterState,
   videoTexture,
   hasVideoFrames,
+  isResolvingMedia = false,
+  activeStreamQuality = null,
   mediaError,
   needsAudioUnlock,
   localSeatIndex,
   participants,
   canTakeControl,
   onTakeControl,
+  onOpenYouTubeBrowser,
   onUnlockAudio,
   onSelectSeat,
 }: CinemaRoomProps) {
   const screenGlowRef = useRef<THREE.PointLight>(null)
   const [screenHovered, setScreenHovered] = useState(false)
+  const [ytBtnHovered, setYtBtnHovered] = useState(false)
 
   const curvedScreenGeo = useMemo(
     () =>
@@ -386,7 +393,11 @@ export function CinemaRoom({
               return
             }
             if (!presenterState.activePresenterId && canTakeControl) {
-              onTakeControl()
+              if (onOpenYouTubeBrowser) {
+                onOpenYouTubeBrowser()
+              } else {
+                onTakeControl()
+              }
             }
           }}
         >
@@ -405,23 +416,65 @@ export function CinemaRoom({
 
         {/* Screen Idle / Waiting / Error 3D Overlay (isolated Suspense so screen never blanks) */}
         {!isShowingVideo && (
-          <group position={[0, 0, 0.28]}>
-            {!presenterState.activePresenterId && canTakeControl && (
+          <group position={[0, 0, 0.42]}>
+            {canTakeControl && !isResolvingMedia && (
               <group position={[0, -1.08, 0.02]}>
-                <RoundedBox args={[2.55, 0.48, 0.04]} radius={0.09} smoothness={3}>
-                  <meshBasicMaterial color={screenHovered ? '#F2BE5C' : '#E5A93C'} />
-                </RoundedBox>
-                <Suspense fallback={null}>
-                  <Text
-                    position={[0, 0, 0.03]}
-                    fontSize={0.17}
-                    color="#0B0D10"
-                    anchorX="center"
-                    anchorY="middle"
+                {onOpenYouTubeBrowser && (
+                  <group
+                    position={[-1.42, 0, 0]}
+                    pointerEventsType={{ deny: 'grab' }}
+                    onPointerOver={(e) => {
+                      e.stopPropagation()
+                      setYtBtnHovered(true)
+                    }}
+                    onPointerOut={() => setYtBtnHovered(false)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onOpenYouTubeBrowser()
+                    }}
                   >
-                    Take Control of Screen
-                  </Text>
-                </Suspense>
+                    <RoundedBox args={[2.55, 0.48, 0.04]} radius={0.09} smoothness={3}>
+                      <meshBasicMaterial color={ytBtnHovered ? '#EA6B58' : '#E05A47'} />
+                    </RoundedBox>
+                    <Suspense fallback={null}>
+                      <Text
+                        position={[0, 0, 0.03]}
+                        fontSize={0.165}
+                        color="#F4F1EA"
+                        anchorX="center"
+                        anchorY="middle"
+                      >
+                        ▶ Browse YouTube in VR
+                      </Text>
+                    </Suspense>
+                  </group>
+                )}
+
+                {!presenterState.activePresenterId && (
+                  <group
+                    position={[onOpenYouTubeBrowser ? 1.42 : 0, 0, 0]}
+                    pointerEventsType={{ deny: 'grab' }}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onTakeControl()
+                    }}
+                  >
+                    <RoundedBox args={[2.55, 0.48, 0.04]} radius={0.09} smoothness={3}>
+                      <meshBasicMaterial color={screenHovered ? '#F2BE5C' : '#E5A93C'} />
+                    </RoundedBox>
+                    <Suspense fallback={null}>
+                      <Text
+                        position={[0, 0, 0.03]}
+                        fontSize={0.165}
+                        color="#0B0D10"
+                        anchorX="center"
+                        anchorY="middle"
+                      >
+                        Take Control of Screen
+                      </Text>
+                    </Suspense>
+                  </group>
+                )}
               </group>
             )}
 
@@ -446,11 +499,13 @@ export function CinemaRoom({
                 anchorX="center"
                 anchorY="middle"
               >
-                {presenterState.activePresenterId
-                  ? presenterState.screenMode === 'tab-stream'
-                    ? `${presenterState.presenterName ?? 'Presenter'} is starting browser share...`
-                    : `Loading "${presenterState.mediaTitle || 'Cinema Stream'}"...`
-                  : 'Cinema Screen Ready'}
+                {isResolvingMedia
+                  ? `Resolving "${presenterState.mediaTitle || 'YouTube Video'}"…`
+                  : presenterState.activePresenterId
+                    ? presenterState.screenMode === 'tab-stream'
+                      ? `${presenterState.presenterName ?? 'Presenter'} is starting browser share...`
+                      : `Loading "${presenterState.mediaTitle || 'Cinema Stream'}"...`
+                    : 'Cinema Screen Ready'}
               </Text>
 
               <Text
@@ -464,9 +519,11 @@ export function CinemaRoom({
               >
                 {mediaError
                   ? mediaError
-                  : presenterState.activePresenterId
-                    ? 'Anyone can click "Take Control" on the 3D dock to switch sources.'
-                    : 'Click here or press "Take Control" on the floating dock to share a browser tab or play a synchronized stream.'}
+                  : isResolvingMedia
+                    ? 'Connecting to fastest CORS-enabled HD cinema relay for synchronized VR playback…'
+                    : presenterState.activePresenterId
+                      ? 'Tap "▶ YouTube" on your 3D seat dock to queue another video anytime.'
+                      : 'Tap "▶ Browse YouTube in VR" — no PC required — or share a live desktop tab.'}
               </Text>
             </Suspense>
           </group>
@@ -501,22 +558,26 @@ export function CinemaRoom({
 
         {/* Top subtle presenter status strip above bezel */}
         <group position={[0, SCREEN_CONFIG.height / 2 + 0.34, 0.05]}>
-          <RoundedBox args={[4.4, 0.32, 0.03]} radius={0.07} smoothness={2}>
+          <RoundedBox args={[5.2, 0.32, 0.03]} radius={0.07} smoothness={2}>
             <meshBasicMaterial color="#0D1015" transparent opacity={0.88} />
           </RoundedBox>
           <Suspense fallback={null}>
             <Text
               position={[0, 0, 0.022]}
-              fontSize={0.125}
+              fontSize={0.12}
               color={presenterState.activePresenterId ? '#E5A93C' : '#9CA3AF'}
               anchorX="center"
               anchorY="middle"
             >
               {presenterState.activePresenterId
                 ? `LIVE PRESENTER: ${(presenterState.presenterName ?? 'Guest').toUpperCase()} · ${
-                    presenterState.screenMode === 'tab-stream' ? 'BROWSER TAB' : 'SYNC STREAM'
+                    presenterState.screenMode === 'tab-stream'
+                      ? 'BROWSER TAB'
+                      : activeStreamQuality
+                        ? activeStreamQuality.toUpperCase()
+                        : 'SYNC STREAM'
                   }${presenterState.lockedByHostId ? ' · LOCKED' : ''}`
-                : 'OPEN SCREEN · ANYONE CAN TAKE CONTROL'}
+                : 'OPEN SCREEN · BROWSE YOUTUBE IN VR OR TAKE CONTROL'}
             </Text>
           </Suspense>
         </group>

@@ -112,8 +112,12 @@ export interface SpatialControlDockProps {
   localCurrentTime: number
   localDuration: number
   chatPanelOpen: boolean
+  youtubeBrowserOpen: boolean
+  youtubeSearchQuery: string
   keyboardMode: VRKeyboardMode | null
   onSetKeyboardMode: (mode: VRKeyboardMode | null) => void
+  onToggleYouTubeBrowser: () => void
+  onSubmitYouTubeSearch: (query: string) => void
   onTakeControl: () => void
   onReleaseControl: () => void
   onTogglePlayPause: () => void
@@ -140,8 +144,12 @@ export function SpatialControlDock({
   localCurrentTime,
   localDuration,
   chatPanelOpen,
+  youtubeBrowserOpen,
+  youtubeSearchQuery,
   keyboardMode,
   onSetKeyboardMode,
+  onToggleYouTubeBrowser,
+  onSubmitYouTubeSearch,
   onTakeControl,
   onReleaseControl,
   onTogglePlayPause,
@@ -184,13 +192,23 @@ export function SpatialControlDock({
         <group position={[0, 0.68, 0.08]} rotation={[0.24, 0, 0]}>
           <VRKeyboard3D
             mode={keyboardMode}
-            initialValue={keyboardMode === 'url' ? presenterState.mediaUrl : ''}
+            initialValue={
+              keyboardMode === 'url'
+                ? presenterState.mediaUrl
+                : keyboardMode === 'youtube'
+                  ? youtubeSearchQuery
+                  : ''
+            }
             onSubmitUrl={(url, title) => {
               onSelectStreamUrl(url, title)
               onSetKeyboardMode(null)
             }}
             onSubmitChat={(msg) => {
               onSendChatMessage(msg)
+              onSetKeyboardMode(null)
+            }}
+            onSubmitYouTubeSearch={(query) => {
+              onSubmitYouTubeSearch(query)
               onSetKeyboardMode(null)
             }}
             onClose={() => onSetKeyboardMode(null)}
@@ -209,28 +227,37 @@ export function SpatialControlDock({
         <meshBasicMaterial color="#E5A93C" />
       </mesh>
 
-      {/* Top Row: Presenter Control Handoff + Source Switchers + Minimize */}
+      {/* Top Row: Presenter Control Handoff + YouTube VR Deck + Source Switchers + Minimize */}
       <DockButton
         label={isLocalPresenter ? 'Release Screen' : 'Take Control'}
         sublabel={
           isLocalPresenter
             ? 'You are presenting'
             : presenterState.presenterName
-              ? `Active: ${presenterState.presenterName.slice(0, 12)}`
-              : 'Claim presenter slot'
+              ? `Active: ${presenterState.presenterName.slice(0, 10)}`
+              : 'Claim presenter'
         }
-        position={[-0.44, 0.165, 0.016]}
-        width={0.32}
+        position={[-0.46, 0.165, 0.016]}
+        width={0.27}
         variant={isLocalPresenter ? 'active' : 'primary'}
         disabled={!isLocalPresenter && !canTakeControl}
         onClick={isLocalPresenter ? onReleaseControl : onTakeControl}
       />
 
       <DockButton
-        label="URL / Streams"
-        sublabel="MP4 · HLS · VR Keys"
-        position={[-0.1, 0.165, 0.016]}
-        width={0.29}
+        label="▶ YouTube"
+        sublabel="Browse in VR"
+        position={[-0.175, 0.165, 0.016]}
+        width={0.26}
+        variant={youtubeBrowserOpen ? 'primary' : 'danger'}
+        onClick={onToggleYouTubeBrowser}
+      />
+
+      <DockButton
+        label="URL / HLS"
+        sublabel="Direct Link"
+        position={[0.085, 0.165, 0.016]}
+        width={0.22}
         variant={keyboardMode === 'url' ? 'primary' : 'default'}
         onClick={() => {
           if (!isLocalPresenter && canTakeControl) {
@@ -242,17 +269,17 @@ export function SpatialControlDock({
 
       <DockButton
         label="Share Tab"
-        sublabel="WebRTC Live"
-        position={[0.21, 0.165, 0.016]}
-        width={0.27}
+        sublabel="PC WebRTC"
+        position={[0.325, 0.165, 0.016]}
+        width={0.22}
         variant={presenterState.screenMode === 'tab-stream' && isLocalPresenter ? 'primary' : 'default'}
         onClick={onStartTabShare}
       />
 
       <DockButton
         label="Hide ▾"
-        position={[0.49, 0.165, 0.016]}
-        width={0.22}
+        position={[0.525, 0.165, 0.016]}
+        width={0.14}
         onClick={() => setMinimized(true)}
       />
 

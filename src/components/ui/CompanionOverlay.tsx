@@ -17,6 +17,7 @@ import {
   Radio,
   RotateCcw,
   RefreshCw,
+  Search,
   Send,
   ShieldAlert,
   Sparkles,
@@ -36,6 +37,17 @@ import {
   generateRoomCode,
 } from '../../constants/cinema'
 import type { JoinRoomOptions } from '../../hooks/useRoomSession'
+import {
+  fetchYouTubeCategory,
+  formatCompactViews,
+  formatVideoDurationBadge,
+  getCustomYouTubeInstance,
+  resetInstanceCooldowns,
+  searchYouTubeVideos,
+  setCustomYouTubeInstance,
+  type YouTubeCategory,
+  type YouTubeVideoItem,
+} from '../../services/youtube'
 import {
   getVRSupportKind,
   subscribeVRSupport,
@@ -178,6 +190,19 @@ export function CompanionOverlay({
 
   // In-room companion drawers
   const [urlDrawerOpen, setUrlDrawerOpen] = useState(false)
+  const [drawerTab, setDrawerTab] = useState<'youtube' | 'direct'>('youtube')
+  const [ytCategory, setYtCategory] = useState<YouTubeCategory>('trending')
+  const [ytQuery, setYtQuery] = useState('')
+  const [ytSubmittedQuery, setYtSubmittedQuery] = useState('')
+  const [ytItems, setYtItems] = useState<YouTubeVideoItem[]>([])
+  const [ytProvider, setYtProvider] = useState('')
+  const [ytNotice, setYtNotice] = useState<string | null>(null)
+  const [ytLoading, setYtLoading] = useState(false)
+  const [ytRefreshNonce, setYtRefreshNonce] = useState(0)
+  const [customRelayInput, setCustomRelayInput] = useState(() =>
+    getCustomYouTubeInstance(),
+  )
+  const [showRelayInput, setShowRelayInput] = useState(false)
   const [chatDrawerOpen, setChatDrawerOpen] = useState(false)
   const [rosterOpen, setRosterOpen] = useState(false)
   const [audioPopoverOpen, setAudioPopoverOpen] = useState(false)
@@ -195,6 +220,38 @@ export function CompanionOverlay({
     setUrlTitleInput(presenterState.mediaTitle)
     setUseCorsProxy(presenterState.useCorsProxy)
   }, [presenterState.mediaTitle, presenterState.mediaUrl, presenterState.useCorsProxy])
+
+  useEffect(() => {
+    if (!urlDrawerOpen || drawerTab !== 'youtube') return
+    let cancelled = false
+    setYtLoading(true)
+    setYtNotice(null)
+
+    const load = async () => {
+      try {
+        const res = ytSubmittedQuery.trim()
+          ? await searchYouTubeVideos(ytSubmittedQuery.trim())
+          : await fetchYouTubeCategory(ytCategory)
+        if (cancelled) return
+        setYtItems(res.items)
+        setYtProvider(res.provider)
+        setYtNotice(res.notice ?? null)
+      } catch (err) {
+        if (!cancelled) {
+          setYtNotice(
+            err instanceof Error ? err.message : 'Unable to fetch YouTube feed.',
+          )
+        }
+      } finally {
+        if (!cancelled) setYtLoading(false)
+      }
+    }
+
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [drawerTab, urlDrawerOpen, ytCategory, ytRefreshNonce, ytSubmittedQuery])
 
   useEffect(() => {
     if (chatDrawerOpen) {
@@ -290,7 +347,7 @@ export function CompanionOverlay({
                   id="vr-lounge-version-badge"
                   className="rounded-md border border-[#e5a93c]/35 bg-[#e5a93c]/12 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[#e5a93c]"
                 >
-                  v1.5
+                  v1.6
                 </span>
               </div>
               <h1
@@ -536,10 +593,13 @@ export function CompanionOverlay({
                 </div>
 
                 <div className="rounded-lg border border-[#f4f1ea]/8 bg-[#0d1118] p-3 text-xs leading-relaxed text-[#8a867e]">
-                  <strong className="font-medium text-[#c7c2b8]">Watch Netflix or YouTube?</strong>{' '}
-                  Join in <span className="text-[#f4f1ea]">Companion Presenter Mode</span> from a
-                  desktop browser to stream any tab with stereo audio directly onto the curved VR
-                  cinema screen.
+                  <strong className="font-medium text-[#c7c2b8]">
+                    PC-Free YouTube in VR:
+                  </strong>{' '}
+                  Tap <span className="text-[#f4f1ea]">▶ YouTube</span> right inside your
+                  Quest 3 3D dock to search and watch together without a PC — or join in{' '}
+                  <span className="text-[#f4f1ea]">Companion Mode</span> to stream Netflix/DRM
+                  tabs.
                 </div>
               </div>
 
@@ -813,101 +873,297 @@ export function CompanionOverlay({
         )}
       </div>
 
-      {/* Mode 2 URL & Stream Preset Drawer */}
+      {/* Mode 2 YouTube Browser & Direct Stream Drawer */}
       {urlDrawerOpen && (
-        <section className="pointer-events-auto lounge-panel mx-auto mb-3 w-full max-w-2xl rounded-2xl p-4 sm:p-5">
-          <div className="flex items-center justify-between border-b border-[#f4f1ea]/10 pb-3">
+        <section className="pointer-events-auto lounge-panel mx-auto mb-3 w-full max-w-3xl rounded-2xl p-4 sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#f4f1ea]/10 pb-3">
             <div className="flex items-center gap-2">
-              <Globe className="h-4 w-4 text-[#e5a93c]" />
-              <h2 className="text-sm font-semibold text-[#f4f1ea]">
-                Synchronized Direct / HLS Stream Player (Mode 2)
-              </h2>
-            </div>
-            <button
-              type="button"
-              onClick={() => setUrlDrawerOpen(false)}
-              className="text-[#8a867e] hover:text-[#f4f1ea]"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-
-          <div className="mt-3.5 space-y-3">
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <input
-                id="input-stream-url"
-                type="url"
-                value={urlInput}
-                onChange={(e) => setUrlInput(e.target.value)}
-                placeholder="Paste direct .mp4, .m3u8 HLS stream, or proxied video URL..."
-                className="lounge-input flex-1 rounded-xl px-3.5 py-2 text-xs"
-              />
               <button
-                id="btn-load-stream-url"
+                id="btn-drawer-tab-youtube"
                 type="button"
-                onClick={() => {
-                  if (!urlInput.trim()) return
-                  onLoadStreamUrl(
-                    urlInput.trim(),
-                    urlTitleInput.trim() || 'Shared Cinema Stream',
-                    useCorsProxy,
-                  )
-                  setUrlDrawerOpen(false)
-                }}
-                className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#e5a93c] px-4 py-2 text-xs font-semibold text-[#080a0d] transition hover:bg-[#f2be5c]"
+                onClick={() => setDrawerTab('youtube')}
+                className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
+                  drawerTab === 'youtube'
+                    ? 'bg-[#e05a47] text-[#f4f1ea]'
+                    : 'bg-[#141922] text-[#c7c2b8] hover:text-[#f4f1ea]'
+                }`}
               >
-                <Link2 className="h-3.5 w-3.5" />
-                <span>Play on Screen</span>
+                <Play className="h-3.5 w-3.5" />
+                <span>YouTube &amp; Open Web</span>
+              </button>
+              <button
+                id="btn-drawer-tab-direct"
+                type="button"
+                onClick={() => setDrawerTab('direct')}
+                className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
+                  drawerTab === 'direct'
+                    ? 'bg-[#e5a93c] text-[#080a0d]'
+                    : 'bg-[#141922] text-[#c7c2b8] hover:text-[#f4f1ea]'
+                }`}
+              >
+                <Globe className="h-3.5 w-3.5" />
+                <span>Direct URL / Presets</span>
               </button>
             </div>
 
-            <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-[#c7c2b8]">
-              <input
-                type="checkbox"
-                checked={useCorsProxy}
-                onChange={(e) => setUseCorsProxy(e.target.checked)}
-                className="accent-[#e5a93c]"
-              />
-              <span>
-                Route through local CORS Stream Proxy (<code>/api/stream-proxy</code>) for
-                cross-origin MP4/HLS servers
-              </span>
-            </label>
-
-            <div>
-              <span className="block text-[11px] font-medium uppercase tracking-wider text-[#8a867e]">
-                Instant Cinema Reference Streams
-              </span>
-              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {SAMPLE_MEDIA_PRESETS.map((preset) => (
-                  <button
-                    key={preset.id}
-                    id={`btn-preset-${preset.id}`}
-                    type="button"
-                    onClick={() => {
-                      setUrlInput(preset.url)
-                      setUrlTitleInput(preset.title)
-                      onLoadStreamUrl(preset.url, preset.title, false)
-                      setUrlDrawerOpen(false)
-                    }}
-                    className="flex items-center justify-between rounded-xl border border-[#f4f1ea]/10 bg-[#080a0d]/70 px-3 py-2 text-left transition hover:border-[#e5a93c]/50"
-                  >
-                    <div className="min-w-0 pr-2">
-                      <div className="truncate text-xs font-medium text-[#f4f1ea]">
-                        {preset.title}
-                      </div>
-                      <div className="truncate text-[11px] text-[#8a867e]">
-                        {preset.subtitle}
-                      </div>
-                    </div>
-                    <span className="shrink-0 font-mono text-[11px] text-[#e5a93c]">
-                      {preset.durationHint}
-                    </span>
-                  </button>
-                ))}
-              </div>
+            <div className="flex items-center gap-2">
+              {drawerTab === 'youtube' && (
+                <button
+                  type="button"
+                  onClick={() => setShowRelayInput((v) => !v)}
+                  className="rounded-lg border border-[#f4f1ea]/12 bg-[#0d1118] px-2.5 py-1 text-[11px] text-[#c7c2b8] hover:border-[#e5a93c]/50 hover:text-[#f4f1ea]"
+                >
+                  {ytProvider ? `Relay: ${ytProvider}` : 'Relay Settings'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setUrlDrawerOpen(false)}
+                className="text-[#8a867e] hover:text-[#f4f1ea]"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
           </div>
+
+          {drawerTab === 'youtube' ? (
+            <div className="mt-3.5 space-y-3">
+              {showRelayInput && (
+                <div className="flex flex-col gap-2 rounded-xl border border-[#f4f1ea]/10 bg-[#080a0d]/75 p-2.5 sm:flex-row sm:items-center">
+                  <input
+                    type="url"
+                    value={customRelayInput}
+                    onChange={(e) => setCustomRelayInput(e.target.value)}
+                    placeholder="Optional custom Piped or Invidious API URL (e.g. https://pipedapi.kavin.rocks)"
+                    className="lounge-input flex-1 rounded-lg px-3 py-1.5 text-xs"
+                  />
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCustomYouTubeInstance(customRelayInput)
+                        setYtRefreshNonce((n) => n + 1)
+                        setShowRelayInput(false)
+                      }}
+                      className="rounded-lg bg-[#e5a93c] px-3 py-1.5 text-xs font-semibold text-[#080a0d]"
+                    >
+                      Save Relay
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        resetInstanceCooldowns()
+                        setYtRefreshNonce((n) => n + 1)
+                      }}
+                      className="rounded-lg border border-[#f4f1ea]/12 bg-[#141922] px-2.5 py-1.5 text-xs text-[#c7c2b8] hover:text-[#f4f1ea]"
+                    >
+                      Switch Auto
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  setYtSubmittedQuery(ytQuery.trim())
+                }}
+                className="flex gap-2"
+              >
+                <input
+                  id="input-youtube-search"
+                  type="text"
+                  value={ytQuery}
+                  onChange={(e) => setYtQuery(e.target.value)}
+                  placeholder="Search YouTube videos, channels, or paste any youtube.com / youtu.be link..."
+                  className="lounge-input flex-1 rounded-xl px-3.5 py-2 text-xs"
+                />
+                {ytSubmittedQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setYtQuery('')
+                      setYtSubmittedQuery('')
+                    }}
+                    className="rounded-xl border border-[#f4f1ea]/12 bg-[#141922] px-3 py-2 text-xs text-[#c7c2b8] hover:text-[#f4f1ea]"
+                  >
+                    Clear
+                  </button>
+                )}
+                <button
+                  id="btn-submit-youtube-search"
+                  type="submit"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#e5a93c] px-4 py-2 text-xs font-semibold text-[#080a0d] transition hover:bg-[#f2be5c]"
+                >
+                  <Search className="h-3.5 w-3.5" />
+                  <span>Search</span>
+                </button>
+              </form>
+
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  [
+                    ['trending', '🔥 Trending'],
+                    ['music', '🎵 Music'],
+                    ['gaming', '🎮 Gaming'],
+                    ['movies', '🎬 Trailers'],
+                    ['lofi', '☕ Lo-Fi'],
+                    ['openweb', '🌐 Open Web'],
+                    ['cinema', '🎞 Cinema HD'],
+                  ] as const
+                ).map(([catId, label]) => {
+                  const active = !ytSubmittedQuery && ytCategory === catId
+                  return (
+                    <button
+                      key={catId}
+                      type="button"
+                      onClick={() => {
+                        setYtQuery('')
+                        setYtSubmittedQuery('')
+                        setYtCategory(catId)
+                      }}
+                      className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                        active
+                          ? 'bg-[#e5a93c] text-[#080a0d]'
+                          : 'bg-[#141922] text-[#c7c2b8] hover:bg-[#1e2634] hover:text-[#f4f1ea]'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  )
+                })}
+              </div>
+
+              {ytNotice && (
+                <p className="rounded-lg bg-[#e5a93c]/10 px-3 py-1.5 text-[11px] text-[#e5a93c]">
+                  {ytNotice}
+                </p>
+              )}
+
+              <div className="lounge-scrollbar max-h-72 overflow-y-auto pr-1">
+                {ytLoading ? (
+                  <div className="py-12 text-center text-xs text-[#c7c2b8]">
+                    Connecting to fastest CORS cinema relay…
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                    {ytItems.slice(0, 12).map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          onLoadStreamUrl(item.playUrl, item.title, false)
+                          setUrlDrawerOpen(false)
+                        }}
+                        className="group flex items-center gap-3 rounded-xl border border-[#f4f1ea]/10 bg-[#080a0d]/75 p-2 text-left transition hover:border-[#e5a93c]/60 hover:bg-[#121824]"
+                      >
+                        <div className="relative h-16 w-28 shrink-0 overflow-hidden rounded-lg bg-[#161e2e]">
+                          {item.thumbnailUrl && (
+                            <img
+                              src={item.thumbnailUrl}
+                              alt=""
+                              loading="lazy"
+                              className="h-full w-full object-cover"
+                            />
+                          )}
+                          <span className="absolute bottom-1 right-1 rounded bg-[#080a0d]/90 px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
+                            {formatVideoDurationBadge(item.durationSec)}
+                          </span>
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="line-clamp-2 text-xs font-medium leading-snug text-[#f4f1ea] group-hover:text-[#e5a93c]">
+                            {item.title}
+                          </div>
+                          <div className="mt-1 truncate text-[11px] text-[#8a867e]">
+                            {[item.author, formatCompactViews(item.views)]
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-3.5 space-y-3">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <input
+                  id="input-stream-url"
+                  type="url"
+                  value={urlInput}
+                  onChange={(e) => setUrlInput(e.target.value)}
+                  placeholder="Paste YouTube watch URL, direct .mp4, or .m3u8 HLS stream..."
+                  className="lounge-input flex-1 rounded-xl px-3.5 py-2 text-xs"
+                />
+                <button
+                  id="btn-load-stream-url"
+                  type="button"
+                  onClick={() => {
+                    if (!urlInput.trim()) return
+                    onLoadStreamUrl(
+                      urlInput.trim(),
+                      urlTitleInput.trim() || 'Shared Cinema Stream',
+                      useCorsProxy,
+                    )
+                    setUrlDrawerOpen(false)
+                  }}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#e5a93c] px-4 py-2 text-xs font-semibold text-[#080a0d] transition hover:bg-[#f2be5c]"
+                >
+                  <Link2 className="h-3.5 w-3.5" />
+                  <span>Play on Screen</span>
+                </button>
+              </div>
+
+              <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-[#c7c2b8]">
+                <input
+                  type="checkbox"
+                  checked={useCorsProxy}
+                  onChange={(e) => setUseCorsProxy(e.target.checked)}
+                  className="accent-[#e5a93c]"
+                />
+                <span>
+                  Route through local CORS Stream Proxy (<code>/api/stream-proxy</code>) for
+                  cross-origin MP4/HLS servers
+                </span>
+              </label>
+
+              <div>
+                <span className="block text-[11px] font-medium uppercase tracking-wider text-[#8a867e]">
+                  Instant Cinema Reference Streams
+                </span>
+                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {SAMPLE_MEDIA_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      id={`btn-preset-${preset.id}`}
+                      type="button"
+                      onClick={() => {
+                        setUrlInput(preset.url)
+                        setUrlTitleInput(preset.title)
+                        onLoadStreamUrl(preset.url, preset.title, false)
+                        setUrlDrawerOpen(false)
+                      }}
+                      className="flex items-center justify-between rounded-xl border border-[#f4f1ea]/10 bg-[#080a0d]/70 px-3 py-2 text-left transition hover:border-[#e5a93c]/50"
+                    >
+                      <div className="min-w-0 pr-2">
+                        <div className="truncate text-xs font-medium text-[#f4f1ea]">
+                          {preset.title}
+                        </div>
+                        <div className="truncate text-[11px] text-[#8a867e]">
+                          {preset.subtitle}
+                        </div>
+                      </div>
+                      <span className="shrink-0 font-mono text-[11px] text-[#e5a93c]">
+                        {preset.durationHint}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </section>
       )}
 
@@ -1095,7 +1351,7 @@ export function CompanionOverlay({
             }`}
           >
             <Tv className="h-3.5 w-3.5 text-[#e5a93c]" />
-            <span>Stream URL</span>
+            <span>YouTube &amp; Streams</span>
           </button>
         </div>
 
