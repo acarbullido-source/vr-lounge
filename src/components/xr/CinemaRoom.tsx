@@ -405,7 +405,7 @@ export function CinemaRoom({
 
         {/* Screen Idle / Waiting / Error 3D Overlay (isolated Suspense so screen never blanks) */}
         {!isShowingVideo && (
-          <group position={[0, 0, 0.12]}>
+          <group position={[0, 0, 0.28]}>
             {!presenterState.activePresenterId && canTakeControl && (
               <group position={[0, -1.08, 0.02]}>
                 <RoundedBox args={[2.55, 0.48, 0.04]} radius={0.09} smoothness={3}>

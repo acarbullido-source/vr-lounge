@@ -32,6 +32,30 @@ import { useWebRTC } from './hooks/useWebRTC'
 import { exitVRSession, xrStore } from './store/xrStore'
 import type { WebRTCSignalMessage } from './types/lounge'
 
+class CanvasRootBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false }
+
+  static getDerivedStateFromError(): { hasError: boolean } {
+    return { hasError: true }
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('CanvasRootBoundary caught unexpected 3D tree error:', error)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <ambientLight intensity={1.2} />
+      )
+    }
+    return this.props.children
+  }
+}
+
 class SceneSectionBoundary extends Component<
   { children: ReactNode },
   { hasError: boolean }
@@ -80,9 +104,12 @@ function SeatCameraAndOriginRig({
 
   const seat = LOUNGE_SEATS[seatIndex] ?? LOUNGE_SEATS[0]
 
+  const onInVRChangeRef = useRef(onInVRChange)
+  onInVRChangeRef.current = onInVRChange
+
   useEffect(() => {
-    onInVRChange(inVR)
-  }, [inVR, onInVRChange])
+    onInVRChangeRef.current(inVR)
+  }, [inVR])
 
   // Reset VR local offset when hopping to a new lounge seat
   useEffect(() => {
@@ -172,14 +199,25 @@ export function App() {
 
   const room = useRoomSession(signalHandlerRef)
 
+  const {
+    joined: roomJoined,
+    isLocalPresenter: roomIsLocalPresenter,
+    presenterState: roomPresenterState,
+    localProfile: roomLocalProfile,
+    takeControl: roomTakeControl,
+    updatePresenterMedia: roomUpdatePresenterMedia,
+    updateLocalProfile: roomUpdateLocalProfile,
+    joinRoom: roomJoinRoom,
+  } = room
+
   const handleScreenShareEndedByBrowser = useCallback(() => {
-    if (room.isLocalPresenter && room.presenterState.screenMode === 'tab-stream') {
-      room.updatePresenterMedia({
+    if (roomIsLocalPresenter && roomPresenterState.screenMode === 'tab-stream') {
+      roomUpdatePresenterMedia({
         screenMode: 'idle',
         isPlaying: false,
       })
     }
-  }, [room])
+  }, [roomIsLocalPresenter, roomPresenterState.screenMode, roomUpdatePresenterMedia])
 
   const webrtc = useWebRTC({
     joined: room.joined,
@@ -193,13 +231,19 @@ export function App() {
     onScreenShareEndedByBrowser: handleScreenShareEndedByBrowser,
   })
 
+  const {
+    localScreenStream: webrtcLocalScreenStream,
+    startTabShare: webrtcStartTabShare,
+    stopTabShare: webrtcStopTabShare,
+  } = webrtc
+
   useEffect(() => {
     signalHandlerRef.current = webrtc.handleWebRTCSignal
   }, [webrtc.handleWebRTCSignal])
 
   const handlePresenterHeartbeatProgress = useCallback(
     (currentTime: number, duration: number) => {
-      room.updatePresenterMedia(
+      roomUpdatePresenterMedia(
         {
           currentTime,
           duration,
@@ -207,7 +251,7 @@ export function App() {
         false,
       )
     },
-    [room],
+    [roomUpdatePresenterMedia],
   )
 
   const media = useMediaScreen({
@@ -220,24 +264,31 @@ export function App() {
     onPresenterProgress: handlePresenterHeartbeatProgress,
   })
 
+  const {
+    localCurrentTime: mediaLocalCurrentTime,
+    localDuration: mediaLocalDuration,
+    seekLocalVideo: mediaSeekLocalVideo,
+    unlockAudio: unlockMediaAudio,
+  } = media
+
   const handleInVRChange = useCallback(
     (activeVR: boolean) => {
       setInVRSession(activeVR)
       if (!activeVR) {
         setUsingSimulator(false)
       }
-      if (room.joined) {
-        room.updateLocalProfile({ inVR: activeVR })
+      if (roomJoined) {
+        roomUpdateLocalProfile({ inVR: activeVR })
       }
     },
-    [room],
+    [roomJoined, roomUpdateLocalProfile],
   )
 
   const handleEnterVR = useCallback(
     async (
       vrAttemptPromise: Promise<{ ok: boolean; usedEmulator: boolean; error?: string }>,
     ) => {
-      media.unlockAudio()
+      unlockMediaAudio()
       const res = await vrAttemptPromise
       if (res.ok) {
         setUsingSimulator(res.usedEmulator)
@@ -245,7 +296,7 @@ export function App() {
         setStatusBanner(res.error)
       }
     },
-    [media],
+    [unlockMediaAudio],
   )
 
   const handleJoinRoom = useCallback(
@@ -257,13 +308,13 @@ export function App() {
         error?: string
       }> | null,
     ) => {
-      media.unlockAudio()
+      unlockMediaAudio()
       if (vrAttemptPromise) {
-        const [, vrResult] = await Promise.all([room.joinRoom(opts), vrAttemptPromise])
+        const [, vrResult] = await Promise.all([roomJoinRoom(opts), vrAttemptPromise])
         if (vrResult.ok) {
           setUsingSimulator(vrResult.usedEmulator)
         } else {
-          room.updateLocalProfile({ inVR: false })
+          roomUpdateLocalProfile({ inVR: false })
           setStatusBanner(
             vrResult.error
               ? `Could not enter VR (${vrResult.error}) — joined room in 3D Desktop Mode.`
@@ -271,49 +322,49 @@ export function App() {
           )
         }
       } else {
-        await room.joinRoom(opts)
+        await roomJoinRoom(opts)
       }
     },
-    [media, room],
+    [roomJoinRoom, roomUpdateLocalProfile, unlockMediaAudio],
   )
 
   const handleStartTabShare = useCallback(async () => {
-    if (!room.isLocalPresenter) {
-      const claimed = room.takeControl('tab-stream')
+    if (!roomIsLocalPresenter) {
+      const claimed = roomTakeControl('tab-stream')
       if (!claimed) return
     }
-    const result = await webrtc.startTabShare()
+    const result = await webrtcStartTabShare()
     if (!result.ok) {
       setStatusBanner(result.error ?? 'Unable to share browser tab.')
       return
     }
-    room.updatePresenterMedia({
+    roomUpdatePresenterMedia({
       screenMode: 'tab-stream',
       mediaTitle: result.title ?? 'Live Browser Tab',
       isPlaying: true,
     })
-  }, [room, webrtc])
+  }, [roomIsLocalPresenter, roomTakeControl, roomUpdatePresenterMedia, webrtcStartTabShare])
 
   const handleStopTabShare = useCallback(() => {
-    webrtc.stopTabShare()
-    if (room.isLocalPresenter) {
-      room.updatePresenterMedia({
+    webrtcStopTabShare()
+    if (roomIsLocalPresenter) {
+      roomUpdatePresenterMedia({
         screenMode: 'idle',
         isPlaying: false,
       })
     }
-  }, [room, webrtc])
+  }, [roomIsLocalPresenter, roomUpdatePresenterMedia, webrtcStopTabShare])
 
   const handleLoadStreamUrl = useCallback(
     (url: string, title = 'Cinema Stream', useCorsProxy = false) => {
-      if (!room.isLocalPresenter) {
-        const claimed = room.takeControl('url-sync')
+      if (!roomIsLocalPresenter) {
+        const claimed = roomTakeControl('url-sync')
         if (!claimed) return
       }
-      if (webrtc.localScreenStream) {
-        webrtc.stopTabShare()
+      if (webrtcLocalScreenStream) {
+        webrtcStopTabShare()
       }
-      room.updatePresenterMedia({
+      roomUpdatePresenterMedia({
         screenMode: 'url-sync',
         mediaUrl: url,
         mediaTitle: title,
@@ -321,55 +372,75 @@ export function App() {
         currentTime: 0,
         isPlaying: true,
       })
-      media.unlockAudio()
+      unlockMediaAudio()
     },
-    [media, room, webrtc],
+    [
+      roomIsLocalPresenter,
+      roomTakeControl,
+      roomUpdatePresenterMedia,
+      unlockMediaAudio,
+      webrtcLocalScreenStream,
+      webrtcStopTabShare,
+    ],
   )
 
   const handleTogglePlayPause = useCallback(() => {
-    if (!room.isLocalPresenter || room.presenterState.screenMode !== 'url-sync') return
-    const nextPlaying = !room.presenterState.isPlaying
-    room.updatePresenterMedia({
+    if (!roomIsLocalPresenter || roomPresenterState.screenMode !== 'url-sync') return
+    const nextPlaying = !roomPresenterState.isPlaying
+    roomUpdatePresenterMedia({
       isPlaying: nextPlaying,
-      currentTime: media.localCurrentTime,
-      duration: media.localDuration,
+      currentTime: mediaLocalCurrentTime,
+      duration: mediaLocalDuration,
     })
-  }, [media.localCurrentTime, media.localDuration, room])
+  }, [
+    mediaLocalCurrentTime,
+    mediaLocalDuration,
+    roomIsLocalPresenter,
+    roomPresenterState.isPlaying,
+    roomPresenterState.screenMode,
+    roomUpdatePresenterMedia,
+  ])
 
   const handleSeekTo = useCallback(
     (targetSeconds: number) => {
-      if (!room.isLocalPresenter || room.presenterState.screenMode !== 'url-sync') return
+      if (!roomIsLocalPresenter || roomPresenterState.screenMode !== 'url-sync') return
       const clamped = Math.max(
         0,
-        media.localDuration > 0 ? Math.min(media.localDuration, targetSeconds) : targetSeconds,
+        mediaLocalDuration > 0 ? Math.min(mediaLocalDuration, targetSeconds) : targetSeconds,
       )
-      media.seekLocalVideo(clamped)
-      room.updatePresenterMedia({
+      mediaSeekLocalVideo(clamped)
+      roomUpdatePresenterMedia({
         currentTime: clamped,
-        duration: media.localDuration,
+        duration: mediaLocalDuration,
       })
     },
-    [media, room],
+    [
+      mediaLocalDuration,
+      mediaSeekLocalVideo,
+      roomIsLocalPresenter,
+      roomPresenterState.screenMode,
+      roomUpdatePresenterMedia,
+    ],
   )
 
   const handleSeekRelative = useCallback(
     (deltaSeconds: number) => {
-      handleSeekTo(media.localCurrentTime + deltaSeconds)
+      handleSeekTo(mediaLocalCurrentTime + deltaSeconds)
     },
-    [handleSeekTo, media.localCurrentTime],
+    [handleSeekTo, mediaLocalCurrentTime],
   )
 
   const handleSeekFraction = useCallback(
     (fraction: number) => {
-      if (media.localDuration <= 0) return
-      handleSeekTo(fraction * media.localDuration)
+      if (mediaLocalDuration <= 0) return
+      handleSeekTo(fraction * mediaLocalDuration)
     },
-    [handleSeekTo, media.localDuration],
+    [handleSeekTo, mediaLocalDuration],
   )
 
   const handleToggleMute = useCallback(() => {
-    room.updateLocalProfile({ isMuted: !room.localProfile.isMuted })
-  }, [room])
+    roomUpdateLocalProfile({ isMuted: !roomLocalProfile.isMuted })
+  }, [roomLocalProfile.isMuted, roomUpdateLocalProfile])
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#080a0d]">
@@ -383,93 +454,98 @@ export function App() {
         }}
         camera={{ fov: 62, near: 0.08, far: 60, position: [0, 1.35, 1.2] }}
       >
-        <color attach="background" args={['#090c12']} />
-        <fog attach="fog" args={['#090c12', 16, 36]} />
+        <color attach="background" args={['#111724']} />
+        <fog attach="fog" args={['#111724', 16, 38]} />
 
-        <XR store={xrStore}>
-          <PointerEvents batchEvents={false} />
+        <CanvasRootBoundary>
+          <XR store={xrStore}>
+            <PointerEvents batchEvents={false} />
 
-          {/* Keep XROrigin & core CinemaRoom outside Suspense so VR renders on Frame 0 */}
-          <SeatCameraAndOriginRig
-            seatIndex={room.localProfile.seatIndex}
-            recenterVersion={recenterVersion}
-            onInVRChange={handleInVRChange}
-          >
-            {room.joined && (
-              <SceneSectionBoundary>
-                <SpatialControlDock
-                  presenterState={room.presenterState}
-                  isLocalPresenter={room.isLocalPresenter}
-                  canTakeControl={room.canTakeControl}
-                  isMuted={room.localProfile.isMuted}
-                  cinemaVolume={cinemaVolume}
-                  voiceVolume={voiceVolume}
-                  localCurrentTime={media.localCurrentTime}
-                  localDuration={media.localDuration}
-                  chatPanelOpen={spatialChatOpen}
-                  keyboardMode={keyboardMode}
-                  onSetKeyboardMode={setKeyboardMode}
-                  onTakeControl={() => room.takeControl()}
-                  onReleaseControl={() => {
-                    webrtc.stopTabShare()
-                    room.releaseControl()
-                  }}
-                  onTogglePlayPause={handleTogglePlayPause}
-                  onSeekRelative={handleSeekRelative}
-                  onSeekFraction={handleSeekFraction}
-                  onSelectStreamUrl={(url, title) => handleLoadStreamUrl(url, title, false)}
-                  onStartTabShare={() => void handleStartTabShare()}
-                  onToggleMute={handleToggleMute}
-                  onChangeCinemaVolume={setCinemaVolume}
-                  onChangeVoiceVolume={setVoiceVolume}
-                  onSendReaction={(emoji) => room.sendReaction(emoji)}
-                  onSendChatMessage={room.sendChatMessage}
-                  onToggleChatPanel={() => setSpatialChatOpen((v) => !v)}
-                  onRecenterSeat={() => setRecenterVersion((v) => v + 1)}
-                />
-              </SceneSectionBoundary>
-            )}
-          </SeatCameraAndOriginRig>
+            {/* Keep XROrigin & core CinemaRoom outside Suspense so VR renders on Frame 0 */}
+            <SeatCameraAndOriginRig
+              seatIndex={room.localProfile.seatIndex}
+              recenterVersion={recenterVersion}
+              onInVRChange={handleInVRChange}
+            >
+              {room.joined && (
+                <SceneSectionBoundary>
+                  <SpatialControlDock
+                    presenterState={room.presenterState}
+                    isLocalPresenter={room.isLocalPresenter}
+                    canTakeControl={room.canTakeControl}
+                    isMuted={room.localProfile.isMuted}
+                    cinemaVolume={cinemaVolume}
+                    voiceVolume={voiceVolume}
+                    localCurrentTime={media.localCurrentTime}
+                    localDuration={media.localDuration}
+                    chatPanelOpen={spatialChatOpen}
+                    keyboardMode={keyboardMode}
+                    onSetKeyboardMode={setKeyboardMode}
+                    onTakeControl={() => room.takeControl()}
+                    onReleaseControl={() => {
+                      webrtc.stopTabShare()
+                      room.releaseControl()
+                    }}
+                    onTogglePlayPause={handleTogglePlayPause}
+                    onSeekRelative={handleSeekRelative}
+                    onSeekFraction={handleSeekFraction}
+                    onSelectStreamUrl={(url, title) => handleLoadStreamUrl(url, title, false)}
+                    onStartTabShare={() => void handleStartTabShare()}
+                    onToggleMute={handleToggleMute}
+                    onChangeCinemaVolume={setCinemaVolume}
+                    onChangeVoiceVolume={setVoiceVolume}
+                    onSendReaction={(emoji) => room.sendReaction(emoji)}
+                    onSendChatMessage={room.sendChatMessage}
+                    onToggleChatPanel={() => setSpatialChatOpen((v) => !v)}
+                    onRecenterSeat={() => setRecenterVersion((v) => v + 1)}
+                  />
+                </SceneSectionBoundary>
+              )}
+            </SeatCameraAndOriginRig>
 
-          <CinemaRoom
-            roomCode={room.roomCode}
-            presenterState={room.presenterState}
-            videoTexture={media.videoTexture}
-            hasVideoFrames={media.hasVideoFrames}
-            mediaError={media.mediaError}
-            needsAudioUnlock={media.needsAudioUnlock}
-            localSeatIndex={room.localProfile.seatIndex}
-            participants={room.participants}
-            canTakeControl={room.canTakeControl}
-            onTakeControl={() => room.takeControl()}
-            onUnlockAudio={media.unlockAudio}
-            onSelectSeat={room.selectSeat}
-          />
-
-          <SceneSectionBoundary>
-            <AvatarManager
-              joined={room.joined}
-              localProfile={room.localProfile}
+            <CinemaRoom
+              roomCode={room.roomCode}
+              presenterState={room.presenterState}
+              videoTexture={media.videoTexture}
+              hasVideoFrames={media.hasVideoFrames}
+              mediaError={media.mediaError}
+              needsAudioUnlock={media.needsAudioUnlock}
+              localSeatIndex={room.localProfile.seatIndex}
               participants={room.participants}
-              activePresenterId={room.presenterState.activePresenterId}
-              remotePosesRef={room.remotePosesRef}
-              remoteVoiceStreams={webrtc.remoteVoiceStreams}
-              voiceVolume={voiceVolume}
-              broadcastPose={room.broadcastPose}
+              canTakeControl={room.canTakeControl}
+              onTakeControl={() => room.takeControl()}
+              onUnlockAudio={media.unlockAudio}
+              onSelectSeat={room.selectSeat}
             />
-          </SceneSectionBoundary>
 
-          <SceneSectionBoundary>
-            <SpatialChatPanel
-              visible={room.joined && spatialChatOpen}
-              messages={room.messages}
-              reactions={room.reactions}
-              onSendReaction={(emoji) => room.sendReaction(emoji)}
-              onOpenChatKeyboard={() => setKeyboardMode('chat')}
-              onClosePanel={() => setSpatialChatOpen(false)}
-            />
-          </SceneSectionBoundary>
-        </XR>
+            <SceneSectionBoundary>
+              <AvatarManager
+                joined={room.joined}
+                localProfile={room.localProfile}
+                participants={room.participants}
+                activePresenterId={room.presenterState.activePresenterId}
+                remotePosesRef={room.remotePosesRef}
+                remoteVoiceStreams={webrtc.remoteVoiceStreams}
+                voiceVolume={voiceVolume}
+                broadcastPose={room.broadcastPose}
+              />
+            </SceneSectionBoundary>
+
+            <SceneSectionBoundary>
+              <SpatialChatPanel
+                visible={room.joined && spatialChatOpen}
+                messages={room.messages}
+                reactions={room.reactions}
+                onSendReaction={(emoji) => room.sendReaction(emoji)}
+                onOpenChatKeyboard={() => {
+                  setSpatialChatOpen(true)
+                  setKeyboardMode('chat')
+                }}
+                onClosePanel={() => setSpatialChatOpen(false)}
+              />
+            </SceneSectionBoundary>
+          </XR>
+        </CanvasRootBoundary>
       </Canvas>
 
       {/* 2D Lobby & Desktop Companion Presenter Bar */}

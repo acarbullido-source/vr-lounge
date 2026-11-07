@@ -305,13 +305,23 @@ export function useRoomSession(
 
   const updateLocalProfile = useCallback((patch: Partial<ParticipantProfile>) => {
     setLocalProfile((prev) => {
+      const changed = (Object.keys(patch) as Array<keyof ParticipantProfile>).some(
+        (key) => patch[key] !== undefined && prev[key] !== patch[key],
+      )
+      if (!changed) return prev
       const next = { ...prev, ...patch }
       void serviceRef.current?.updatePresence(next)
       return next
     })
-    setParticipants((prev) =>
-      prev.map((p) => (p.userId === localUserId ? { ...p, ...patch } : p)),
-    )
+    setParticipants((prev) => {
+      const me = prev.find((p) => p.userId === localUserId)
+      if (!me) return prev
+      const changed = (Object.keys(patch) as Array<keyof ParticipantProfile>).some(
+        (key) => patch[key] !== undefined && me[key] !== patch[key],
+      )
+      if (!changed) return prev
+      return prev.map((p) => (p.userId === localUserId ? { ...p, ...patch } : p))
+    })
   }, [localUserId])
 
   const selectSeat = useCallback(

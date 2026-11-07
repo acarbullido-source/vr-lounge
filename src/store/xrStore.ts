@@ -1,4 +1,5 @@
 import { createXRStore } from '@react-three/xr'
+import { SafeXRController, SafeXRHand } from '../components/xr/SafeXRInputs'
 
 /**
  * Shared @react-three/xr v6 store configured specifically for Meta Quest 3
@@ -8,7 +9,7 @@ import { createXRStore } from '@react-three/xr'
 export const xrStore = createXRStore({
   offerSession: false,
   emulate: false,
-  foveation: 1,
+  foveation: 0.5,
   frameRate: false,
   handTracking: true,
   // CRITICAL: Must be `true` (`optionalFeatures: ['layers']`) because Three.js WebXRManager
@@ -20,37 +21,8 @@ export const xrStore = createXRStore({
   anchors: false,
   hitTest: false,
   domOverlay: false,
-  controller: {
-    teleportPointer: false,
-    grabPointer: false,
-    rayPointer: {
-      rayModel: {
-        color: '#E5A93C',
-        opacity: 0.78,
-      },
-      cursorModel: {
-        color: '#F4F1EA',
-      },
-    },
-  },
-  hand: {
-    teleportPointer: false,
-    grabPointer: false,
-    touchPointer: {
-      cursorModel: {
-        color: '#E5A93C',
-      },
-    },
-    rayPointer: {
-      rayModel: {
-        color: '#E5A93C',
-        opacity: 0.65,
-      },
-      cursorModel: {
-        color: '#F4F1EA',
-      },
-    },
-  },
+  controller: SafeXRController,
+  hand: SafeXRHand,
   gaze: false,
 })
 

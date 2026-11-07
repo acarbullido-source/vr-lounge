@@ -174,6 +174,9 @@ function streamCorsProxyPlugin(): Plugin {
 
 export default defineConfig({
   base: './',
+  resolve: {
+    dedupe: ['three', 'react', 'react-dom'],
+  },
   plugins: [basicSsl(), tailwindcss(), react(), streamCorsProxyPlugin()],
   server: {
     host: true,

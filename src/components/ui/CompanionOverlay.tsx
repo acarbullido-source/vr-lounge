@@ -282,9 +282,17 @@ export function CompanionOverlay({
           {/* Top Header */}
           <div className="flex flex-col gap-4 border-b border-[#f4f1ea]/10 pb-6 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <p className="font-mono text-xs uppercase tracking-[0.2em] text-[#e5a93c]">
-                WebXR Spatial Screening Room
-              </p>
+              <div className="flex items-center gap-2.5">
+                <p className="font-mono text-xs uppercase tracking-[0.2em] text-[#e5a93c]">
+                  WebXR Spatial Screening Room
+                </p>
+                <span
+                  id="vr-lounge-version-badge"
+                  className="rounded-md border border-[#e5a93c]/35 bg-[#e5a93c]/12 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[#e5a93c]"
+                >
+                  v1.5
+                </span>
+              </div>
               <h1
                 className="mt-1.5 text-3xl font-semibold tracking-tight text-[#f4f1ea] sm:text-4xl"
                 style={{ fontFamily: 'var(--font-display)' }}
