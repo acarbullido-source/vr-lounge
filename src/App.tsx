@@ -44,7 +44,7 @@ import {
 import { useBarGames } from './hooks/useBarGames'
 import { useMediaScreen } from './hooks/useMediaScreen'
 import { useRoomSession, type JoinRoomOptions } from './hooks/useRoomSession'
-import { useWebRTC } from './hooks/useWebRTC'
+import { useWebRTC, type ScreenShareQualityMode } from './hooks/useWebRTC'
 import {
   isDeviceUnlocked,
   isPasscodeGateEnabled,
@@ -1091,22 +1091,25 @@ export function App() {
     [roomJoinRoom, roomUpdateLocalProfile, unlockMediaAudio],
   )
 
-  const handleStartTabShare = useCallback(async () => {
-    if (!roomIsLocalPresenter) {
-      const claimed = roomTakeControl('tab-stream')
-      if (!claimed) return
-    }
-    const result = await webrtcStartTabShare()
-    if (!result.ok) {
-      setStatusBanner(result.error ?? 'Unable to share browser tab.')
-      return
-    }
-    roomUpdatePresenterMedia({
-      screenMode: 'tab-stream',
-      mediaTitle: result.title ?? 'Live Browser Tab',
-      isPlaying: true,
-    })
-  }, [roomIsLocalPresenter, roomTakeControl, roomUpdatePresenterMedia, webrtcStartTabShare])
+  const handleStartTabShare = useCallback(
+    async (qualityOverride?: ScreenShareQualityMode, customTitle?: string) => {
+      if (!roomIsLocalPresenter) {
+        const claimed = roomTakeControl('tab-stream')
+        if (!claimed) return
+      }
+      const result = await webrtcStartTabShare(qualityOverride)
+      if (!result.ok) {
+        setStatusBanner(result.error ?? 'Unable to share browser tab.')
+        return
+      }
+      roomUpdatePresenterMedia({
+        screenMode: 'tab-stream',
+        mediaTitle: customTitle || result.title || 'Live Browser Tab',
+        isPlaying: true,
+      })
+    },
+    [roomIsLocalPresenter, roomTakeControl, roomUpdatePresenterMedia, webrtcStartTabShare],
+  )
 
   const handleStopTabShare = useCallback(() => {
     webrtcStopTabShare()
@@ -1808,6 +1811,8 @@ export function App() {
           micPermissionError={webrtc.micPermissionError}
           localMicLevel={webrtc.localMicLevel}
           isSharingTab={Boolean(webrtc.localScreenStream)}
+          hasScreenAudioTrack={webrtc.hasScreenAudioTrack}
+          screenShareQuality={webrtc.screenShareQuality}
           cinemaVolume={cinemaVolume}
           voiceVolume={voiceVolume}
           localCurrentTime={media.localCurrentTime}
@@ -1853,6 +1858,7 @@ export function App() {
             room.releaseControl()
           }}
           onToggleHostLock={room.toggleHostLock}
+          onChangeScreenShareQuality={webrtc.setScreenShareQuality}
           onStartTabShare={handleStartTabShare}
           onStopTabShare={handleStopTabShare}
           onLoadStreamUrl={handleLoadStreamUrl}

@@ -10,8 +10,15 @@ import {
   type YouTubeCategory,
   type YouTubeVideoItem,
 } from '../../services/youtube'
+import {
+  fetchPersonalYouTubeFeed,
+  getYouTubeAccountState,
+  subscribeYouTubeAccount,
+  type PersonalFeedSection,
+  type YouTubeAccountState,
+} from '../../services/youtubeAccount'
 
-type BrowserTabId = YouTubeCategory | 'upnext'
+type BrowserTabId = YouTubeCategory | 'my-library' | 'upnext'
 
 interface BrowserSpeechRecognitionAlternative {
   transcript: string
@@ -406,6 +413,7 @@ export interface YouTubeBrowser3DProps {
 
 const BASE_TABS: ReadonlyArray<{ id: BrowserTabId; label: string }> = [
   { id: 'trending', label: '🔥 Trending' },
+  { id: 'my-library', label: '⭐ My YouTube' },
   { id: 'music', label: '🎵 Music' },
   { id: 'gaming', label: '🎮 Gaming' },
   { id: 'movies', label: '🎬 Trailers' },
@@ -430,6 +438,11 @@ export function YouTubeBrowser3D({
   onClose,
 }: YouTubeBrowser3DProps) {
   const [activeTab, setActiveTab] = useState<BrowserTabId>('trending')
+  const [vrPersonalSection, setVrPersonalSection] =
+    useState<PersonalFeedSection>('subscriptions')
+  const [accountState, setAccountState] = useState<YouTubeAccountState>(() =>
+    getYouTubeAccountState(),
+  )
   const [items, setItems] = useState<YouTubeVideoItem[]>([])
   const [providerName, setProviderName] = useState<string>('Connecting…')
   const [notice, setNotice] = useState<string | null>(null)
@@ -442,6 +455,13 @@ export function YouTubeBrowser3D({
 
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null)
   const hasFetchedOnceRef = useRef<boolean>(false)
+
+  useEffect(() => {
+    return subscribeYouTubeAccount((next) => {
+      setAccountState(next)
+      setRefreshNonce((n) => n + 1)
+    })
+  }, [])
 
   const tabs = useMemo(() => {
     if (relatedVideos.length > 0) {
@@ -476,9 +496,11 @@ export function YouTubeBrowser3D({
         const trimmedQuery = searchQuery.trim()
         const feed = trimmedQuery
           ? await searchYouTubeVideos(trimmedQuery)
-          : await fetchYouTubeCategory(
-              activeTab === 'upnext' ? 'trending' : activeTab,
-            )
+          : activeTab === 'my-library'
+            ? await fetchPersonalYouTubeFeed(vrPersonalSection)
+            : await fetchYouTubeCategory(
+                activeTab === 'upnext' ? 'trending' : activeTab,
+              )
 
         if (cancelled) return
         setItems(feed.items)
@@ -500,7 +522,17 @@ export function YouTubeBrowser3D({
     return () => {
       cancelled = true
     }
-  }, [activeTab, refreshNonce, relatedVideos, searchQuery, searchTrigger, visible])
+  }, [
+    activeTab,
+    accountState.authProvider,
+    accountState.pinnedSources.length,
+    refreshNonce,
+    relatedVideos,
+    searchQuery,
+    searchTrigger,
+    visible,
+    vrPersonalSection,
+  ])
 
   const handleVoiceSearch = useCallback(() => {
     if (listeningVoice && recognitionRef.current) {
@@ -568,8 +600,9 @@ export function YouTubeBrowser3D({
   )
 
   const tabCount = tabs.length
-  const tabWidth = tabCount >= 8 ? 0.188 : 0.214
-  const tabSpan = 1.58
+  const tabWidth = tabCount >= 9 ? 0.172 : tabCount >= 8 ? 0.194 : 0.214
+  const tabSpan = tabCount >= 9 ? 1.5 : 1.48
+  const tabFontSize = tabCount >= 9 ? 0.0168 : 0.0185
   const tabStep = tabCount > 1 ? tabSpan / (tabCount - 1) : 0
 
   return (
@@ -593,7 +626,7 @@ export function YouTubeBrowser3D({
         <meshBasicMaterial color="#E5A93C" />
       </mesh>
 
-      {/* Row 1: Header & Relay Switcher */}
+      {/* Row 1: Header & Relay / Personal Feed Switcher */}
       <group position={[0, 0.462, 0.015]}>
         {/* Play icon badge */}
         <RoundedBox
@@ -602,7 +635,9 @@ export function YouTubeBrowser3D({
           smoothness={2}
           position={[-0.78, 0, 0]}
         >
-          <meshBasicMaterial color="#E05A47" />
+          <meshBasicMaterial
+            color={accountState.authProvider !== 'none' ? '#49B384' : '#E05A47'}
+          />
         </RoundedBox>
         <Suspense fallback={null}>
           <Text
@@ -616,26 +651,56 @@ export function YouTubeBrowser3D({
           </Text>
           <Text
             position={[-0.72, 0, 0.006]}
-            fontSize={0.029}
+            fontSize={0.027}
+            maxWidth={0.72}
             color="#F4F1EA"
             anchorX="left"
             anchorY="middle"
           >
-            YOUTUBE &amp; VR VIDEO DECK
+            {accountState.authProvider !== 'none'
+              ? `YOUTUBE DECK · ${truncateLabel(accountState.displayName, 20)}`
+              : 'YOUTUBE & VR VIDEO DECK'}
           </Text>
         </Suspense>
 
-        <PillButton3D
-          label="↻ Switch Relay"
-          position={[0.16, 0, 0]}
-          width={0.23}
-          height={0.052}
-          fontSize={0.019}
-          onClick={() => {
-            resetInstanceCooldowns()
-            setRefreshNonce((n) => n + 1)
-          }}
-        />
+        {activeTab === 'my-library' && !searchQuery.trim() ? (
+          <PillButton3D
+            label={
+              vrPersonalSection === 'subscriptions'
+                ? '📺 Feed: Subs ↻'
+                : vrPersonalSection === 'liked'
+                  ? '👍 Feed: Liked ↻'
+                  : '📌 Feed: Pinned ↻'
+            }
+            position={[0.16, 0, 0]}
+            width={0.24}
+            height={0.052}
+            fontSize={0.0185}
+            variant="active"
+            onClick={() => {
+              setVrPersonalSection((prev) =>
+                prev === 'subscriptions'
+                  ? 'liked'
+                  : prev === 'liked'
+                    ? 'pinned'
+                    : 'subscriptions',
+              )
+              setPage(0)
+            }}
+          />
+        ) : (
+          <PillButton3D
+            label="↻ Switch Relay"
+            position={[0.16, 0, 0]}
+            width={0.23}
+            height={0.052}
+            fontSize={0.019}
+            onClick={() => {
+              resetInstanceCooldowns()
+              setRefreshNonce((n) => n + 1)
+            }}
+          />
+        )}
 
         <PillButton3D
           label={keepPinned ? '📌 Pinned Open' : 'Auto-Hide: On'}
@@ -694,7 +759,7 @@ export function YouTubeBrowser3D({
             >
               {searchQuery
                 ? `🔍 ${truncateLabel(searchQuery, 48)}`
-                : '🔍 Search YouTube videos or paste link (opens 3D Keyboard)…'}
+                : '🔍 Search YouTube videos, playlists, or paste link (opens 3D Keyboard)…'}
             </Text>
           </Suspense>
         </group>
@@ -743,7 +808,7 @@ export function YouTubeBrowser3D({
               position={[x, 0, 0]}
               width={tabWidth}
               height={0.054}
-              fontSize={0.0195}
+              fontSize={tabFontSize}
               variant={isSelected ? 'amber' : 'default'}
               onClick={() => {
                 if (searchQuery.trim()) {

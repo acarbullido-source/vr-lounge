@@ -44,6 +44,7 @@ jobs:
           VITE_TURN_USERNAME: ${{ secrets.VITE_TURN_USERNAME || vars.VITE_TURN_USERNAME }}
           VITE_TURN_CREDENTIAL: ${{ secrets.VITE_TURN_CREDENTIAL || vars.VITE_TURN_CREDENTIAL }}
           VITE_YOUTUBE_PROXY_URL: ${{ secrets.VITE_YOUTUBE_PROXY_URL || vars.VITE_YOUTUBE_PROXY_URL }}
+          VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID || vars.VITE_GOOGLE_CLIENT_ID }}
         run: npm run build && touch dist/.nojekyll
 
       - name: Publish dist to gh-pages branch

@@ -46,6 +46,7 @@ import {
 } from '../../constants/cinema'
 import { FREE_ROAM_SEAT_ID } from '../../constants/hangout'
 import type { JoinRoomOptions } from '../../hooks/useRoomSession'
+import type { ScreenShareQualityMode } from '../../hooks/useWebRTC'
 import {
   fetchYouTubeCategory,
   formatCompactViews,
@@ -81,6 +82,7 @@ import type {
 } from '../../types/lounge'
 import { AvatarCustomizerControls } from './AvatarCustomizerControls'
 import { BuildCatalogDrawer } from './BuildCatalogDrawer'
+import { YouTubeAccountAndTVPanel } from './YouTubeAccountAndTVPanel'
 
 function formatDuration(sec: number): string {
   if (!Number.isFinite(sec) || sec <= 0) return '0:00'
@@ -114,6 +116,8 @@ export interface CompanionOverlayProps {
   micPermissionError: string | null
   localMicLevel: number
   isSharingTab: boolean
+  hasScreenAudioTrack: boolean
+  screenShareQuality: ScreenShareQualityMode
   cinemaVolume: number
   voiceVolume: number
   localCurrentTime: number
@@ -151,7 +155,11 @@ export interface CompanionOverlayProps {
   onTakeControl: () => void
   onReleaseControl: () => void
   onToggleHostLock: () => void
-  onStartTabShare: () => Promise<void>
+  onChangeScreenShareQuality: (quality: ScreenShareQualityMode) => void
+  onStartTabShare: (
+    qualityOverride?: ScreenShareQualityMode,
+    customTitle?: string,
+  ) => Promise<void>
   onStopTabShare: () => void
   onLoadStreamUrl: (url: string, title: string, useCorsProxy: boolean) => void
   onTogglePlayPause: () => void
@@ -191,6 +199,8 @@ export function CompanionOverlay({
   micPermissionError,
   localMicLevel,
   isSharingTab,
+  hasScreenAudioTrack,
+  screenShareQuality,
   cinemaVolume,
   voiceVolume,
   localCurrentTime,
@@ -223,6 +233,7 @@ export function CompanionOverlay({
   onTakeControl,
   onReleaseControl,
   onToggleHostLock,
+  onChangeScreenShareQuality,
   onStartTabShare,
   onStopTabShare,
   onLoadStreamUrl,
@@ -267,7 +278,9 @@ export function CompanionOverlay({
   // In-room companion drawers
   const [urlDrawerOpen, setUrlDrawerOpen] = useState(false)
   const [buildDrawerOpen, setBuildDrawerOpen] = useState(false)
-  const [drawerTab, setDrawerTab] = useState<'youtube' | 'direct'>('youtube')
+  const [drawerTab, setDrawerTab] = useState<
+    'youtube' | 'my-youtube' | 'youtube-tv' | 'direct'
+  >('youtube')
   const [ytCategory, setYtCategory] = useState<YouTubeCategory>('trending')
   const [ytQuery, setYtQuery] = useState('')
   const [ytSubmittedQuery, setYtSubmittedQuery] = useState('')
@@ -916,7 +929,7 @@ export function CompanionOverlay({
       </header>
 
       {/* Alerts / Autoplay Unlock / Roster Popovers */}
-      <div className="pointer-events-none relative my-auto flex flex-col items-center gap-2">
+      <div className="pointer-events-none relative mt-2 mb-auto flex flex-col items-center gap-2">
         {(statusBanner || mediaError || micPermissionError) && (
           <div className="pointer-events-auto lounge-panel flex max-w-xl items-center gap-3 rounded-xl px-4 py-2.5 text-xs text-[#f4f1ea]">
             <ShieldAlert className="h-4 w-4 shrink-0 text-[#e5a93c]" />
@@ -995,11 +1008,11 @@ export function CompanionOverlay({
         )}
       </div>
 
-      {/* Mode 2 YouTube Browser & Direct Stream Drawer */}
+      {/* Mode 2 YouTube Browser, Personal Account, YouTube TV & Direct Stream Drawer */}
       {urlDrawerOpen && (
         <section className="pointer-events-auto lounge-panel mx-auto mb-3 w-full max-w-3xl rounded-2xl p-4 sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#f4f1ea]/10 pb-3">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
               <button
                 id="btn-drawer-tab-youtube"
                 type="button"
@@ -1011,8 +1024,37 @@ export function CompanionOverlay({
                 }`}
               >
                 <Play className="h-3.5 w-3.5" />
-                <span>YouTube &amp; Open Web</span>
+                <span>Browse YouTube</span>
               </button>
+
+              <button
+                id="btn-drawer-tab-my-youtube"
+                type="button"
+                onClick={() => setDrawerTab('my-youtube')}
+                className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
+                  drawerTab === 'my-youtube'
+                    ? 'bg-[#38bdf8] text-[#080a0d]'
+                    : 'bg-[#141922] text-[#c7c2b8] hover:text-[#f4f1ea]'
+                }`}
+              >
+                <User className="h-3.5 w-3.5" />
+                <span>My YouTube</span>
+              </button>
+
+              <button
+                id="btn-drawer-tab-youtube-tv"
+                type="button"
+                onClick={() => setDrawerTab('youtube-tv')}
+                className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
+                  drawerTab === 'youtube-tv'
+                    ? 'bg-[#e05a47] text-[#f4f1ea]'
+                    : 'bg-[#141922] text-[#c7c2b8] hover:text-[#f4f1ea]'
+                }`}
+              >
+                <Tv className="h-3.5 w-3.5" />
+                <span>YouTube TV</span>
+              </button>
+
               <button
                 id="btn-drawer-tab-direct"
                 type="button"
@@ -1208,6 +1250,20 @@ export function CompanionOverlay({
                 )}
               </div>
             </div>
+          ) : drawerTab === 'my-youtube' || drawerTab === 'youtube-tv' ? (
+            <YouTubeAccountAndTVPanel
+              mode={drawerTab === 'my-youtube' ? 'account' : 'youtubetv'}
+              isSharingTab={isSharingTab}
+              hasScreenAudioTrack={hasScreenAudioTrack}
+              screenShareQuality={screenShareQuality}
+              onChangeScreenShareQuality={onChangeScreenShareQuality}
+              onStartTabShare={onStartTabShare}
+              onStopTabShare={onStopTabShare}
+              onPlayVideo={(url, title) => {
+                onLoadStreamUrl(url, title, false)
+                setUrlDrawerOpen(false)
+              }}
+            />
           ) : (
             <div className="mt-3.5 space-y-3">
               <div className="flex flex-col gap-2 sm:flex-row">

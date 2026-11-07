@@ -812,7 +812,11 @@ export function CinemaRoom({
               onUnlockAudio()
               return
             }
-            if (!presenterState.activePresenterId && canTakeControl) {
+            if (
+              (!presenterState.activePresenterId ||
+                presenterState.screenMode === 'idle') &&
+              canTakeControl
+            ) {
               if (onOpenYouTubeBrowser) {
                 onOpenYouTubeBrowser()
               } else {
@@ -841,7 +845,7 @@ export function CinemaRoom({
               <group position={[0, -1.08, 0.02]}>
                 {onOpenYouTubeBrowser && (
                   <group
-                    position={[-1.42, 0, 0]}
+                    position={[!presenterState.activePresenterId ? -1.42 : 0, 0, 0]}
                     pointerEventsType={{ deny: 'grab' }}
                     onPointerOver={(e) => {
                       e.stopPropagation()
@@ -924,7 +928,9 @@ export function CinemaRoom({
                   : presenterState.activePresenterId
                     ? presenterState.screenMode === 'tab-stream'
                       ? `${presenterState.presenterName ?? 'Presenter'} is starting browser share...`
-                      : `Loading "${presenterState.mediaTitle || 'Cinema Stream'}"...`
+                      : presenterState.screenMode === 'url-sync'
+                        ? `Loading "${presenterState.mediaTitle || 'Cinema Stream'}"...`
+                        : `${presenterState.presenterName ?? 'Presenter'} Ready to Present`
                     : 'Private Hangout Ready'}
               </Text>
 

@@ -909,6 +909,26 @@ export async function searchYouTubeVideos(query: string): Promise<VideoFeedResul
 
   void ensureDynamicInstancesLoaded()
 
+  // Direct YouTube Playlist URL / ID paste handling (e.g. youtube.com/playlist?list=PL...)
+  const pastedPlaylistId = extractYouTubePlaylistId(trimmed)
+  const isDedicatedPlaylistUrl =
+    pastedPlaylistId !== null &&
+    (!extractYouTubeVideoId(trimmed) || /\/playlist\b/i.test(trimmed))
+  if (isDedicatedPlaylistUrl && pastedPlaylistId) {
+    try {
+      const pl = await fetchYouTubePlaylistItems(pastedPlaylistId)
+      if (pl.items.length > 0) {
+        return {
+          items: pl.items,
+          provider: pl.provider,
+          notice: `Loaded playlist "${pl.title}" (${pl.items.length} videos)`,
+        }
+      }
+    } catch {
+      // Fall through to single-video or keyword search
+    }
+  }
+
   // Direct YouTube URL / 11-char ID paste handling
   const pastedVideoId = isYouTubeWatchUrl(trimmed)
     ? extractYouTubeVideoId(trimmed)
@@ -1379,3 +1399,210 @@ export function formatVideoDurationBadge(durationSec: number): string {
   }
   return `${mins}:${secs.toString().padStart(2, '0')}`
 }
+
+/**
+ * Extracts a YouTube Playlist ID (`PL...`, `UU...`, `OLAK5uy_...`, `FL...`, `RD...`)
+ * from a YouTube playlist URL, watch URL with `&list=`, or raw playlist ID.
+ */
+export function extractYouTubePlaylistId(input: string): string | null {
+  const trimmed = input.trim()
+  if (!trimmed) return null
+
+  if (/^(PL|UU|FL|OLAK5uy_|RD|WL|LL)[A-Za-z0-9_-]{10,}$/.test(trimmed)) {
+    return trimmed
+  }
+
+  try {
+    const parsed = new URL(trimmed)
+    const listParam = parsed.searchParams.get('list')?.trim()
+    if (listParam && /^[A-Za-z0-9_-]{10,}$/.test(listParam)) {
+      return listParam
+    }
+  } catch {
+    const match = trimmed.match(/[?&]list=([A-Za-z0-9_-]{10,})/)
+    if (match) return match[1]
+  }
+
+  return null
+}
+
+/**
+ * Extracts a `@handle` or `UC...` channel ID from a YouTube channel URL or handle string.
+ */
+export function extractYouTubeChannelRef(
+  input: string,
+): { kind: 'channelId' | 'handle' | 'query'; value: string } | null {
+  const trimmed = input.trim()
+  if (!trimmed) return null
+
+  if (/^UC[A-Za-z0-9_-]{20,}$/.test(trimmed)) {
+    return { kind: 'channelId', value: trimmed }
+  }
+  if (/^@[A-Za-z0-9_.-]{2,}$/.test(trimmed)) {
+    return { kind: 'handle', value: trimmed }
+  }
+
+  try {
+    const parsed = new URL(trimmed)
+    const parts = parsed.pathname.split('/').filter(Boolean)
+    if (parts[0]?.startsWith('@')) {
+      return { kind: 'handle', value: parts[0] }
+    }
+    if (parts[0] === 'channel' && parts[1]?.startsWith('UC')) {
+      return { kind: 'channelId', value: parts[1] }
+    }
+    if ((parts[0] === 'c' || parts[0] === 'user') && parts[1]) {
+      return { kind: 'query', value: parts[1] }
+    }
+  } catch {
+    // Plain channel name query
+  }
+
+  return { kind: 'query', value: trimmed }
+}
+
+export interface ResolvedPlaylistFeed {
+  playlistId: string
+  title: string
+  author: string
+  items: YouTubeVideoItem[]
+  provider: string
+}
+
+export async function fetchYouTubePlaylistItems(
+  playlistIdOrUrl: string,
+): Promise<ResolvedPlaylistFeed> {
+  const playlistId = extractYouTubePlaylistId(playlistIdOrUrl) ?? playlistIdOrUrl.trim()
+  if (!playlistId) {
+    throw new Error('Invalid YouTube playlist URL or ID.')
+  }
+
+  void ensureDynamicInstancesLoaded()
+  const targets = buildOrderedProviderList()
+
+  const { result, provider } = await raceProviderWaves(
+    targets,
+    4,
+    async (target, signal) => {
+      if (target.kind === 'piped') {
+        const data = await fetchJsonStrict<{
+          name?: string
+          uploader?: string
+          relatedStreams?: RawPipedStreamItem[]
+        }>(`${target.base}/playlists/${encodeURIComponent(playlistId)}`, signal)
+        const items = (data.relatedStreams ?? [])
+          .map((it) => mapPipedItem(it, target.base))
+          .filter((x): x is YouTubeVideoItem => x !== null)
+        if (items.length === 0) throw new Error('Empty Piped playlist')
+        return {
+          title: data.name || `Playlist ${playlistId.slice(0, 8)}`,
+          author: data.uploader || 'YouTube Playlist',
+          items,
+        }
+      }
+
+      const data = await fetchJsonStrict<{
+        title?: string
+        author?: string
+        videos?: RawInvidiousVideoItem[]
+      }>(`${target.base}/api/v1/playlists/${encodeURIComponent(playlistId)}`, signal)
+      const items = (data.videos ?? [])
+        .map((it) => mapInvidiousItem(it, target.base))
+        .filter((x): x is YouTubeVideoItem => x !== null)
+      if (items.length === 0) throw new Error('Empty Invidious playlist')
+      return {
+        title: data.title || `Playlist ${playlistId.slice(0, 8)}`,
+        author: data.author || 'YouTube Playlist',
+        items,
+      }
+    },
+  )
+
+  return {
+    playlistId,
+    title: result.title,
+    author: result.author,
+    items: result.items.slice(0, 40),
+    provider: shortProviderHost(provider.base),
+  }
+}
+
+export interface ResolvedChannelFeed {
+  channelKey: string
+  title: string
+  items: YouTubeVideoItem[]
+  provider: string
+}
+
+export async function fetchYouTubeChannelVideos(
+  handleOrUrl: string,
+): Promise<ResolvedChannelFeed> {
+  const ref = extractYouTubeChannelRef(handleOrUrl)
+  if (!ref) {
+    throw new Error('Enter a YouTube @handle, channel URL, or creator name.')
+  }
+
+  void ensureDynamicInstancesLoaded()
+  const targets = buildOrderedProviderList()
+
+  if (ref.kind === 'channelId') {
+    try {
+      const { result, provider } = await raceProviderWaves(
+        targets,
+        4,
+        async (target, signal) => {
+          if (target.kind === 'piped') {
+            const data = await fetchJsonStrict<{
+              name?: string
+              relatedStreams?: RawPipedStreamItem[]
+            }>(`${target.base}/channel/${encodeURIComponent(ref.value)}`, signal)
+            const items = (data.relatedStreams ?? [])
+              .map((it) => mapPipedItem(it, target.base))
+              .filter((x): x is YouTubeVideoItem => x !== null)
+            if (items.length === 0) throw new Error('Empty Piped channel')
+            return { title: data.name || ref.value, items }
+          }
+          const data = await fetchJsonStrict<{
+            author?: string
+            latestVideos?: RawInvidiousVideoItem[]
+          }>(`${target.base}/api/v1/channels/${encodeURIComponent(ref.value)}`, signal)
+          const items = (data.latestVideos ?? [])
+            .map((it) => mapInvidiousItem(it, target.base))
+            .filter((x): x is YouTubeVideoItem => x !== null)
+          if (items.length === 0) throw new Error('Empty Invidious channel')
+          return { title: data.author || ref.value, items }
+        },
+      )
+      return {
+        channelKey: ref.value,
+        title: result.title,
+        items: result.items.slice(0, 24),
+        provider: shortProviderHost(provider.base),
+      }
+    } catch {
+      // Fall back to search below
+    }
+  }
+
+  // Handle `@creator` or name query cleanly via search
+  const queryText = ref.value.replace(/^@/, '')
+  const searchRes = await searchYouTubeVideos(queryText)
+  const inferredTitle =
+    searchRes.items[0]?.author &&
+    searchRes.items[0].author.toLowerCase().includes(queryText.toLowerCase().slice(0, 4))
+      ? searchRes.items[0].author
+      : ref.value
+  return {
+    channelKey: ref.value,
+    title: inferredTitle,
+    items: searchRes.items,
+    provider: searchRes.provider,
+  }
+}
+
+export function getPreferredPipedBase(): string {
+  const custom = getCustomYouTubeInstance()
+  if (custom) return custom
+  return preferredPipedBase || dynamicPipedInstances[0] || DEFAULT_PIPED_INSTANCES[0]
+}
+

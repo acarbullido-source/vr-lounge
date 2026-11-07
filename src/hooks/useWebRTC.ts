@@ -173,7 +173,26 @@ if (typeof window !== 'undefined') {
   void ensureDynamicTurnServers()
 }
 
-function applyScreenBitrateCap(sender: RTCRtpSender, peerCount: number): void {
+export type ScreenShareQualityMode = 'cinema-30' | 'sports-60'
+
+const SCREEN_QUALITY_STORAGE_KEY = 'vr-lounge:screen-quality-v1'
+
+function loadInitialScreenQuality(): ScreenShareQualityMode {
+  if (typeof window === 'undefined') return 'sports-60'
+  try {
+    const saved = window.localStorage.getItem(SCREEN_QUALITY_STORAGE_KEY)
+    if (saved === 'cinema-30' || saved === 'sports-60') return saved
+  } catch {
+    // Ignore storage read errors
+  }
+  return 'sports-60'
+}
+
+function applyScreenBitrateCap(
+  sender: RTCRtpSender,
+  peerCount: number,
+  qualityMode: ScreenShareQualityMode,
+): void {
   if (!sender.track || sender.track.kind !== 'video' || typeof sender.getParameters !== 'function') {
     return
   }
@@ -183,8 +202,23 @@ function applyScreenBitrateCap(sender: RTCRtpSender, peerCount: number): void {
       params.encodings = [{}]
     }
     const maxBitrate =
-      peerCount <= 2 ? 2_500_000 : peerCount <= 4 ? 1_600_000 : 1_100_000
+      qualityMode === 'sports-60'
+        ? peerCount <= 2
+          ? 4_500_000
+          : peerCount <= 4
+            ? 3_000_000
+            : 1_800_000
+        : peerCount <= 2
+          ? 2_500_000
+          : peerCount <= 4
+            ? 1_600_000
+            : 1_100_000
     params.encodings[0].maxBitrate = maxBitrate
+    if (qualityMode === 'sports-60') {
+      params.encodings[0].maxFramerate = 60
+    } else {
+      params.encodings[0].maxFramerate = 30
+    }
     params.degradationPreference = 'maintain-framerate'
     void sender.setParameters(params).catch(() => undefined)
   } catch {
@@ -219,6 +253,10 @@ export function useWebRTC({
   const [audioOutputs, setAudioOutputs] = useState<MediaDeviceInfo[]>([])
   const [micPermissionError, setMicPermissionError] = useState<string | null>(null)
   const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null)
+  const [hasScreenAudioTrack, setHasScreenAudioTrack] = useState<boolean>(false)
+  const [screenShareQuality, setScreenShareQualityState] = useState<ScreenShareQualityMode>(
+    () => loadInitialScreenQuality(),
+  )
   const [remoteVoiceStreams, setRemoteVoiceStreams] = useState<Record<string, MediaStream>>({})
   const [remoteScreenStreams, setRemoteScreenStreams] = useState<Record<string, MediaStream>>({})
   const [localMicLevel, setLocalMicLevel] = useState(0)
@@ -227,6 +265,7 @@ export function useWebRTC({
   const localVoiceContainerRef = useRef<MediaStream | null>(null)
   const localMicTrackRef = useRef<MediaStreamTrack | null>(null)
   const localScreenStreamRef = useRef<MediaStream | null>(null)
+  const screenShareQualityRef = useRef<ScreenShareQualityMode>(screenShareQuality)
   const sendSignalRef = useRef(sendSignal)
   const onEndedCallbackRef = useRef(onScreenShareEndedByBrowser)
 
@@ -456,14 +495,15 @@ export function useWebRTC({
       if (localScreenStreamRef.current) {
         const screenStream = localScreenStreamRef.current
         const totalPeers = peersRef.current.size + 1
+        const qualityMode = screenShareQualityRef.current
         for (const track of screenStream.getTracks()) {
           const sender = pc.addTrack(track, screenStream)
-          applyScreenBitrateCap(sender, totalPeers)
+          applyScreenBitrateCap(sender, totalPeers, qualityMode)
           entry.screenSenders.push(sender)
         }
         for (const existingPeer of peersRef.current.values()) {
           for (const sender of existingPeer.screenSenders) {
-            applyScreenBitrateCap(sender, totalPeers)
+            applyScreenBitrateCap(sender, totalPeers, qualityMode)
           }
         }
       }
@@ -652,9 +692,44 @@ export function useWebRTC({
     [getOrCreatePeer, joined, localUserId],
   )
 
-  const stopTabShare = useCallback(() => {
+  const setScreenShareQuality = useCallback((nextQuality: ScreenShareQualityMode) => {
+    screenShareQualityRef.current = nextQuality
+    setScreenShareQualityState(nextQuality)
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(SCREEN_QUALITY_STORAGE_KEY, nextQuality)
+      } catch {
+        // Ignore storage write errors
+      }
+    }
+
     const activeStream = localScreenStreamRef.current
     if (!activeStream) return
+
+    const videoTrack = activeStream.getVideoTracks()[0]
+    if (videoTrack && typeof videoTrack.applyConstraints === 'function') {
+      const targetFps = nextQuality === 'sports-60' ? 60 : 30
+      void videoTrack
+        .applyConstraints({
+          frameRate: { ideal: targetFps, max: targetFps },
+        })
+        .catch(() => undefined)
+    }
+
+    const totalPeers = Math.max(1, peersRef.current.size)
+    for (const entry of peersRef.current.values()) {
+      for (const sender of entry.screenSenders) {
+        applyScreenBitrateCap(sender, totalPeers, nextQuality)
+      }
+    }
+  }, [])
+
+  const stopTabShare = useCallback(() => {
+    const activeStream = localScreenStreamRef.current
+    if (!activeStream) {
+      setHasScreenAudioTrack(false)
+      return
+    }
 
     for (const entry of peersRef.current.values()) {
       for (const sender of entry.screenSenders) {
@@ -676,6 +751,7 @@ export function useWebRTC({
 
     localScreenStreamRef.current = null
     setLocalScreenStream(null)
+    setHasScreenAudioTrack(false)
   }, [])
 
   // Automatically release getDisplayMedia if another participant claims Presenter Control
@@ -685,84 +761,107 @@ export function useWebRTC({
     }
   }, [activePresenterId, localUserId, stopTabShare])
 
-  const startTabShare = useCallback(async (): Promise<{
-    ok: boolean
-    title?: string
-    error?: string
-  }> => {
-    if (
-      typeof navigator === 'undefined' ||
-      !navigator.mediaDevices ||
-      typeof navigator.mediaDevices.getDisplayMedia !== 'function'
-    ) {
-      return {
-        ok: false,
-        error:
-          'Live Browser Tab Capture requires a desktop browser (Chrome/Edge/Brave). From a VR headset, use Mode 2 Synchronized URL Player or pair a Desktop Presenter tab.',
-      }
-    }
-
-    try {
-      stopTabShare()
-
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          frameRate: { ideal: 30, max: 30 },
-          width: { ideal: 1920, max: 1920 },
-          height: { ideal: 1080, max: 1080 },
-        },
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        },
-      })
-
-      const videoTrack = displayStream.getVideoTracks()[0]
-      if (!videoTrack) {
-        for (const t of displayStream.getTracks()) t.stop()
-        return { ok: false, error: 'No video track returned from screen capture.' }
+  const startTabShare = useCallback(
+    async (
+      qualityOverride?: ScreenShareQualityMode,
+    ): Promise<{
+      ok: boolean
+      title?: string
+      hasAudio?: boolean
+      error?: string
+    }> => {
+      if (
+        typeof navigator === 'undefined' ||
+        !navigator.mediaDevices ||
+        typeof navigator.mediaDevices.getDisplayMedia !== 'function'
+      ) {
+        return {
+          ok: false,
+          error:
+            'Live Browser Tab Capture requires a desktop browser (Chrome/Edge/Brave/Firefox). From a VR headset, use the YouTube Browser or pair a Desktop Presenter tab.',
+        }
       }
 
-      if ('contentHint' in videoTrack) {
-        videoTrack.contentHint = 'motion'
+      if (qualityOverride) {
+        setScreenShareQuality(qualityOverride)
       }
+      const activeQuality = qualityOverride ?? screenShareQualityRef.current
+      const targetFps = activeQuality === 'sports-60' ? 60 : 30
 
-      videoTrack.onended = () => {
+      try {
         stopTabShare()
-        onEndedCallbackRef.current?.()
-      }
 
-      localScreenStreamRef.current = displayStream
-      setLocalScreenStream(displayStream)
+        const displayStream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            frameRate: { ideal: targetFps, max: targetFps },
+            width: { ideal: 1920, max: 1920 },
+            height: { ideal: 1080, max: 1080 },
+          },
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            sampleRate: 48000,
+            channelCount: 2,
+          },
+        })
 
-      const totalPeers = Math.max(1, peersRef.current.size)
-      for (const entry of peersRef.current.values()) {
-        for (const oldSender of entry.screenSenders) {
-          try {
-            entry.pc.removeTrack(oldSender)
-          } catch {
-            // Ignore
+        const videoTrack = displayStream.getVideoTracks()[0]
+        if (!videoTrack) {
+          for (const t of displayStream.getTracks()) t.stop()
+          return { ok: false, error: 'No video track returned from screen capture.' }
+        }
+
+        if ('contentHint' in videoTrack) {
+          videoTrack.contentHint = 'motion'
+        }
+
+        const audioTracks = displayStream.getAudioTracks()
+        const capturedAudio = audioTracks.length > 0
+        setHasScreenAudioTrack(capturedAudio)
+        for (const audioTrack of audioTracks) {
+          if ('contentHint' in audioTrack) {
+            audioTrack.contentHint = 'music'
           }
         }
-        entry.screenSenders = []
-        if (entry.pc.signalingState !== 'closed') {
-          for (const track of displayStream.getTracks()) {
-            const sender = entry.pc.addTrack(track, displayStream)
-            applyScreenBitrateCap(sender, totalPeers)
-            entry.screenSenders.push(sender)
+
+        videoTrack.onended = () => {
+          stopTabShare()
+          onEndedCallbackRef.current?.()
+        }
+
+        localScreenStreamRef.current = displayStream
+        setLocalScreenStream(displayStream)
+
+        const totalPeers = Math.max(1, peersRef.current.size)
+        for (const entry of peersRef.current.values()) {
+          for (const oldSender of entry.screenSenders) {
+            try {
+              entry.pc.removeTrack(oldSender)
+            } catch {
+              // Ignore
+            }
+          }
+          entry.screenSenders = []
+          if (entry.pc.signalingState !== 'closed') {
+            for (const track of displayStream.getTracks()) {
+              const sender = entry.pc.addTrack(track, displayStream)
+              applyScreenBitrateCap(sender, totalPeers, activeQuality)
+              entry.screenSenders.push(sender)
+            }
           }
         }
-      }
 
-      const label = videoTrack.label?.trim() || 'Live Browser Tab'
-      return { ok: true, title: label }
-    } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : 'Screen capture was cancelled or denied.'
-      return { ok: false, error: msg }
-    }
-  }, [stopTabShare])
+        const label = videoTrack.label?.trim() || 'Live Browser Tab'
+        return { ok: true, title: label, hasAudio: capturedAudio }
+      } catch (err) {
+        const msg =
+          err instanceof Error ? err.message : 'Screen capture was cancelled or denied.'
+        return { ok: false, error: msg }
+      }
+    },
+    [setScreenShareQuality, stopTabShare],
+  )
 
   // Clean up everything on unmount
   useEffect(() => {
@@ -786,6 +885,9 @@ export function useWebRTC({
     micPermissionError,
     localMicLevel,
     localScreenStream,
+    hasScreenAudioTrack,
+    screenShareQuality,
+    setScreenShareQuality,
     remoteVoiceStreams,
     remoteScreenStreams,
     acquireMicrophone,
