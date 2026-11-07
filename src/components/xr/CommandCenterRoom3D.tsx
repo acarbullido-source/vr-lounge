@@ -22,6 +22,7 @@ import type {
   ExpansionWingSyncedState,
   ParticipantProfile,
   PresenterState,
+  RoomLightingConfig,
 } from '../../types/lounge'
 
 let hlsCtorPromise: Promise<typeof Hls> | null = null
@@ -130,18 +131,20 @@ function TacticalOperatorChair({
       {/* Five-star caster pedestal base */}
       <mesh position={[0, 0.04, 0]}>
         <cylinderGeometry args={[0.28, 0.32, 0.05, 12]} />
-        <meshStandardMaterial color="#0F172A" metalness={0.65} roughness={0.35} />
+        <meshStandardMaterial color="#1E293B" metalness={0.65} roughness={0.32} />
       </mesh>
       <mesh position={[0, 0.22, 0]}>
         <cylinderGeometry args={[0.05, 0.06, 0.34, 10]} />
-        <meshStandardMaterial color="#334155" metalness={0.7} roughness={0.3} />
+        <meshStandardMaterial color="#475569" metalness={0.7} roughness={0.28} />
       </mesh>
       {/* Contoured tactical seat cushion */}
       <RoundedBox args={[0.54, 0.09, 0.52]} position={[0, 0.41, 0]} radius={0.03} smoothness={2}>
         <meshStandardMaterial
-          color={hovered && !takenByOther ? '#1E3A5F' : '#131C2B'}
-          roughness={0.65}
-          metalness={0.15}
+          color={hovered && !takenByOther ? '#254C78' : '#1E2D45'}
+          roughness={0.55}
+          metalness={0.18}
+          emissive="#111C2D"
+          emissiveIntensity={0.24}
         />
       </RoundedBox>
       {/* High ergonomic backrest + cyan trim */}
@@ -152,7 +155,13 @@ function TacticalOperatorChair({
         radius={0.03}
         smoothness={2}
       >
-        <meshStandardMaterial color="#0F172A" roughness={0.6} metalness={0.2} />
+        <meshStandardMaterial
+          color="#1A273D"
+          roughness={0.52}
+          metalness={0.22}
+          emissive="#0F172A"
+          emissiveIntensity={0.22}
+        />
       </RoundedBox>
       <mesh position={[0, 1.12, 0.215]}>
         <boxGeometry args={[0.32, 0.025, 0.09]} />
@@ -162,7 +171,7 @@ function TacticalOperatorChair({
       {[-0.28, 0.28].map((ax) => (
         <mesh key={ax} position={[ax, 0.58, 0.02]}>
           <boxGeometry args={[0.06, 0.04, 0.36]} />
-          <meshStandardMaterial color="#1E293B" roughness={0.5} metalness={0.4} />
+          <meshStandardMaterial color="#334155" roughness={0.45} metalness={0.45} />
         </mesh>
       ))}
       {/* Floor interactive seat ring */}
@@ -181,6 +190,7 @@ function TacticalOperatorChair({
 export interface CommandCenterRoom3DProps {
   wingLayout: ExpansionWingLayout
   wingState: ExpansionWingSyncedState
+  lighting: RoomLightingConfig
   presenterState: PresenterState
   mainVideoTexture: THREE.VideoTexture
   hasMainVideoFrames: boolean
@@ -197,6 +207,7 @@ export interface CommandCenterRoom3DProps {
 export function CommandCenterRoom3D({
   wingLayout,
   wingState,
+  lighting,
   presenterState,
   mainVideoTexture,
   hasMainVideoFrames,
@@ -437,10 +448,11 @@ export function CommandCenterRoom3D({
   const roomD = 9.0
   const roomH = 3.9
   const centerX = -6.925
+  const brightnessScale = Math.max(0.55, Math.min(1.65, lighting.brightness))
 
   return (
     <group name="wing-command-center">
-      {/* Anti-Static Tactical Floor (supports double-click / VR glide) */}
+      {/* Anti-Static Tactical Slate Floor (supports double-click / VR glide) */}
       <mesh
         position={[centerX, 0.005, cmdZ]}
         rotation={[-Math.PI / 2, 0, 0]}
@@ -451,56 +463,101 @@ export function CommandCenterRoom3D({
         }}
       >
         <planeGeometry args={[roomW, roomD]} />
-        <meshStandardMaterial color="#0A101B" roughness={0.78} metalness={0.22} />
+        <meshStandardMaterial
+          color="#162238"
+          roughness={0.62}
+          metalness={0.28}
+          emissive="#0D1729"
+          emissiveIntensity={0.34 * brightnessScale}
+        />
       </mesh>
 
-      {/* Subtle Tactical Floor Grid Strips */}
-      {[-9.8, -7.8, -5.8, -3.8].map((gx) => (
+      {/* Luminous Tactical Floor Grid & Operator Pathway Strips */}
+      {[-9.8, -7.8, -5.8, -3.8].map((gx, i) => (
         <mesh key={gx} position={[gx, 0.011, cmdZ]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
-          <planeGeometry args={[0.02, roomD - 0.6]} />
-          <meshBasicMaterial color="#172A45" />
+          <planeGeometry args={[0.032, roomD - 0.6]} />
+          <meshBasicMaterial color={i % 2 === 0 ? '#38BDF8' : '#1E40AF'} />
+        </mesh>
+      ))}
+      {[-3.2, 0, 3.2].map((gzOff, i) => (
+        <mesh
+          key={`hz-${i}`}
+          position={[centerX, 0.011, cmdZ + gzOff]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          raycast={() => null}
+        >
+          <planeGeometry args={[roomW - 0.8, 0.026]} />
+          <meshBasicMaterial color={i === 1 ? '#E5A93C' : '#0284C7'} />
         </mesh>
       ))}
 
-      {/* Ceiling + Overhead Cyan Tactical Halo */}
+      {/* Ceiling + Dual Overhead Cyan & Amber Tactical Halos */}
       <mesh position={[centerX, roomH, cmdZ]} rotation={[Math.PI / 2, 0, 0]}>
         <planeGeometry args={[roomW, roomD]} />
-        <meshStandardMaterial color="#070B13" roughness={0.9} />
+        <meshStandardMaterial
+          color="#121D31"
+          roughness={0.82}
+          emissive="#0B1526"
+          emissiveIntensity={0.32 * brightnessScale}
+        />
       </mesh>
-      <mesh position={[-6.8, roomH - 0.05, cmdZ]} rotation={[Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[2.3, 2.42, 32]} />
+      <mesh position={[-6.8, roomH - 0.04, cmdZ]} rotation={[Math.PI / 2, 0, 0]} raycast={() => null}>
+        <ringGeometry args={[2.25, 2.42, 36]} />
         <meshBasicMaterial color="#38BDF8" side={THREE.DoubleSide} />
       </mesh>
-      <pointLight
-        position={[-6.8, 3.35, cmdZ]}
-        color="#7DD3FC"
-        intensity={1.05}
-        distance={12}
-        decay={1.8}
-      />
+      <mesh position={[-6.8, roomH - 0.045, cmdZ]} rotation={[Math.PI / 2, 0, 0]} raycast={() => null}>
+        <ringGeometry args={[1.35, 1.44, 32]} />
+        <meshBasicMaterial color="#E5A93C" side={THREE.DoubleSide} />
+      </mesh>
 
       {/* West Media Wall (x = -12.2), North Wall (z0 + 10.6), South Wall (z0 + 19.6) */}
       <mesh position={[-12.2, roomH / 2, cmdZ]}>
         <boxGeometry args={[0.14, roomH, roomD]} />
-        <meshStandardMaterial color="#0B1322" roughness={0.75} metalness={0.25} />
+        <meshStandardMaterial
+          color="#18263E"
+          roughness={0.68}
+          metalness={0.28}
+          emissive="#0E192D"
+          emissiveIntensity={0.32 * brightnessScale}
+        />
       </mesh>
       <mesh position={[centerX, roomH / 2, z0 + 10.6]}>
         <boxGeometry args={[roomW, roomH, 0.14]} />
-        <meshStandardMaterial color="#0E1729" roughness={0.8} metalness={0.18} />
+        <meshStandardMaterial
+          color="#1D2D47"
+          roughness={0.72}
+          metalness={0.22}
+          emissive="#111C30"
+          emissiveIntensity={0.32 * brightnessScale}
+        />
       </mesh>
       <mesh position={[centerX, roomH / 2, z0 + 19.6]}>
         <boxGeometry args={[roomW, roomH, 0.14]} />
-        <meshStandardMaterial color="#0E1729" roughness={0.8} metalness={0.18} />
+        <meshStandardMaterial
+          color="#1D2D47"
+          roughness={0.72}
+          metalness={0.22}
+          emissive="#111C30"
+          emissiveIntensity={0.32 * brightnessScale}
+        />
       </mesh>
 
-      {/* Cyan Perimeter Cove Light Strips */}
-      <mesh position={[-12.1, 3.76, cmdZ]}>
-        <boxGeometry args={[0.04, 0.04, roomD - 0.4]} />
+      {/* Cyan & Gold Perimeter Cove Light Strips */}
+      <mesh position={[-12.1, 3.76, cmdZ]} raycast={() => null}>
+        <boxGeometry args={[0.04, 0.045, roomD - 0.4]} />
         <meshBasicMaterial color="#38BDF8" />
       </mesh>
-      <mesh position={[-12.1, 0.12, cmdZ]}>
-        <boxGeometry args={[0.04, 0.03, roomD - 0.4]} />
-        <meshBasicMaterial color="#0284C7" />
+      <mesh position={[-12.1, 0.12, cmdZ]} raycast={() => null}>
+        <boxGeometry args={[0.04, 0.035, roomD - 0.4]} />
+        <meshBasicMaterial color="#0EA5E9" />
+      </mesh>
+      <mesh position={[centerX, 3.76, z0 + 10.7]} raycast={() => null}>
+        <boxGeometry args={[roomW - 0.6, 0.04, 0.04]} />
+        <meshBasicMaterial color="#38BDF8" />
+      </mesh>
+      <mesh position={[centerX, 3.76, z0 + 19.5]} raycast={() => null}>
+        <boxGeometry args={[roomW - 0.6, 0.04, 0.04]} />
+        <meshBasicMaterial color="#38BDF8" />
       </mesh>
 
       {/* =================================================================== */}
@@ -917,65 +974,97 @@ export function CommandCenterRoom3D({
       <group position={[-5.65, 0, cmdZ]}>
         {/* Pedestal */}
         <mesh position={[0, 0.34, 0]}>
-          <cylinderGeometry args={[0.72, 0.86, 0.68, 8]} />
-          <meshStandardMaterial color="#0F172A" metalness={0.55} roughness={0.35} />
+          <cylinderGeometry args={[0.76, 0.9, 0.68, 8]} />
+          <meshStandardMaterial
+            color="#1E2D45"
+            metalness={0.55}
+            roughness={0.32}
+            emissive="#111C30"
+            emissiveIntensity={0.28 * brightnessScale}
+          />
         </mesh>
         {/* Glowing Emitter Ring */}
         <mesh position={[0, 0.69, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[0.42, 0.68, 24]} />
+          <ringGeometry args={[0.42, 0.72, 28]} />
           <meshBasicMaterial color="#0284C7" />
         </mesh>
         <mesh position={[0, 0.695, 0]} rotation={[-Math.PI / 2, 0, 0]}>
           <circleGeometry args={[0.41, 24]} />
-          <meshBasicMaterial color="#38BDF8" transparent opacity={0.35} />
+          <meshBasicMaterial color="#38BDF8" transparent opacity={0.48} />
         </mesh>
 
         {/* Rotating 3D Wireframe Hologram Globe */}
-        <group position={[0, 1.06, 0]} ref={globeRef}>
+        <group position={[0, 1.08, 0]} ref={globeRef}>
           <mesh raycast={() => null}>
-            <sphereGeometry args={[0.31, 16, 12]} />
-            <meshBasicMaterial color="#38BDF8" wireframe transparent opacity={0.62} />
+            <sphereGeometry args={[0.34, 16, 12]} />
+            <meshBasicMaterial color="#38BDF8" wireframe transparent opacity={0.78} />
           </mesh>
           <mesh raycast={() => null}>
-            <sphereGeometry args={[0.17, 10, 8]} />
-            <meshBasicMaterial color="#0EA5E9" transparent opacity={0.22} />
+            <sphereGeometry args={[0.19, 10, 8]} />
+            <meshBasicMaterial color="#38BDF8" transparent opacity={0.32} />
           </mesh>
         </group>
         <mesh
           ref={ring1Ref}
-          position={[0, 1.06, 0]}
+          position={[0, 1.08, 0]}
           rotation={[Math.PI / 3, 0, 0]}
           raycast={() => null}
         >
-          <torusGeometry args={[0.42, 0.007, 8, 36]} />
+          <torusGeometry args={[0.45, 0.008, 8, 36]} />
           <meshBasicMaterial color="#E5A93C" />
         </mesh>
         <mesh
           ref={ring2Ref}
-          position={[0, 1.06, 0]}
+          position={[0, 1.08, 0]}
           rotation={[-Math.PI / 4, 0.4, 0]}
           raycast={() => null}
         >
-          <torusGeometry args={[0.48, 0.005, 8, 36]} />
+          <torusGeometry args={[0.52, 0.006, 8, 36]} />
           <meshBasicMaterial color="#38BDF8" />
         </mesh>
       </group>
 
       {/* Long Tactical Operator Bridge Desk facing West Media Wall */}
       <group position={[-8.95, 0, cmdZ]}>
-        <RoundedBox args={[0.82, 0.74, 5.2]} position={[0, 0.37, 0]} radius={0.03} smoothness={2}>
-          <meshStandardMaterial color="#111927" roughness={0.5} metalness={0.38} />
+        <RoundedBox args={[0.84, 0.74, 5.25]} position={[0, 0.37, 0]} radius={0.03} smoothness={2}>
+          <meshStandardMaterial
+            color="#1E2D45"
+            roughness={0.45}
+            metalness={0.42}
+            emissive="#111C30"
+            emissiveIntensity={0.28 * brightnessScale}
+          />
         </RoundedBox>
-        {/* Glowing console status pads on desk */}
+        {/* Front & Rear Cyan LED Trim on Operator Bridge Desk */}
+        <mesh position={[0.425, 0.68, 0]} raycast={() => null}>
+          <boxGeometry args={[0.015, 0.025, 5.15]} />
+          <meshBasicMaterial color="#38BDF8" />
+        </mesh>
+        <mesh position={[-0.425, 0.68, 0]} raycast={() => null}>
+          <boxGeometry args={[0.015, 0.025, 5.15]} />
+          <meshBasicMaterial color="#E5A93C" />
+        </mesh>
+        {/* Glowing console status pads & angled tactical mini-monitors at each station */}
         {[-1.95, -0.68, 0.68, 1.95].map((dzOff, i) => (
-          <mesh
-            key={i}
-            position={[0.14, 0.746, dzOff]}
-            rotation={[-Math.PI / 2, 0, 0]}
-          >
-            <planeGeometry args={[0.38, 0.68]} />
-            <meshBasicMaterial color={i % 2 === 0 ? '#0EA5E9' : '#E5A93C'} transparent opacity={0.42} />
-          </mesh>
+          <group key={i} position={[0, 0.746, dzOff]}>
+            <mesh position={[0.14, 0, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+              <planeGeometry args={[0.38, 0.68]} />
+              <meshBasicMaterial
+                color={i % 2 === 0 ? '#38BDF8' : '#E5A93C'}
+                transparent
+                opacity={0.55}
+              />
+            </mesh>
+            {/* Angled Mini Telemetry Monitor on Desk */}
+            <mesh
+              position={[-0.18, 0.14, 0]}
+              rotation={[0, Math.PI / 2, -0.35]}
+              raycast={() => null}
+            >
+              <boxGeometry args={[0.52, 0.24, 0.02]} />
+              <meshBasicMaterial color="#0EA5E9" />
+            </mesh>
+          </group>
         ))}
       </group>
 

@@ -16,12 +16,59 @@ import { fireplaceAudio } from '../../services/fireplaceAudio'
 import type {
   ComputedSeat,
   ExpansionWingSyncedState,
+  LightingPresetId,
   ParticipantProfile,
   PresenterState,
   RoomCustomizationState,
+  RoomLightingConfig,
 } from '../../types/lounge'
 import { CommandCenterRoom3D } from './CommandCenterRoom3D'
 import { OutdoorLakeDeck3D } from './OutdoorLakeDeck3D'
+
+const noopRaycast = () => null
+
+// Pre-allocated shared geometries & materials for Bookcases (eliminates 150+ per-instance GPU allocations)
+const BOOK_PALETTE = [
+  '#B91C1C',
+  '#2563EB',
+  '#15803D',
+  '#D97706',
+  '#7C3AED',
+  '#EA580C',
+  '#0D9488',
+  '#CA8A04',
+] as const
+
+const SHARED_BOOK_MATERIALS = BOOK_PALETTE.map(
+  (hex) =>
+    new THREE.MeshStandardMaterial({
+      color: hex,
+      emissive: hex,
+      emissiveIntensity: 0.45,
+      roughness: 0.55,
+      metalness: 0.12,
+    }),
+)
+
+const SHARED_CABINET_MAT = new THREE.MeshStandardMaterial({
+  color: '#522D1D',
+  emissive: '#331A0F',
+  emissiveIntensity: 0.48,
+  roughness: 0.62,
+  metalness: 0.12,
+})
+
+const SHARED_SHELF_MAT = new THREE.MeshStandardMaterial({
+  color: '#6E3D26',
+  emissive: '#452415',
+  emissiveIntensity: 0.52,
+  roughness: 0.52,
+  metalness: 0.15,
+})
+
+const SHARED_LED_STRIP_MAT = new THREE.MeshBasicMaterial({
+  color: '#FEF08A',
+})
 
 interface ExecutiveLeatherChairProps {
   seat: ComputedSeat
@@ -53,57 +100,73 @@ function ExecutiveLeatherChair({
         if (!takenByOther) onSelectSeat(seat.id)
       }}
     >
-      {/* Brushed Brass 5-Star Base */}
+      {/* Brushed Gold 5-Star Base */}
       <mesh position={[0, 0.04, 0]}>
         <cylinderGeometry args={[0.27, 0.31, 0.05, 12]} />
-        <meshStandardMaterial color="#B8893A" metalness={0.75} roughness={0.28} />
+        <meshStandardMaterial
+          color="#E5A93C"
+          emissive="#785216"
+          emissiveIntensity={0.35}
+          metalness={0.78}
+          roughness={0.24}
+        />
       </mesh>
       <mesh position={[0, 0.22, 0]}>
         <cylinderGeometry args={[0.045, 0.055, 0.34, 10]} />
-        <meshStandardMaterial color="#8A6426" metalness={0.75} roughness={0.3} />
-      </mesh>
-      {/* Tufted Cognac/Espresso Executive Cushion */}
-      <RoundedBox args={[0.56, 0.1, 0.54]} position={[0, 0.42, 0]} radius={0.035} smoothness={2}>
         <meshStandardMaterial
-          color={hovered && !takenByOther ? '#6B3D24' : '#4E2B19'}
-          emissive="#3A1E0F"
-          emissiveIntensity={0.42}
-          roughness={0.52}
-          metalness={0.1}
+          color="#C8922E"
+          emissive="#6B4A14"
+          emissiveIntensity={0.35}
+          metalness={0.75}
+          roughness={0.28}
+        />
+      </mesh>
+      {/* Tufted Cognac Saddle-Leather Executive Cushion */}
+      <RoundedBox args={[0.58, 0.11, 0.56]} position={[0, 0.43, 0]} radius={0.035} smoothness={2}>
+        <meshStandardMaterial
+          color={hovered && !takenByOther ? '#A85B31' : '#854522'}
+          emissive="#542912"
+          emissiveIntensity={0.5}
+          roughness={0.44}
+          metalness={0.14}
         />
       </RoundedBox>
-      {/* Tall Executive Backrest */}
+      {/* Tall Executive Backrest with Brass Headrest Trim */}
       <RoundedBox
-        args={[0.54, 0.78, 0.09]}
-        position={[0, 0.83, 0.23]}
+        args={[0.56, 0.8, 0.095]}
+        position={[0, 0.84, 0.23]}
         rotation={[0.08, 0, 0]}
         radius={0.035}
         smoothness={2}
       >
         <meshStandardMaterial
-          color="#462515"
-          emissive="#351B0E"
-          emissiveIntensity={0.4}
-          roughness={0.5}
-          metalness={0.12}
+          color="#7A3E1D"
+          emissive="#4D2510"
+          emissiveIntensity={0.48}
+          roughness={0.44}
+          metalness={0.15}
         />
       </RoundedBox>
-      {/* Brass Armrests */}
-      {[-0.29, 0.29].map((ax) => (
-        <mesh key={ax} position={[ax, 0.59, 0.02]}>
-          <boxGeometry args={[0.05, 0.04, 0.38]} />
+      <mesh position={[0, 1.22, 0.26]} rotation={[0.08, 0, 0]} raycast={noopRaycast}>
+        <boxGeometry args={[0.42, 0.028, 0.1]} />
+        <meshBasicMaterial color="#FBBF24" />
+      </mesh>
+      {/* Brushed Brass Armrests */}
+      {[-0.3, 0.3].map((ax) => (
+        <mesh key={ax} position={[ax, 0.6, 0.02]}>
+          <boxGeometry args={[0.055, 0.042, 0.4]} />
           <meshStandardMaterial
-            color="#D4A54E"
-            emissive="#8A6421"
-            emissiveIntensity={0.35}
-            metalness={0.7}
-            roughness={0.28}
+            color="#EAB308"
+            emissive="#855D14"
+            emissiveIntensity={0.42}
+            metalness={0.75}
+            roughness={0.24}
           />
         </mesh>
       ))}
       {(hovered || isLocalSeat) && (
         <mesh position={[0, 0.015, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[0.35, 0.42, 24]} />
+          <ringGeometry args={[0.36, 0.44, 24]} />
           <meshBasicMaterial
             color={isLocalSeat ? '#E5A93C' : takenByOther ? '#EF4444' : '#FBBF24'}
           />
@@ -137,49 +200,64 @@ function ChesterfieldArmchair({
       }}
     >
       {/* Plush Oxblood Leather Seat Base */}
-      <RoundedBox args={[0.84, 0.34, 0.78]} position={[0, 0.22, 0]} radius={0.06} smoothness={2}>
+      <RoundedBox args={[0.86, 0.35, 0.8]} position={[0, 0.22, 0]} radius={0.06} smoothness={2}>
         <meshStandardMaterial
-          color={hovered && !takenByOther ? '#8B2E2E' : '#6E2222'}
-          emissive="#4A1515"
-          emissiveIntensity={0.45}
-          roughness={0.62}
+          color={hovered && !takenByOther ? '#B93838' : '#962929'}
+          emissive="#5E1616"
+          emissiveIntensity={0.52}
+          roughness={0.5}
+          metalness={0.12}
+        />
+      </RoundedBox>
+      {/* Warm Tartan / Gold Accent Throw Cushion */}
+      <RoundedBox args={[0.44, 0.12, 0.36]} position={[0, 0.43, 0.1]} radius={0.04} smoothness={2}>
+        <meshStandardMaterial
+          color="#D97706"
+          emissive="#78350F"
+          emissiveIntensity={0.42}
+          roughness={0.65}
         />
       </RoundedBox>
       {/* Rolled Wingback Backrest */}
       <RoundedBox
-        args={[0.84, 0.72, 0.18]}
-        position={[0, 0.68, 0.31]}
+        args={[0.86, 0.74, 0.18]}
+        position={[0, 0.69, 0.31]}
         rotation={[0.09, 0, 0]}
         radius={0.07}
         smoothness={2}
       >
         <meshStandardMaterial
-          color="#641E1E"
-          emissive="#421212"
-          emissiveIntensity={0.42}
-          roughness={0.6}
+          color="#8A2424"
+          emissive="#541313"
+          emissiveIntensity={0.5}
+          roughness={0.52}
         />
       </RoundedBox>
-      {/* Rolled Leather Arms */}
-      {[-0.38, 0.38].map((ax) => (
-        <RoundedBox
-          key={ax}
-          args={[0.16, 0.34, 0.76]}
-          position={[ax, 0.48, 0.01]}
-          radius={0.06}
-          smoothness={2}
-        >
-          <meshStandardMaterial
-            color="#6A2020"
-            emissive="#451414"
-            emissiveIntensity={0.42}
-            roughness={0.6}
-          />
-        </RoundedBox>
+      {/* Rolled Leather Arms + Brass Nailhead Trim */}
+      {[-0.39, 0.39].map((ax) => (
+        <group key={ax}>
+          <RoundedBox
+            args={[0.17, 0.35, 0.78]}
+            position={[ax, 0.48, 0.01]}
+            radius={0.06}
+            smoothness={2}
+          >
+            <meshStandardMaterial
+              color="#912626"
+              emissive="#591515"
+              emissiveIntensity={0.5}
+              roughness={0.52}
+            />
+          </RoundedBox>
+          <mesh position={[ax, 0.48, -0.385]} raycast={noopRaycast}>
+            <circleGeometry args={[0.045, 10]} />
+            <meshBasicMaterial color="#FBBF24" />
+          </mesh>
+        </group>
       ))}
       {(hovered || isLocalSeat) && (
         <mesh position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[0.48, 0.55, 24]} />
+          <ringGeometry args={[0.48, 0.56, 24]} />
           <meshBasicMaterial
             color={isLocalSeat ? '#E5A93C' : takenByOther ? '#EF4444' : '#FB923C'}
           />
@@ -188,17 +266,6 @@ function ChesterfieldArmchair({
     </group>
   )
 }
-
-const BOOK_PALETTE = [
-  '#991B1B',
-  '#1D4ED8',
-  '#15803D',
-  '#B45309',
-  '#6D28D9',
-  '#C2410C',
-  '#0F766E',
-  '#D97706',
-]
 
 function ProceduralBookcaseUnit({
   position,
@@ -212,44 +279,41 @@ function ProceduralBookcaseUnit({
   const shelfYs = [0.45, 1.05, 1.65, 2.25, 2.85]
   return (
     <group position={position} rotation={[0, rotationY, 0]}>
-      {/* Walnut Cabinet Backing & Frame */}
-      <mesh position={[0, 1.75, 0]}>
-        <boxGeometry args={[width, 3.5, 0.36]} />
-        <meshStandardMaterial
-          color="#3B2116"
-          emissive="#26140C"
-          emissiveIntensity={0.45}
-          roughness={0.72}
-        />
+      {/* Warm Cherry-Mahogany Cabinet Backing Panel (set cleanly behind the shelves & books) */}
+      <mesh position={[0, 1.75, -0.12]} material={SHARED_CABINET_MAT} raycast={noopRaycast}>
+        <boxGeometry args={[width, 3.5, 0.1]} />
       </mesh>
-      {/* Shelves + Clustered Book Spines */}
+      {/* Left & Right Vertical Cabinet Side Pillars */}
+      {[-width / 2 + 0.04, width / 2 - 0.04].map((sx) => (
+        <mesh key={sx} position={[sx, 1.75, 0.02]} material={SHARED_CABINET_MAT} raycast={noopRaycast}>
+          <boxGeometry args={[0.08, 3.5, 0.34]} />
+        </mesh>
+      ))}
+      {/* Top Crown Molding + Integrated Warm Gallery Strip */}
+      <mesh position={[0, 3.52, 0.05]} material={SHARED_SHELF_MAT} raycast={noopRaycast}>
+        <boxGeometry args={[width + 0.08, 0.08, 0.42]} />
+      </mesh>
+      {/* Shelves + Under-Shelf Warm LED Strips + Clustered Hardcover Spines */}
       {shelfYs.map((sy, sIdx) => (
         <group key={sy}>
-          <mesh position={[0, sy, 0.03]}>
-            <boxGeometry args={[width - 0.08, 0.04, 0.34]} />
-            <meshStandardMaterial
-              color="#522D1D"
-              emissive="#361C11"
-              emissiveIntensity={0.48}
-              roughness={0.65}
-            />
+          <mesh position={[0, sy, 0.03]} material={SHARED_SHELF_MAT} raycast={noopRaycast}>
+            <boxGeometry args={[width - 0.06, 0.045, 0.32]} />
+          </mesh>
+          {/* Warm Under-Shelf LED Accent Strip */}
+          <mesh position={[0, sy + 0.54, 0.16]} material={SHARED_LED_STRIP_MAT} raycast={noopRaycast}>
+            <boxGeometry args={[width - 0.18, 0.012, 0.018]} />
           </mesh>
           {[-0.34, -0.17, 0, 0.17, 0.34].map((frac, bIdx) => {
-            const color = BOOK_PALETTE[(sIdx * 5 + bIdx) % BOOK_PALETTE.length]
+            const mat = SHARED_BOOK_MATERIALS[(sIdx * 5 + bIdx) % SHARED_BOOK_MATERIALS.length]
             const bookH = 0.34 + ((sIdx + bIdx) % 3) * 0.05
             return (
               <mesh
                 key={bIdx}
-                position={[frac * width, sy + 0.02 + bookH / 2, 0.06]}
-                raycast={() => null}
+                position={[frac * width, sy + 0.024 + bookH / 2, 0.05]}
+                material={mat}
+                raycast={noopRaycast}
               >
                 <boxGeometry args={[width * 0.13, bookH, 0.22]} />
-                <meshStandardMaterial
-                  color={color}
-                  emissive={color}
-                  emissiveIntensity={0.38}
-                  roughness={0.7}
-                />
               </mesh>
             )
           })}
@@ -274,16 +338,16 @@ function DoorwaySign3D({
 }) {
   return (
     <group position={position} rotation={[0, rotationY, 0]}>
-      <RoundedBox args={[1.68, 0.28, 0.03]} radius={0.02} smoothness={2}>
-        <meshBasicMaterial color="#0A0F18" />
+      <RoundedBox args={[1.72, 0.3, 0.03]} radius={0.02} smoothness={2}>
+        <meshBasicMaterial color="#0F172A" />
       </RoundedBox>
-      <mesh position={[0, 0.125, 0.018]}>
-        <planeGeometry args={[1.56, 0.014]} />
+      <mesh position={[0, 0.13, 0.018]}>
+        <planeGeometry args={[1.6, 0.018]} />
         <meshBasicMaterial color={accent} />
       </mesh>
       <Text
         position={[0, 0.035, 0.02]}
-        fontSize={0.072}
+        fontSize={0.074}
         color="#F8FAFC"
         anchorX="center"
         anchorY="middle"
@@ -292,8 +356,8 @@ function DoorwaySign3D({
       </Text>
       <Text
         position={[0, -0.065, 0.02]}
-        fontSize={0.042}
-        color="#94A3B8"
+        fontSize={0.044}
+        color="#CBD5E1"
         anchorX="center"
         anchorY="middle"
       >
@@ -316,6 +380,8 @@ export interface ExpansionWing3DProps {
   onTeleportToFloor?: (point: [number, number, number]) => void
   onJumpToDestination?: (dest: ExpansionRoomDestination) => void
   onUpdateWingState: (patch: Partial<ExpansionWingSyncedState>) => void
+  onUpdateLighting?: (patch: Partial<RoomLightingConfig>) => void
+  onApplyLightingPreset?: (presetId: LightingPresetId) => void
   onOpenCommandOpsDrawer?: () => void
 }
 
@@ -332,11 +398,12 @@ export function ExpansionWing3D({
   onTeleportToFloor,
   onJumpToDestination,
   onUpdateWingState,
+  onUpdateLighting,
+  onApplyLightingPreset,
   onOpenCommandOpsDrawer,
 }: ExpansionWing3DProps) {
-  const sizeSpec =
-    ROOM_SIZE_SPECS[roomCustomization.architecture.sizePreset] ??
-    ROOM_SIZE_SPECS.classic
+  const { architecture, lighting } = roomCustomization
+  const sizeSpec = ROOM_SIZE_SPECS[architecture.sizePreset] ?? ROOM_SIZE_SPECS.classic
   const wingLayout = useMemo(
     () => computeExpansionWingLayout(sizeSpec.backZ),
     [sizeSpec.backZ],
@@ -354,20 +421,50 @@ export function ExpansionWing3D({
     }
   }, [])
 
+  const wingFrontLightRef = useRef<THREE.PointLight>(null)
+  const wingRearLightRef = useRef<THREE.PointLight>(null)
   const hearthFlameRef = useRef<THREE.Group>(null)
   const hearthLightRef = useRef<THREE.PointLight>(null)
 
-  useFrame(({ clock }) => {
+  const targetAmbientColor = useMemo(
+    () => new THREE.Color(lighting.ambientTint || '#DCE4F5'),
+    [lighting.ambientTint],
+  )
+
+  // Consolidated single useFrame for Wing lighting & hearth animation (72Hz/90Hz Quest 3 safe)
+  useFrame(({ clock }, delta) => {
     const t = clock.getElapsedTime()
+    const lerpAlpha = 1 - Math.exp(-5.0 * Math.min(delta, 0.1))
+    const masterGain = Math.max(0.25, lighting.brightness || 1.0)
+
+    if (wingFrontLightRef.current) {
+      wingFrontLightRef.current.intensity = THREE.MathUtils.lerp(
+        wingFrontLightRef.current.intensity,
+        22.0 * masterGain,
+        lerpAlpha,
+      )
+      wingFrontLightRef.current.color.lerp(targetAmbientColor, lerpAlpha)
+    }
+
+    if (wingRearLightRef.current) {
+      wingRearLightRef.current.intensity = THREE.MathUtils.lerp(
+        wingRearLightRef.current.intensity,
+        19.5 * masterGain,
+        lerpAlpha,
+      )
+      wingRearLightRef.current.color.lerp(targetAmbientColor, lerpAlpha)
+    }
+
     if (hearthFlameRef.current && wingState.libraryFireLit) {
       hearthFlameRef.current.scale.y =
-        0.92 + Math.sin(t * 10.5) * 0.14 + Math.cos(t * 16.0) * 0.06
+        0.95 + Math.sin(t * 10.5) * 0.14 + Math.cos(t * 16.0) * 0.06
       hearthFlameRef.current.scale.x = 0.96 + Math.sin(t * 7.2) * 0.06
     }
+
     if (hearthLightRef.current) {
       hearthLightRef.current.intensity = wingState.libraryFireLit
-        ? 1.15 + Math.sin(t * 11.0) * 0.16
-        : 0.08
+        ? (16.5 + Math.sin(t * 11.0) * 2.5) * Math.max(0.55, masterGain)
+        : 0
     }
   })
 
@@ -397,13 +494,35 @@ export function ExpansionWing3D({
   const boardroomShowingMirror =
     wingState.boardroomScreenMode === 'mirror-lounge' && hasMainVideoFrames
 
+  // Scale architectural self-illumination smoothly with the user's lighting brightness slider
+  const emissiveBoost = Math.max(0.28, Math.min(1.5, lighting.brightness || 1.0))
+  const accentHex = lighting.accentColor || '#E5A93C'
+
   return (
     <group name="clubhouse-expansion-wing">
+      {/* High-Output Zone-Balanced Wing PointLights (replaces 8 tiny lights with 2 wide-throw lights) */}
+      <pointLight
+        ref={wingFrontLightRef}
+        position={[0, 3.6, boardZ]}
+        color={lighting.ambientTint || '#FEF3C7'}
+        intensity={22.0}
+        distance={30}
+        decay={1.15}
+      />
+      <pointLight
+        ref={wingRearLightRef}
+        position={[-2.2, 3.6, z0 + 18.2]}
+        color={lighting.ambientTint || '#E0F2FE'}
+        intensity={19.5}
+        distance={32}
+        decay={1.15}
+      />
+
       {/* =================================================================== */}
       {/* 1. GRAND CLUBHOUSE GALLERY HALLWAY (x in [-1.65, +1.65], dz 0..20.4) */}
       {/* =================================================================== */}
       <group name="wing-grand-hallway">
-        {/* Hallway Floor + Warm Velvet/Gold Center Carpet Runner */}
+        {/* Polished Travertine Hallway Floor + Royal Crimson & Gold Runner */}
         <mesh
           position={[0, 0.004, z0 + HALLWAY_LENGTH / 2]}
           rotation={[-Math.PI / 2, 0, 0]}
@@ -414,89 +533,170 @@ export function ExpansionWing3D({
           }}
         >
           <planeGeometry args={[HALLWAY_HALF_WIDTH * 2, HALLWAY_LENGTH + 0.3]} />
-          <meshStandardMaterial color="#151922" roughness={0.72} metalness={0.18} />
+          <meshStandardMaterial
+            color="#2B3446"
+            emissive="#1B2230"
+            emissiveIntensity={0.42 * emissiveBoost}
+            roughness={0.55}
+            metalness={0.2}
+          />
         </mesh>
+        {/* Gold Carpet Border */}
         <mesh
-          position={[0, 0.009, z0 + HALLWAY_LENGTH / 2]}
+          position={[0, 0.008, z0 + HALLWAY_LENGTH / 2]}
           rotation={[-Math.PI / 2, 0, 0]}
-          raycast={() => null}
+          raycast={noopRaycast}
         >
-          <planeGeometry args={[1.55, HALLWAY_LENGTH - 0.4]} />
-          <meshStandardMaterial color="#3A231B" roughness={0.88} />
+          <planeGeometry args={[1.68, HALLWAY_LENGTH - 0.3]} />
+          <meshBasicMaterial color="#D97706" />
+        </mesh>
+        {/* Crimson Velvet Runner */}
+        <mesh
+          position={[0, 0.011, z0 + HALLWAY_LENGTH / 2]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          raycast={noopRaycast}
+        >
+          <planeGeometry args={[1.52, HALLWAY_LENGTH - 0.4]} />
+          <meshStandardMaterial
+            color="#7F1D1D"
+            emissive="#450A0A"
+            emissiveIntensity={0.45 * emissiveBoost}
+            roughness={0.85}
+          />
         </mesh>
 
-        {/* Hallway Ceiling + Warm Cove Lighting */}
+        {/* Hallway Coffered Ceiling + Luminous Skylight Panels */}
         <mesh
           position={[0, HALLWAY_HEIGHT, z0 + HALLWAY_LENGTH / 2]}
           rotation={[Math.PI / 2, 0, 0]}
         >
           <planeGeometry args={[HALLWAY_HALF_WIDTH * 2, HALLWAY_LENGTH + 0.2]} />
-          <meshStandardMaterial color="#0D1017" roughness={0.9} />
+          <meshStandardMaterial
+            color="#1E2534"
+            emissive="#111722"
+            emissiveIntensity={0.4 * emissiveBoost}
+            roughness={0.85}
+          />
         </mesh>
-        {[3.2, 10.2, 17.2].map((dzLight) => (
-          <group key={dzLight} position={[0, HALLWAY_HEIGHT - 0.05, z0 + dzLight]}>
-            <mesh rotation={[Math.PI / 2, 0, 0]} raycast={() => null}>
-              <planeGeometry args={[1.2, 0.35]} />
-              <meshBasicMaterial color="#FDE68A" />
+        {[2.8, 7.6, 12.4, 17.4].map((dzLight) => (
+          <group key={dzLight} position={[0, HALLWAY_HEIGHT - 0.04, z0 + dzLight]}>
+            <mesh rotation={[Math.PI / 2, 0, 0]} raycast={noopRaycast}>
+              <planeGeometry args={[1.55, 0.72]} />
+              <meshBasicMaterial color="#CA8A04" />
+            </mesh>
+            <mesh position={[0, -0.005, 0]} rotation={[Math.PI / 2, 0, 0]} raycast={noopRaycast}>
+              <planeGeometry args={[1.42, 0.58]} />
+              <meshBasicMaterial color="#FEF9C3" />
             </mesh>
           </group>
         ))}
-        <pointLight
-          position={[0, 3.4, z0 + 5.4]}
-          color="#FDE68A"
-          intensity={0.85}
-          distance={14}
-          decay={1.7}
-        />
-        <pointLight
-          position={[0, 3.4, z0 + 15.2]}
-          color="#BAE6FD"
-          intensity={0.85}
-          distance={14}
-          decay={1.7}
-        />
+
+        {/* Continuous Warm Brass Ceiling Cove Strips along Both Hallway Walls */}
+        {[-HALLWAY_HALF_WIDTH + 0.09, HALLWAY_HALF_WIDTH - 0.09].map((cx) => (
+          <mesh
+            key={cx}
+            position={[cx, HALLWAY_HEIGHT - 0.08, z0 + HALLWAY_LENGTH / 2]}
+            raycast={noopRaycast}
+          >
+            <boxGeometry args={[0.03, 0.03, HALLWAY_LENGTH - 0.4]} />
+            <meshBasicMaterial color={accentHex} />
+          </mesh>
+        ))}
 
         {/* WEST HALLWAY PARTITION WALL (x = -1.65) with Doorways at dz [4.25, 6.55] & [13.85, 16.15] */}
-        <mesh position={[-HALLWAY_HALF_WIDTH, HALLWAY_HEIGHT / 2, z0 + 2.125]}>
-          <boxGeometry args={[0.14, HALLWAY_HEIGHT, 4.25]} />
-          <meshStandardMaterial color="#1C2230" roughness={0.78} />
-        </mesh>
-        <mesh position={[-HALLWAY_HALF_WIDTH, HALLWAY_HEIGHT / 2, z0 + 10.2]}>
-          <boxGeometry args={[0.14, HALLWAY_HEIGHT, 7.3]} />
-          <meshStandardMaterial color="#1C2230" roughness={0.78} />
-        </mesh>
-        <mesh position={[-HALLWAY_HALF_WIDTH, HALLWAY_HEIGHT / 2, z0 + 18.275]}>
-          <boxGeometry args={[0.14, HALLWAY_HEIGHT, 4.25]} />
-          <meshStandardMaterial color="#1C2230" roughness={0.78} />
-        </mesh>
+        {[
+          [z0 + 2.125, 4.25],
+          [z0 + 10.2, 7.3],
+          [z0 + 18.275, 4.25],
+        ].map(([wz, wLen], idx) => (
+          <group key={idx} position={[-HALLWAY_HALF_WIDTH, 0, wz]}>
+            <mesh position={[0, HALLWAY_HEIGHT / 2, 0]}>
+              <boxGeometry args={[0.14, HALLWAY_HEIGHT, wLen]} />
+              <meshStandardMaterial
+                color="#333F54"
+                emissive="#1D2533"
+                emissiveIntensity={0.44 * emissiveBoost}
+                roughness={0.7}
+              />
+            </mesh>
+            {/* Lower Walnut Wainscot + Brass Chair Rail */}
+            <mesh position={[0.015, 0.55, 0]} raycast={noopRaycast}>
+              <boxGeometry args={[0.13, 1.1, wLen - 0.04]} />
+              <meshStandardMaterial
+                color="#5C341E"
+                emissive="#381E10"
+                emissiveIntensity={0.45 * emissiveBoost}
+                roughness={0.62}
+              />
+            </mesh>
+            <mesh position={[0.082, 1.12, 0]} raycast={noopRaycast}>
+              <boxGeometry args={[0.015, 0.035, wLen - 0.04]} />
+              <meshBasicMaterial color={accentHex} />
+            </mesh>
+          </group>
+        ))}
         {/* West Doorway Lintels (y = 3.45, height 0.7) */}
-        <mesh position={[-HALLWAY_HALF_WIDTH, 3.45, z0 + 5.4]}>
-          <boxGeometry args={[0.14, 0.7, 2.3]} />
-          <meshStandardMaterial color="#1C2230" roughness={0.78} />
-        </mesh>
-        <mesh position={[-HALLWAY_HALF_WIDTH, 3.45, z0 + 15.0]}>
-          <boxGeometry args={[0.14, 0.7, 2.3]} />
-          <meshStandardMaterial color="#1C2230" roughness={0.78} />
-        </mesh>
+        {[z0 + 5.4, z0 + 15.0].map((lz) => (
+          <mesh key={lz} position={[-HALLWAY_HALF_WIDTH, 3.45, lz]}>
+            <boxGeometry args={[0.14, 0.7, 2.3]} />
+            <meshStandardMaterial
+              color="#333F54"
+              emissive="#1D2533"
+              emissiveIntensity={0.44 * emissiveBoost}
+              roughness={0.7}
+            />
+          </mesh>
+        ))}
 
         {/* EAST HALLWAY PARTITION WALL (x = +1.65) with Doorway at dz [4.25, 6.55] */}
-        <mesh position={[HALLWAY_HALF_WIDTH, HALLWAY_HEIGHT / 2, z0 + 2.125]}>
-          <boxGeometry args={[0.14, HALLWAY_HEIGHT, 4.25]} />
-          <meshStandardMaterial color="#1C2230" roughness={0.78} />
-        </mesh>
-        <mesh position={[HALLWAY_HALF_WIDTH, HALLWAY_HEIGHT / 2, z0 + 13.475]}>
-          <boxGeometry args={[0.14, HALLWAY_HEIGHT, 13.85]} />
-          <meshStandardMaterial color="#1C2230" roughness={0.78} />
-        </mesh>
+        {[
+          [z0 + 2.125, 4.25],
+          [z0 + 13.475, 13.85],
+        ].map(([ez, eLen], idx) => (
+          <group key={idx} position={[HALLWAY_HALF_WIDTH, 0, ez]}>
+            <mesh position={[0, HALLWAY_HEIGHT / 2, 0]}>
+              <boxGeometry args={[0.14, HALLWAY_HEIGHT, eLen]} />
+              <meshStandardMaterial
+                color="#333F54"
+                emissive="#1D2533"
+                emissiveIntensity={0.44 * emissiveBoost}
+                roughness={0.7}
+              />
+            </mesh>
+            <mesh position={[-0.015, 0.55, 0]} raycast={noopRaycast}>
+              <boxGeometry args={[0.13, 1.1, eLen - 0.04]} />
+              <meshStandardMaterial
+                color="#5C341E"
+                emissive="#381E10"
+                emissiveIntensity={0.45 * emissiveBoost}
+                roughness={0.62}
+              />
+            </mesh>
+            <mesh position={[-0.082, 1.12, 0]} raycast={noopRaycast}>
+              <boxGeometry args={[0.015, 0.035, eLen - 0.04]} />
+              <meshBasicMaterial color={accentHex} />
+            </mesh>
+          </group>
+        ))}
         <mesh position={[HALLWAY_HALF_WIDTH, 3.45, z0 + 5.4]}>
           <boxGeometry args={[0.14, 0.7, 2.3]} />
-          <meshStandardMaterial color="#1C2230" roughness={0.78} />
+          <meshStandardMaterial
+            color="#333F54"
+            emissive="#1D2533"
+            emissiveIntensity={0.44 * emissiveBoost}
+            roughness={0.7}
+          />
         </mesh>
 
         {/* South End Hallway Lintel above Outdoor Deck Portal (dz = 20.4) */}
         <mesh position={[0, 3.5, z0 + HALLWAY_LENGTH]}>
           <boxGeometry args={[HALLWAY_HALF_WIDTH * 2, 0.65, 0.16]} />
-          <meshStandardMaterial color="#241914" roughness={0.8} />
+          <meshStandardMaterial
+            color="#4A2C1B"
+            emissive="#2B180E"
+            emissiveIntensity={0.45 * emissiveBoost}
+            roughness={0.75}
+          />
         </mesh>
 
         {/* Illuminated Overhead Wayfinding Signs in the Hallway */}
@@ -529,13 +729,13 @@ export function ExpansionWing3D({
           accent="#34D399"
         />
 
-        {/* Interactive 3D Clubhouse Directory Board inside Hallway Entrance ([1.56, 1.62, z0 + 2.2]) */}
-        <group position={[1.55, 1.68, z0 + 2.15]} rotation={[0, -Math.PI / 2, 0]}>
-          <RoundedBox args={[1.58, 1.24, 0.04]} radius={0.025} smoothness={2}>
-            <meshStandardMaterial color="#0B101B" metalness={0.45} roughness={0.4} />
+        {/* Interactive 3D Clubhouse Directory & Lighting Control Board ([1.55, 1.72, z0 + 2.15]) */}
+        <group position={[1.55, 1.72, z0 + 2.15]} rotation={[0, -Math.PI / 2, 0]}>
+          <RoundedBox args={[1.64, 1.48, 0.04]} radius={0.025} smoothness={2}>
+            <meshStandardMaterial color="#0F172A" metalness={0.45} roughness={0.4} />
           </RoundedBox>
           <Text
-            position={[0, 0.48, 0.026]}
+            position={[0, 0.6, 0.026]}
             fontSize={0.068}
             color="#E5A93C"
             anchorX="center"
@@ -544,9 +744,9 @@ export function ExpansionWing3D({
             🏛 CLUBHOUSE WING DIRECTORY
           </Text>
           <Text
-            position={[0, 0.37, 0.026]}
+            position={[0, 0.49, 0.026]}
             fontSize={0.038}
-            color="#94A3B8"
+            color="#CBD5E1"
             anchorX="center"
             anchorY="middle"
           >
@@ -557,7 +757,7 @@ export function ExpansionWing3D({
             .map((dest, idx) => (
               <group
                 key={dest.id}
-                position={[0, 0.21 - idx * 0.175, 0.026]}
+                position={[0, 0.33 - idx * 0.165, 0.026]}
                 onClick={(e) => {
                   e.stopPropagation()
                   if (onJumpToDestination) {
@@ -567,11 +767,11 @@ export function ExpansionWing3D({
                   }
                 }}
               >
-                <RoundedBox args={[1.38, 0.14, 0.015]} radius={0.018} smoothness={2}>
-                  <meshBasicMaterial color="#162032" />
+                <RoundedBox args={[1.44, 0.135, 0.015]} radius={0.018} smoothness={2}>
+                  <meshBasicMaterial color="#1E293B" />
                 </RoundedBox>
                 <Text
-                  position={[-0.62, 0, 0.012]}
+                  position={[-0.65, 0, 0.012]}
                   fontSize={0.046}
                   color="#F8FAFC"
                   anchorX="left"
@@ -580,7 +780,7 @@ export function ExpansionWing3D({
                   {`${dest.emoji} ${dest.title}`}
                 </Text>
                 <Text
-                  position={[0.62, 0, 0.012]}
+                  position={[0.65, 0, 0.012]}
                   fontSize={0.04}
                   color={dest.accentColor}
                   anchorX="right"
@@ -590,23 +790,84 @@ export function ExpansionWing3D({
                 </Text>
               </group>
             ))}
+
+          {/* 3D Quick Lighting Controls on Hallway Directory Board */}
+          <group position={[0, -0.56, 0.026]}>
+            {[
+              { id: 'daylight' as LightingPresetId, label: '☀️ Bright', b: 1.45 },
+              { id: 'cozy' as LightingPresetId, label: '🕯 Warm', b: 1.05 },
+              { id: 'neon-pub' as LightingPresetId, label: '⚡ Neon', b: 0.92 },
+              { id: 'movie' as LightingPresetId, label: '🎬 Dim', b: 0.48 },
+            ].map((lt, idx) => {
+              const active = lighting.preset === lt.id
+              return (
+                <group
+                  key={lt.id}
+                  position={[-0.54 + idx * 0.36, 0, 0]}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (onApplyLightingPreset) {
+                      onApplyLightingPreset(lt.id)
+                    } else if (onUpdateLighting) {
+                      onUpdateLighting({ preset: lt.id, brightness: lt.b })
+                    }
+                  }}
+                >
+                  <RoundedBox args={[0.33, 0.13, 0.015]} radius={0.016}>
+                    <meshBasicMaterial color={active ? '#E5A93C' : '#1E293B'} />
+                  </RoundedBox>
+                  <Text
+                    position={[0, 0, 0.012]}
+                    fontSize={0.036}
+                    color={active ? '#080A0D' : '#F8FAFC'}
+                    anchorX="center"
+                    anchorY="middle"
+                  >
+                    {lt.label}
+                  </Text>
+                </group>
+              )
+            })}
+          </group>
         </group>
 
-        {/* Framed Gallery Art Prints along East Rear Hallway Wall */}
+        {/* Illuminated Gallery Art Prints along East Rear Hallway Wall */}
         {[11.6, 15.0, 18.2].map((artDz, idx) => (
           <group
             key={artDz}
-            position={[1.56, 1.82, z0 + artDz]}
+            position={[1.56, 1.88, z0 + artDz]}
             rotation={[0, -Math.PI / 2, 0]}
           >
-            <RoundedBox args={[1.35, 0.92, 0.03]} radius={0.015}>
-              <meshStandardMaterial color="#B8893A" metalness={0.65} roughness={0.35} />
-            </RoundedBox>
-            <mesh position={[0, 0, 0.018]}>
-              <planeGeometry args={[1.22, 0.78]} />
-              <meshBasicMaterial
-                color={idx === 0 ? '#1E3A5F' : idx === 1 ? '#3B234A' : '#143832'}
+            {/* Brass Picture Light Bar */}
+            <mesh position={[0, 0.56, 0.06]} raycast={noopRaycast}>
+              <boxGeometry args={[0.62, 0.025, 0.08]} />
+              <meshBasicMaterial color="#FDE047" />
+            </mesh>
+            <RoundedBox args={[1.38, 0.96, 0.03]} radius={0.015}>
+              <meshStandardMaterial
+                color="#D4A54E"
+                emissive="#785418"
+                emissiveIntensity={0.4}
+                metalness={0.65}
+                roughness={0.32}
               />
+            </RoundedBox>
+            <mesh position={[0, 0, 0.018]} raycast={noopRaycast}>
+              <planeGeometry args={[1.24, 0.82]} />
+              <meshBasicMaterial
+                color={idx === 0 ? '#1D4ED8' : idx === 1 ? '#7E22CE' : '#0F766E'}
+              />
+            </mesh>
+            {/* Geometric Modern Art Motif */}
+            <mesh position={[-0.22, 0.06, 0.022]} raycast={noopRaycast}>
+              <circleGeometry args={[0.22, 20]} />
+              <meshBasicMaterial
+                color={idx === 0 ? '#FBBF24' : idx === 1 ? '#F472B6' : '#34D399'}
+              />
+            </mesh>
+            <mesh position={[0.24, -0.1, 0.024]} raycast={noopRaycast}>
+              <planeGeometry args={[0.42, 0.34]} />
+              <meshBasicMaterial color="#F8FAFC" transparent opacity={0.85} />
             </mesh>
           </group>
         ))}
@@ -616,7 +877,7 @@ export function ExpansionWing3D({
       {/* 2. FANCY EXECUTIVE BOARD ROOM (West Wing Front, x -11.2..-1.65)     */}
       {/* =================================================================== */}
       <group name="wing-executive-boardroom">
-        {/* Polished Travertine Floor + Charcoal Wool Executive Rug */}
+        {/* Warm Travertine Floor + Navy/Gold Wool Executive Carpet */}
         <mesh
           position={[-6.425, 0.005, boardZ]}
           rotation={[-Math.PI / 2, 0, 0]}
@@ -627,135 +888,236 @@ export function ExpansionWing3D({
           }}
         >
           <planeGeometry args={[9.55, 8.8]} />
-          <meshStandardMaterial color="#181617" roughness={0.58} metalness={0.22} />
+          <meshStandardMaterial
+            color="#3B271C"
+            emissive="#24160E"
+            emissiveIntensity={0.45 * emissiveBoost}
+            roughness={0.48}
+            metalness={0.18}
+          />
         </mesh>
         <mesh
           position={[-6.4, 0.011, boardZ]}
           rotation={[-Math.PI / 2, 0, 0]}
-          raycast={() => null}
+          raycast={noopRaycast}
+        >
+          <planeGeometry args={[6.6, 4.3]} />
+          <meshBasicMaterial color="#D97706" />
+        </mesh>
+        <mesh
+          position={[-6.4, 0.014, boardZ]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          raycast={noopRaycast}
         >
           <planeGeometry args={[6.4, 4.1]} />
-          <meshStandardMaterial color="#242936" roughness={0.92} />
+          <meshStandardMaterial
+            color="#1E293B"
+            emissive="#111827"
+            emissiveIntensity={0.45 * emissiveBoost}
+            roughness={0.88}
+          />
         </mesh>
 
-        {/* Coffered Ceiling + Sculptural Linear Brass Chandelier */}
+        {/* Illuminated Coffered Ceiling + Sculptural Double-Tier Brass Chandelier */}
         <mesh position={[-6.425, 3.85, boardZ]} rotation={[Math.PI / 2, 0, 0]}>
           <planeGeometry args={[9.55, 8.8]} />
-          <meshStandardMaterial color="#121012" roughness={0.88} />
+          <meshStandardMaterial
+            color="#261B15"
+            emissive="#17100C"
+            emissiveIntensity={0.42 * emissiveBoost}
+            roughness={0.85}
+          />
+        </mesh>
+        {/* Warm Perimeter Ceiling Cove Glow */}
+        <mesh
+          position={[-6.4, 3.81, boardZ]}
+          rotation={[Math.PI / 2, 0, 0]}
+          raycast={noopRaycast}
+        >
+          <ringGeometry args={[3.4, 3.65, 4]} />
+          <meshBasicMaterial color="#FDE68A" side={THREE.DoubleSide} />
         </mesh>
         <group position={[-6.4, 3.12, boardZ]}>
           <mesh>
-            <boxGeometry args={[3.4, 0.06, 0.24]} />
-            <meshStandardMaterial color="#C89B48" metalness={0.8} roughness={0.22} />
+            <boxGeometry args={[3.6, 0.07, 0.28]} />
+            <meshStandardMaterial
+              color="#E5A93C"
+              emissive="#8A5E18"
+              emissiveIntensity={0.45}
+              metalness={0.82}
+              roughness={0.2}
+            />
           </mesh>
-          <mesh position={[0, -0.04, 0]}>
-            <boxGeometry args={[3.2, 0.03, 0.16]} />
-            <meshBasicMaterial color="#FEF3C7" />
+          <mesh position={[0, -0.045, 0]}>
+            <boxGeometry args={[3.4, 0.035, 0.18]} />
+            <meshBasicMaterial color="#FEF9C3" />
           </mesh>
         </group>
-        <pointLight
-          position={[-6.4, 2.85, boardZ]}
-          color="#FDE68A"
-          intensity={1.15}
-          distance={12}
-          decay={1.7}
-        />
 
-        {/* West, North, and South Burl-Walnut Walls */}
+        {/* West, North, and South Honey Burl-Walnut & Venetian Plaster Walls */}
         <mesh position={[-11.2, 1.925, boardZ]}>
           <boxGeometry args={[0.14, 3.85, 8.8]} />
-          <meshStandardMaterial color="#241610" roughness={0.7} />
+          <meshStandardMaterial
+            color="#4A2C1B"
+            emissive="#2E1A0F"
+            emissiveIntensity={0.46 * emissiveBoost}
+            roughness={0.62}
+          />
         </mesh>
         <mesh position={[-6.425, 1.925, z0 + 1.0]}>
           <boxGeometry args={[9.55, 3.85, 0.14]} />
-          <meshStandardMaterial color="#291912" roughness={0.72} />
+          <meshStandardMaterial
+            color="#52301E"
+            emissive="#331D11"
+            emissiveIntensity={0.46 * emissiveBoost}
+            roughness={0.64}
+          />
         </mesh>
         <mesh position={[-6.425, 1.925, z0 + 9.8]}>
           <boxGeometry args={[9.55, 3.85, 0.14]} />
-          <meshStandardMaterial color="#291912" roughness={0.72} />
+          <meshStandardMaterial
+            color="#52301E"
+            emissive="#331D11"
+            emissiveIntensity={0.46 * emissiveBoost}
+            roughness={0.64}
+          />
         </mesh>
+        {/* Warm Brass Architectural Reveal Strips on Boardroom Walls */}
+        {[z0 + 1.09, z0 + 9.71].map((rz) => (
+          <mesh key={rz} position={[-6.425, 3.68, rz]} raycast={noopRaycast}>
+            <boxGeometry args={[9.2, 0.03, 0.02]} />
+            <meshBasicMaterial color={accentHex} />
+          </mesh>
+        ))}
 
-        {/* North Wall Backlit Dusk City Skyline Accent Window */}
-        <group position={[-6.4, 2.05, z0 + 1.1]}>
-          <RoundedBox args={[4.8, 1.75, 0.05]} radius={0.02}>
-            <meshStandardMaterial color="#B8893A" metalness={0.7} roughness={0.3} />
+        {/* North Wall Backlit Panoramic Dusk City Skyline Window */}
+        <group position={[-6.4, 2.08, z0 + 1.1]}>
+          <RoundedBox args={[5.4, 1.95, 0.05]} radius={0.02}>
+            <meshStandardMaterial
+              color="#D4A54E"
+              emissive="#785418"
+              emissiveIntensity={0.4}
+              metalness={0.75}
+              roughness={0.26}
+            />
           </RoundedBox>
           <mesh position={[0, 0, 0.028]}>
-            <planeGeometry args={[4.6, 1.56]} />
-            <meshBasicMaterial color="#172554" />
+            <planeGeometry args={[5.18, 1.76]} />
+            <meshBasicMaterial color="#1E3A8A" />
           </mesh>
-          <mesh position={[0, -0.42, 0.03]}>
-            <planeGeometry args={[4.6, 0.55]} />
-            <meshBasicMaterial color="#F59E0B" transparent opacity={0.32} />
+          <mesh position={[0, -0.44, 0.03]}>
+            <planeGeometry args={[5.18, 0.68]} />
+            <meshBasicMaterial color="#F59E0B" transparent opacity={0.48} />
           </mesh>
-          {[-1.7, -1.0, -0.35, 0.25, 0.95, 1.65].map((bx, idx) => {
-            const bh = 0.55 + ((idx * 3) % 4) * 0.22
+          {[-2.0, -1.35, -0.7, -0.1, 0.55, 1.25, 1.9].map((bx, idx) => {
+            const bh = 0.65 + ((idx * 3) % 4) * 0.24
             return (
-              <mesh key={bx} position={[bx, -0.78 + bh / 2, 0.033]}>
-                <planeGeometry args={[0.44, bh]} />
-                <meshBasicMaterial color="#090D16" />
-              </mesh>
+              <group key={bx} position={[bx, -0.86 + bh / 2, 0.033]}>
+                <mesh raycast={noopRaycast}>
+                  <planeGeometry args={[0.48, bh]} />
+                  <meshBasicMaterial color="#0F172A" />
+                </mesh>
+                {/* Lit Skyscraper Windows */}
+                <mesh position={[0, 0.08, 0.003]} raycast={noopRaycast}>
+                  <planeGeometry args={[0.3, bh * 0.55]} />
+                  <meshBasicMaterial color="#FDE68A" transparent opacity={0.55} />
+                </mesh>
+              </group>
             )
           })}
         </group>
 
-        {/* South Wall Executive Credenza Sideboard */}
-        <RoundedBox
-          args={[3.6, 0.82, 0.52]}
-          position={[-6.4, 0.41, z0 + 9.38]}
-          radius={0.03}
-        >
-          <meshStandardMaterial color="#331D12" roughness={0.55} metalness={0.18} />
-        </RoundedBox>
+        {/* South Wall Executive Credenza Sideboard + Espresso Decanter Set */}
+        <group position={[-6.4, 0, z0 + 9.38]}>
+          <RoundedBox args={[3.8, 0.84, 0.54]} position={[0, 0.42, 0]} radius={0.03}>
+            <meshStandardMaterial
+              color="#5C341E"
+              emissive="#3A2011"
+              emissiveIntensity={0.48 * emissiveBoost}
+              roughness={0.5}
+              metalness={0.18}
+            />
+          </RoundedBox>
+          <mesh position={[0, 0.85, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={noopRaycast}>
+            <planeGeometry args={[3.68, 0.46]} />
+            <meshBasicMaterial color="#F8FAFC" />
+          </mesh>
+        </group>
 
-        {/* Grand 4.8m Walnut & Calacatta Marble Conference Table */}
+        {/* Grand 4.8m Burl Walnut & Calacatta Gold Marble Conference Table */}
         <group position={[-6.4, 0, boardZ]}>
           {/* Dual Sculpted Brass/Walnut Pedestals */}
           {[-1.45, 1.45].map((px) => (
             <mesh key={px} position={[px, 0.36, 0]}>
               <cylinderGeometry args={[0.32, 0.4, 0.72, 16]} />
-              <meshStandardMaterial color="#2A170E" roughness={0.55} metalness={0.3} />
-            </mesh>
-          ))}
-          {/* Outer Burl Walnut Tabletop */}
-          <RoundedBox args={[4.8, 0.08, 1.65]} position={[0, 0.74, 0]} radius={0.035} smoothness={2}>
-            <meshStandardMaterial
-              color="#4E2B19"
-              emissive="#3A1E0F"
-              emissiveIntensity={0.42}
-              roughness={0.36}
-              metalness={0.2}
-            />
-          </RoundedBox>
-          {/* Center Calacatta Marble Inlay + Brass Conference Pods */}
-          <mesh position={[0, 0.783, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-            <planeGeometry args={[3.6, 0.62]} />
-            <meshStandardMaterial
-              color="#F4F1EA"
-              emissive="#D6D1C7"
-              emissiveIntensity={0.25}
-              roughness={0.28}
-              metalness={0.12}
-            />
-          </mesh>
-          {[-1.1, 0, 1.1].map((mx) => (
-            <mesh key={mx} position={[mx, 0.795, 0]}>
-              <boxGeometry args={[0.22, 0.02, 0.14]} />
               <meshStandardMaterial
-                color="#D4A54E"
-                emissive="#8A6421"
-                emissiveIntensity={0.38}
-                metalness={0.8}
-                roughness={0.25}
+                color="#4E2B19"
+                emissive="#2E180D"
+                emissiveIntensity={0.45 * emissiveBoost}
+                roughness={0.5}
+                metalness={0.3}
               />
             </mesh>
           ))}
+          {/* Outer Honey Burl Walnut Tabletop */}
+          <RoundedBox args={[4.85, 0.085, 1.7]} position={[0, 0.74, 0]} radius={0.035} smoothness={2}>
+            <meshStandardMaterial
+              color="#6B3A20"
+              emissive="#452412"
+              emissiveIntensity={0.5 * emissiveBoost}
+              roughness={0.32}
+              metalness={0.22}
+            />
+          </RoundedBox>
+          {/* Center Calacatta Gold Marble Inlay + Brass Conference Pods */}
+          <mesh position={[0, 0.785, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+            <planeGeometry args={[3.7, 0.66]} />
+            <meshStandardMaterial
+              color="#F8FAFC"
+              emissive="#E2E8F0"
+              emissiveIntensity={0.38 * emissiveBoost}
+              roughness={0.24}
+              metalness={0.12}
+            />
+          </mesh>
+          {[-1.15, 0, 1.15].map((mx) => (
+            <mesh key={mx} position={[mx, 0.798, 0]}>
+              <boxGeometry args={[0.24, 0.022, 0.15]} />
+              <meshStandardMaterial
+                color="#E5A93C"
+                emissive="#8A6421"
+                emissiveIntensity={0.45}
+                metalness={0.82}
+                roughness={0.22}
+              />
+            </mesh>
+          ))}
+          {/* Executive Leather Desk Blotters at Each Place Setting */}
+          {[-1.65, -0.55, 0.55, 1.65].map((bx) =>
+            [-0.58, 0.58].map((bz) => (
+              <mesh
+                key={`${bx}-${bz}`}
+                position={[bx, 0.786, bz]}
+                rotation={[-Math.PI / 2, 0, 0]}
+                raycast={noopRaycast}
+              >
+                <planeGeometry args={[0.48, 0.32]} />
+                <meshBasicMaterial color="#1E293B" />
+              </mesh>
+            )),
+          )}
         </group>
 
         {/* West Wall Interactive Executive Presentation / Lounge-Mirror Screen */}
         <group position={[-11.05, 2.02, boardZ]} rotation={[0, Math.PI / 2, 0]}>
           <RoundedBox args={[3.86, 2.26, 0.05]} radius={0.03} smoothness={2}>
-            <meshStandardMaterial color="#181310" metalness={0.55} roughness={0.35} />
+            <meshStandardMaterial
+              color="#2A1B12"
+              emissive="#1A100A"
+              emissiveIntensity={0.4}
+              metalness={0.55}
+              roughness={0.35}
+            />
           </RoundedBox>
 
           {boardroomShowingMirror ? (
@@ -767,7 +1129,7 @@ export function ExpansionWing3D({
             <group position={[0, 0.06, 0.029]}>
               <mesh>
                 <planeGeometry args={[3.66, 1.94]} />
-                <meshBasicMaterial color="#0C1322" />
+                <meshBasicMaterial color="#0F172A" />
               </mesh>
               <Text
                 position={[-1.65, 0.76, 0.008]}
@@ -791,7 +1153,7 @@ export function ExpansionWing3D({
               <Text
                 position={[-1.65, 0.31, 0.008]}
                 fontSize={0.065}
-                color="#E5A93C"
+                color="#FBBF24"
                 anchorX="left"
                 anchorY="middle"
               >
@@ -802,7 +1164,7 @@ export function ExpansionWing3D({
                   key={bIdx}
                   position={[-1.65, 0.06 - bIdx * 0.21, 0.008]}
                   fontSize={0.06}
-                  color="#CBD5E1"
+                  color="#E2E8F0"
                   maxWidth={3.32}
                   anchorX="left"
                   anchorY="middle"
@@ -913,7 +1275,7 @@ export function ExpansionWing3D({
       {/* 3. COZY LIBRARY & CRACKLING FIREPLACE (East Wing Front, x 1.65..11.2) */}
       {/* =================================================================== */}
       <group name="wing-cozy-library">
-        {/* Warm Oak Floor + Ornate Crimson & Gold Persian Rug */}
+        {/* Warm Honey-Oak Parquet Floor + Ornate Crimson & Gold Persian Rug */}
         <mesh
           position={[6.425, 0.005, libZ]}
           rotation={[-Math.PI / 2, 0, 0]}
@@ -925,82 +1287,108 @@ export function ExpansionWing3D({
         >
           <planeGeometry args={[9.55, 8.8]} />
           <meshStandardMaterial
-            color="#3B2216"
-            emissive="#24130B"
-            emissiveIntensity={0.35}
-            roughness={0.68}
+            color="#5C3824"
+            emissive="#382013"
+            emissiveIntensity={0.45 * emissiveBoost}
+            roughness={0.55}
           />
+        </mesh>
+        {/* Gold Outer Rug Border */}
+        <mesh
+          position={[6.8, 0.01, libZ]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          raycast={noopRaycast}
+        >
+          <planeGeometry args={[5.65, 4.85]} />
+          <meshBasicMaterial color="#D97706" />
         </mesh>
         <mesh
           position={[6.8, 0.012, libZ]}
           rotation={[-Math.PI / 2, 0, 0]}
-          raycast={() => null}
+          raycast={noopRaycast}
         >
           <planeGeometry args={[5.4, 4.6]} />
           <meshStandardMaterial
-            color="#7A222A"
-            emissive="#4A1217"
-            emissiveIntensity={0.38}
-            roughness={0.92}
+            color="#991B1B"
+            emissive="#5E1010"
+            emissiveIntensity={0.48 * emissiveBoost}
+            roughness={0.88}
           />
         </mesh>
         <mesh
           position={[6.8, 0.015, libZ]}
           rotation={[-Math.PI / 2, 0, 0]}
-          raycast={() => null}
+          raycast={noopRaycast}
         >
-          <planeGeometry args={[4.6, 3.8]} />
+          <planeGeometry args={[4.5, 3.7]} />
           <meshStandardMaterial
-            color="#962E35"
-            emissive="#5E1A1E"
-            emissiveIntensity={0.38}
-            roughness={0.92}
+            color="#B91C1C"
+            emissive="#701313"
+            emissiveIntensity={0.48 * emissiveBoost}
+            roughness={0.88}
           />
         </mesh>
+        {/* Center Persian Medallion */}
+        <mesh
+          position={[6.8, 0.018, libZ]}
+          rotation={[-Math.PI / 2, 0, Math.PI / 4]}
+          raycast={noopRaycast}
+        >
+          <planeGeometry args={[1.65, 1.65]} />
+          <meshBasicMaterial color="#1E3A8A" />
+        </mesh>
 
-        {/* Timber Ceiling + Warm Study Chandelier Glow */}
+        {/* Warm Coffered Timber Ceiling + Brass Study Chandelier */}
         <mesh position={[6.425, 3.85, libZ]} rotation={[Math.PI / 2, 0, 0]}>
           <planeGeometry args={[9.55, 8.8]} />
-          <meshStandardMaterial color="#1D120C" roughness={0.9} />
+          <meshStandardMaterial
+            color="#362013"
+            emissive="#21130B"
+            emissiveIntensity={0.42 * emissiveBoost}
+            roughness={0.85}
+          />
         </mesh>
-        <pointLight
-          position={[6.2, 3.1, libZ]}
-          color="#FDBA74"
-          intensity={0.75}
-          distance={11}
-          decay={1.8}
-        />
+        <group position={[6.6, 3.25, libZ]}>
+          <mesh raycast={noopRaycast}>
+            <cylinderGeometry args={[0.75, 0.85, 0.08, 16]} />
+            <meshBasicMaterial color="#F59E0B" />
+          </mesh>
+          <mesh position={[0, -0.05, 0]} raycast={noopRaycast}>
+            <sphereGeometry args={[0.38, 14, 10]} />
+            <meshBasicMaterial color="#FEF9C3" />
+          </mesh>
+        </group>
 
-        {/* East, North, and South Heritage Forest-Green & Mahogany Study Walls */}
+        {/* East, North, and South British Racing Green & Mahogany Study Walls */}
         <mesh position={[11.2, 1.925, libZ]}>
           <boxGeometry args={[0.14, 3.85, 8.8]} />
           <meshStandardMaterial
-            color="#1E352D"
-            emissive="#0F1F1A"
-            emissiveIntensity={0.35}
-            roughness={0.82}
+            color="#26463B"
+            emissive="#162B24"
+            emissiveIntensity={0.46 * emissiveBoost}
+            roughness={0.75}
           />
         </mesh>
         <mesh position={[6.425, 1.925, z0 + 1.0]}>
           <boxGeometry args={[9.55, 3.85, 0.14]} />
           <meshStandardMaterial
-            color="#1E352D"
-            emissive="#0F1F1A"
-            emissiveIntensity={0.35}
-            roughness={0.82}
+            color="#26463B"
+            emissive="#162B24"
+            emissiveIntensity={0.46 * emissiveBoost}
+            roughness={0.75}
           />
         </mesh>
         <mesh position={[6.425, 1.925, z0 + 9.8]}>
           <boxGeometry args={[9.55, 3.85, 0.14]} />
           <meshStandardMaterial
-            color="#1E352D"
-            emissive="#0F1F1A"
-            emissiveIntensity={0.35}
-            roughness={0.82}
+            color="#26463B"
+            emissive="#162B24"
+            emissiveIntensity={0.46 * emissiveBoost}
+            roughness={0.75}
           />
         </mesh>
 
-        {/* Wraparound Floor-to-Ceiling Mahogany Bookcases */}
+        {/* Wraparound Floor-to-Ceiling Illuminated Mahogany Bookcases */}
         <ProceduralBookcaseUnit position={[4.2, 0, z0 + 1.28]} rotationY={0} width={2.5} />
         <ProceduralBookcaseUnit position={[7.0, 0, z0 + 1.28]} rotationY={0} width={2.5} />
         <ProceduralBookcaseUnit position={[4.2, 0, z0 + 9.52]} rotationY={Math.PI} width={2.5} />
@@ -1020,104 +1408,116 @@ export function ExpansionWing3D({
         {/* Leaning Brass Library Ladder */}
         <group position={[5.45, 1.65, z0 + 1.62]} rotation={[0.18, 0, 0]}>
           {[-0.22, 0.22].map((lx) => (
-            <mesh key={lx} position={[lx, 0, 0]}>
-              <cylinderGeometry args={[0.018, 0.018, 3.3, 8]} />
-              <meshStandardMaterial color="#C89B48" metalness={0.75} roughness={0.28} />
+            <mesh key={lx} position={[lx, 0, 0]} raycast={noopRaycast}>
+              <cylinderGeometry args={[0.02, 0.02, 3.3, 8]} />
+              <meshBasicMaterial color="#FBBF24" />
             </mesh>
           ))}
         </group>
 
         {/* =============================================================== */}
-        {/* CRACKLING STONE HEARTH FIREPLACE (East Wall [10.65, 0, libZ])   */}
+        {/* CRACKLING STONE HEARTH FIREPLACE (East Wall [10.62, 0, libZ])   */}
         {/* =============================================================== */}
         <group position={[10.62, 0, libZ]} rotation={[0, -Math.PI / 2, 0]}>
-          {/* Stacked Slate Stone Chimney Breast */}
+          {/* Stacked Limestone Chimney Breast */}
           <mesh position={[0, 1.925, -0.1]}>
-            <boxGeometry args={[2.55, 3.85, 0.72]} />
+            <boxGeometry args={[2.6, 3.85, 0.74]} />
             <meshStandardMaterial
-              color="#47505E"
-              emissive="#252A34"
-              emissiveIntensity={0.35}
-              roughness={0.92}
+              color="#64748B"
+              emissive="#334155"
+              emissiveIntensity={0.46 * emissiveBoost}
+              roughness={0.85}
             />
           </mesh>
           {/* Hearth Floor Apron */}
           <mesh position={[0, 0.06, 0.42]}>
-            <boxGeometry args={[2.75, 0.12, 0.88]} />
+            <boxGeometry args={[2.8, 0.12, 0.9]} />
             <meshStandardMaterial
-              color="#333A46"
-              emissive="#1C2028"
-              emissiveIntensity={0.3}
-              roughness={0.85}
+              color="#475569"
+              emissive="#27313F"
+              emissiveIntensity={0.42 * emissiveBoost}
+              roughness={0.8}
             />
           </mesh>
-          {/* Carved Walnut Mantelpiece */}
-          <RoundedBox args={[2.78, 0.16, 0.92]} position={[0, 1.48, 0.12]} radius={0.025}>
+          {/* Carved Cherry-Walnut Mantelpiece + Brass Trim */}
+          <RoundedBox args={[2.84, 0.17, 0.94]} position={[0, 1.48, 0.12]} radius={0.025}>
             <meshStandardMaterial
-              color="#4E2816"
-              emissive="#361B0E"
-              emissiveIntensity={0.42}
-              roughness={0.55}
+              color="#6B371E"
+              emissive="#422010"
+              emissiveIntensity={0.5 * emissiveBoost}
+              roughness={0.48}
             />
           </RoundedBox>
-          {/* Dark Recessed Firebox */}
+          <mesh position={[0, 1.38, 0.56]} raycast={noopRaycast}>
+            <boxGeometry args={[2.76, 0.024, 0.02]} />
+            <meshBasicMaterial color="#FBBF24" />
+          </mesh>
+          {/* Firebox + Glowing Ember Bed */}
           <mesh position={[0, 0.68, 0.16]}>
-            <boxGeometry args={[1.48, 1.12, 0.36]} />
-            <meshBasicMaterial color="#0D0908" />
+            <boxGeometry args={[1.52, 1.14, 0.36]} />
+            <meshBasicMaterial color="#180D09" />
+          </mesh>
+          <mesh position={[0, 0.14, 0.25]} rotation={[-Math.PI / 2, 0, 0]} raycast={noopRaycast}>
+            <planeGeometry args={[1.32, 0.44]} />
+            <meshBasicMaterial color={wingState.libraryFireLit ? '#EA580C' : '#291D18'} />
           </mesh>
           {/* Glowing Charred Oak Logs */}
           <mesh position={[0, 0.24, 0.24]} rotation={[0, 0, Math.PI / 2]}>
-            <cylinderGeometry args={[0.09, 0.1, 0.96, 8]} />
+            <cylinderGeometry args={[0.095, 0.105, 1.02, 8]} />
             <meshStandardMaterial
-              color="#2A160E"
-              emissive={wingState.libraryFireLit ? '#EA580C' : '#000000'}
-              emissiveIntensity={wingState.libraryFireLit ? 0.55 : 0}
+              color="#3E1F12"
+              emissive={wingState.libraryFireLit ? '#F97316' : '#000000'}
+              emissiveIntensity={wingState.libraryFireLit ? 0.85 : 0}
             />
           </mesh>
-          <mesh position={[0.08, 0.31, 0.28]} rotation={[0.2, 0.35, Math.PI / 2]}>
-            <cylinderGeometry args={[0.075, 0.085, 0.82, 8]} />
+          <mesh position={[0.08, 0.32, 0.28]} rotation={[0.2, 0.35, Math.PI / 2]}>
+            <cylinderGeometry args={[0.08, 0.09, 0.86, 8]} />
             <meshStandardMaterial
-              color="#2A160E"
-              emissive={wingState.libraryFireLit ? '#F97316' : '#000000'}
-              emissiveIntensity={wingState.libraryFireLit ? 0.65 : 0}
+              color="#3E1F12"
+              emissive={wingState.libraryFireLit ? '#FB923C' : '#000000'}
+              emissiveIntensity={wingState.libraryFireLit ? 0.95 : 0}
             />
           </mesh>
 
           {/* Animated Flickering 3D Hearth Flames */}
           {wingState.libraryFireLit && (
             <group position={[0, 0.34, 0.26]} ref={hearthFlameRef}>
-              <mesh position={[0, 0.28, 0]} raycast={() => null}>
-                <coneGeometry args={[0.32, 0.62, 7]} />
+              <mesh position={[0, 0.3, 0]} raycast={noopRaycast}>
+                <coneGeometry args={[0.35, 0.68, 7]} />
                 <meshBasicMaterial color="#F97316" />
               </mesh>
-              <mesh position={[-0.22, 0.2, 0.03]} raycast={() => null}>
-                <coneGeometry args={[0.2, 0.44, 6]} />
+              <mesh position={[-0.24, 0.22, 0.03]} raycast={noopRaycast}>
+                <coneGeometry args={[0.22, 0.48, 6]} />
                 <meshBasicMaterial color="#FB923C" />
               </mesh>
-              <mesh position={[0.22, 0.22, 0.02]} raycast={() => null}>
-                <coneGeometry args={[0.21, 0.46, 6]} />
+              <mesh position={[0.24, 0.24, 0.02]} raycast={noopRaycast}>
+                <coneGeometry args={[0.23, 0.5, 6]} />
                 <meshBasicMaterial color="#FACC15" />
+              </mesh>
+              <mesh position={[0, 0.18, 0.07]} raycast={noopRaycast}>
+                <coneGeometry args={[0.18, 0.36, 6]} />
+                <meshBasicMaterial color="#FEF08A" />
               </mesh>
             </group>
           )}
 
           <pointLight
             ref={hearthLightRef}
-            position={[0, 0.72, 0.78]}
+            position={[0, 0.82, 1.1]}
             color="#FB923C"
-            intensity={1.15}
-            distance={10}
-            decay={1.7}
+            intensity={16.5}
+            distance={18}
+            decay={1.25}
           />
 
           {/* Interactive Mantel Controls Plaque (Flame & Crackling Audio) */}
           <group position={[0, 1.88, 0.28]}>
-            <RoundedBox args={[1.64, 0.38, 0.03]} radius={0.02}>
-              <meshBasicMaterial color="#16110E" />
+            <RoundedBox args={[1.68, 0.4, 0.03]} radius={0.02}>
+              <meshBasicMaterial color="#0F172A" />
             </RoundedBox>
             <Text
               position={[0, 0.1, 0.02]}
-              fontSize={0.052}
+              fontSize={0.054}
               color="#FDBA74"
               anchorX="center"
               anchorY="middle"
@@ -1131,14 +1531,14 @@ export function ExpansionWing3D({
                 onUpdateWingState({ libraryFireLit: !wingState.libraryFireLit })
               }}
             >
-              <RoundedBox args={[0.7, 0.14, 0.015]} radius={0.016}>
+              <RoundedBox args={[0.72, 0.145, 0.015]} radius={0.016}>
                 <meshBasicMaterial
                   color={wingState.libraryFireLit ? '#EA580C' : '#334155'}
                 />
               </RoundedBox>
               <Text
                 position={[0, 0, 0.012]}
-                fontSize={0.044}
+                fontSize={0.045}
                 color="#F8FAFC"
                 anchorX="center"
                 anchorY="middle"
@@ -1155,12 +1555,12 @@ export function ExpansionWing3D({
                 setCrackleAudioOn(playing)
               }}
             >
-              <RoundedBox args={[0.7, 0.14, 0.015]} radius={0.016}>
+              <RoundedBox args={[0.72, 0.145, 0.015]} radius={0.016}>
                 <meshBasicMaterial color={crackleAudioOn ? '#34D399' : '#1E293B'} />
               </RoundedBox>
               <Text
                 position={[0, 0, 0.012]}
-                fontSize={0.044}
+                fontSize={0.045}
                 color={crackleAudioOn ? '#080A0D' : '#F8FAFC'}
                 anchorX="center"
                 anchorY="middle"
@@ -1171,23 +1571,38 @@ export function ExpansionWing3D({
           </group>
         </group>
 
-        {/* Central Walnut Reading Table + Warm Banker Lamp */}
+        {/* Central Walnut Reading Table + Warm Banker Lamp + Open Hardcover Book */}
         <group position={[6.7, 0, libZ]}>
-          <RoundedBox args={[0.92, 0.06, 0.92]} position={[0, 0.54, 0]} radius={0.025}>
-            <meshStandardMaterial color="#3C2113" roughness={0.45} />
+          <RoundedBox args={[0.96, 0.065, 0.96]} position={[0, 0.54, 0]} radius={0.025}>
+            <meshStandardMaterial
+              color="#5C341E"
+              emissive="#381E10"
+              emissiveIntensity={0.48 * emissiveBoost}
+              roughness={0.42}
+            />
           </RoundedBox>
           <mesh position={[0, 0.27, 0]}>
-            <cylinderGeometry args={[0.12, 0.24, 0.54, 12]} />
-            <meshStandardMaterial color="#2C170D" roughness={0.6} />
+            <cylinderGeometry args={[0.13, 0.26, 0.54, 12]} />
+            <meshStandardMaterial
+              color="#4A2816"
+              emissive="#2B160B"
+              emissiveIntensity={0.45 * emissiveBoost}
+              roughness={0.55}
+            />
           </mesh>
           {/* Brass Banker Lamp */}
-          <mesh position={[0, 0.68, 0]}>
-            <cylinderGeometry args={[0.025, 0.06, 0.24, 8]} />
-            <meshStandardMaterial color="#C89B48" metalness={0.8} roughness={0.25} />
+          <mesh position={[-0.12, 0.68, -0.1]}>
+            <cylinderGeometry args={[0.028, 0.065, 0.24, 8]} />
+            <meshBasicMaterial color="#FBBF24" />
           </mesh>
-          <mesh position={[0, 0.82, 0]}>
-            <cylinderGeometry args={[0.12, 0.16, 0.1, 10]} />
-            <meshBasicMaterial color="#15803D" />
+          <mesh position={[-0.12, 0.82, -0.1]}>
+            <cylinderGeometry args={[0.13, 0.17, 0.11, 10]} />
+            <meshBasicMaterial color="#22C55E" />
+          </mesh>
+          {/* Open Hardcover Book on Table */}
+          <mesh position={[0.18, 0.585, 0.14]} rotation={[0, 0.4, 0]} raycast={noopRaycast}>
+            <boxGeometry args={[0.28, 0.025, 0.2]} />
+            <meshBasicMaterial color="#FEF9C3" />
           </mesh>
         </group>
 
@@ -1209,6 +1624,7 @@ export function ExpansionWing3D({
       <CommandCenterRoom3D
         wingLayout={wingLayout}
         wingState={wingState}
+        lighting={lighting}
         presenterState={presenterState}
         mainVideoTexture={mainVideoTexture}
         hasMainVideoFrames={hasMainVideoFrames}
@@ -1228,6 +1644,7 @@ export function ExpansionWing3D({
       <OutdoorLakeDeck3D
         wingLayout={wingLayout}
         wingState={wingState}
+        lighting={lighting}
         computedSeats={computedSeats}
         localSeatId={localSeatId}
         participants={participants}

@@ -114,6 +114,7 @@ export function CinemaRoom({
   const leftMoodLightRef = useRef<THREE.PointLight>(null)
   const rightMoodLightRef = useRef<THREE.PointLight>(null)
   const ceilingFillRef = useRef<THREE.PointLight>(null)
+  const dirLightRef = useRef<THREE.DirectionalLight>(null)
 
   const [screenHovered, setScreenHovered] = useState(false)
   const [ytBtnHovered, setYtBtnHovered] = useState(false)
@@ -196,17 +197,21 @@ export function CinemaRoom({
     [lighting.ambientTint],
   )
 
+  const inWingSeat = Boolean(localSeatId?.startsWith('wing:'))
+
   // Smoothly interpolate mood brightness, colors & playback Auto-Dim at 72Hz/90Hz
   useFrame(({ clock }, delta) => {
-    const lerpAlpha = 1 - Math.exp(-4.5 * Math.min(delta, 0.1))
+    const lerpAlpha = 1 - Math.exp(-5.0 * Math.min(delta, 0.1))
     const dimFactor =
-      lighting.autoDimOnPlay && isActivelyPlayingMedia && !buildMode ? 0.24 : 1.0
-    const masterGain = Math.max(0.12, lighting.brightness * dimFactor)
+      lighting.autoDimOnPlay && isActivelyPlayingMedia && !buildMode && !inWingSeat
+        ? 0.32
+        : 1.0
+    const masterGain = Math.max(0.18, lighting.brightness * dimFactor)
 
     if (ambientLightRef.current) {
       ambientLightRef.current.intensity = THREE.MathUtils.lerp(
         ambientLightRef.current.intensity,
-        0.52 * masterGain,
+        0.95 * masterGain,
         lerpAlpha,
       )
       ambientLightRef.current.color.lerp(targetAmbientColor, lerpAlpha)
@@ -215,15 +220,25 @@ export function CinemaRoom({
     if (hemiLightRef.current) {
       hemiLightRef.current.intensity = THREE.MathUtils.lerp(
         hemiLightRef.current.intensity,
-        1.55 * masterGain,
+        2.15 * masterGain,
         lerpAlpha,
       )
+      hemiLightRef.current.color.lerp(targetAmbientColor, lerpAlpha)
+    }
+
+    if (dirLightRef.current) {
+      dirLightRef.current.intensity = THREE.MathUtils.lerp(
+        dirLightRef.current.intensity,
+        1.45 * masterGain,
+        lerpAlpha,
+      )
+      dirLightRef.current.color.lerp(targetAmbientColor, lerpAlpha)
     }
 
     if (leftMoodLightRef.current) {
       leftMoodLightRef.current.intensity = THREE.MathUtils.lerp(
         leftMoodLightRef.current.intensity,
-        8.8 * masterGain,
+        9.5 * masterGain,
         lerpAlpha,
       )
       leftMoodLightRef.current.color.lerp(targetAccentColor, lerpAlpha)
@@ -232,7 +247,7 @@ export function CinemaRoom({
     if (rightMoodLightRef.current) {
       rightMoodLightRef.current.intensity = THREE.MathUtils.lerp(
         rightMoodLightRef.current.intensity,
-        8.8 * masterGain,
+        9.5 * masterGain,
         lerpAlpha,
       )
       rightMoodLightRef.current.color.lerp(targetAccentColor, lerpAlpha)
@@ -241,7 +256,7 @@ export function CinemaRoom({
     if (ceilingFillRef.current) {
       ceilingFillRef.current.intensity = THREE.MathUtils.lerp(
         ceilingFillRef.current.intensity,
-        6.0 * masterGain,
+        7.5 * masterGain,
         lerpAlpha,
       )
       ceilingFillRef.current.color.lerp(targetAmbientColor, lerpAlpha)
@@ -256,7 +271,7 @@ export function CinemaRoom({
       } else {
         screenGlowRef.current.intensity = THREE.MathUtils.lerp(
           screenGlowRef.current.intensity,
-          11.0 * Math.max(0.45, masterGain),
+          11.5 * Math.max(0.45, masterGain),
           lerpAlpha,
         )
       }
@@ -334,9 +349,15 @@ export function CinemaRoom({
         if (draggingPlacement) setDraggingPlacement(false)
       }}
     >
-      {/* Quest-3-Safe 5-Light Rig (0 shadow maps, smooth mood interpolation) */}
-      <ambientLight ref={ambientLightRef} color={lighting.ambientTint} intensity={0.55} />
-      <hemisphereLight ref={hemiLightRef} args={['#3E5278', '#141924', 1.6]} />
+      {/* Quest-3-Safe Multi-Room Light Rig (0 shadow maps, smooth mood interpolation) */}
+      <ambientLight ref={ambientLightRef} color={lighting.ambientTint} intensity={0.95} />
+      <hemisphereLight ref={hemiLightRef} args={['#8EB0E6', '#3A2C23', 2.15]} />
+      <directionalLight
+        ref={dirLightRef}
+        position={[10, 22, 16]}
+        color={lighting.ambientTint}
+        intensity={1.45}
+      />
       <pointLight
         ref={screenGlowRef}
         position={[

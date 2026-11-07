@@ -7,6 +7,7 @@ import {
   RefreshCw,
   Satellite,
   Search,
+  Sun,
   Tv,
   Volume2,
   VolumeX,
@@ -22,7 +23,11 @@ import {
   resolveExpansionWingState,
   type ExpansionRoomDestination,
 } from '../../constants/expansionRooms'
-import { FREE_ROAM_SEAT_ID, ROOM_SIZE_SPECS } from '../../constants/hangout'
+import {
+  FREE_ROAM_SEAT_ID,
+  LIGHTING_PRESETS,
+  ROOM_SIZE_SPECS,
+} from '../../constants/hangout'
 import {
   COMMAND_WEATHER_CITIES,
   fetchCommandNewsFeed,
@@ -35,9 +40,11 @@ import type {
   CommandNewsCategoryId,
   ComputedSeat,
   ExpansionWingSyncedState,
+  LightingPresetId,
   OutdoorSkyPresetId,
   ParticipantProfile,
   RoomCustomizationState,
+  RoomLightingConfig,
 } from '../../types/lounge'
 
 export type ClubhouseDrawerTabId = 'rooms' | 'command-ops'
@@ -55,6 +62,8 @@ export interface ClubhouseRoomsAndOpsDrawerProps {
   onSelectSeat: (seatId: string) => void
   onJumpToDestination: (dest: ExpansionRoomDestination) => void
   onUpdateWingState: (patch: Partial<ExpansionWingSyncedState>) => void
+  onUpdateLighting: (patch: Partial<RoomLightingConfig>) => void
+  onApplyLightingPreset: (presetId: LightingPresetId) => void
 }
 
 export function ClubhouseRoomsAndOpsDrawer({
@@ -70,6 +79,8 @@ export function ClubhouseRoomsAndOpsDrawer({
   onSelectSeat,
   onJumpToDestination,
   onUpdateWingState,
+  onUpdateLighting,
+  onApplyLightingPreset,
 }: ClubhouseRoomsAndOpsDrawerProps) {
   const sizeSpec =
     ROOM_SIZE_SPECS[roomCustomization.architecture.sizePreset] ??
@@ -242,8 +253,70 @@ export function ClubhouseRoomsAndOpsDrawer({
         </button>
       </div>
 
+      {/* Clubhouse-Wide Lighting & Brightness Bar (Active Across All Rooms & Wing) */}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#e5a93c]/25 bg-[#121926] px-3.5 py-2.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-[#e5a93c]">
+            <Sun className="h-3.5 w-3.5" />
+            Lighting Mood
+          </span>
+          {(
+            [
+              { id: 'daylight', label: '☀️ Studio Bright' },
+              { id: 'cozy', label: '🕯 Cozy Hangout' },
+              { id: 'neon-pub', label: '⚡ Neon Pub' },
+              { id: 'movie', label: '🎬 Movie Dim' },
+            ] as Array<{ id: LightingPresetId; label: string }>
+          ).map((p) => {
+            const active = roomCustomization.lighting.preset === p.id
+            return (
+              <button
+                key={p.id}
+                id={`btn-wing-light-${p.id}`}
+                type="button"
+                onClick={() => onApplyLightingPreset(p.id)}
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${
+                  active
+                    ? 'bg-[#e5a93c] text-[#080a0d]'
+                    : 'bg-[#090f19] text-[#cbd5e1] hover:bg-[#1a2436] hover:text-[#f4f1ea]'
+                }`}
+              >
+                {p.label}
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-[#94a3b8]">Brightness</span>
+          <input
+            id="slider-wing-brightness"
+            type="range"
+            min={0.25}
+            max={2.0}
+            step={0.05}
+            value={roomCustomization.lighting.brightness}
+            onChange={(e) =>
+              onUpdateLighting({
+                brightness: Number(e.target.value),
+              })
+            }
+            className="h-1.5 w-24 cursor-pointer accent-[#e5a93c] sm:w-28"
+          />
+          <span
+            id="text-wing-brightness-pct"
+            className="w-10 text-right font-mono text-[11px] font-semibold text-[#f8fafc]"
+          >
+            {Math.round(roomCustomization.lighting.brightness * 100)}%
+          </span>
+          <span className="hidden text-[10px] text-[#64748b] md:inline">
+            ({LIGHTING_PRESETS[roomCustomization.lighting.preset]?.label ?? 'Custom'})
+          </span>
+        </div>
+      </div>
+
       {activeTab === 'rooms' ? (
-        <div className="mt-3.5 space-y-3 max-h-[62vh] overflow-y-auto pr-1">
+        <div className="mt-3 space-y-3 max-h-[56vh] overflow-y-auto pr-1">
           <p className="text-xs text-[#94a3b8]">
             Walk physically through the rear <strong className="text-[#f4f1ea]">Grand Clubhouse Hallway</strong> using{' '}
             <kbd className="rounded bg-[#1e293b] px-1.5 py-0.5 font-mono text-[10px] text-[#f4f1ea]">WASD</kbd> / VR thumbstick, or jump straight into any room or seat below:

@@ -1782,6 +1782,8 @@ export function App() {
                 onTeleportToFloor={room.joined ? handleTeleportToFloor : undefined}
                 onJumpToDestination={handleJumpToDestination}
                 onUpdateWingState={handleUpdateWingState}
+                onUpdateLighting={handleUpdateLighting}
+                onApplyLightingPreset={handleApplyLightingPreset}
                 onOpenCommandOpsDrawer={
                   !inVRSession
                     ? () => handleToggleClubhouse(true, 'command-ops')
@@ -2012,6 +2014,8 @@ export function App() {
           onSelectSeat={room.selectSeat}
           onJumpToDestination={handleJumpToDestination}
           onUpdateWingState={handleUpdateWingState}
+          onUpdateLighting={handleUpdateLighting}
+          onApplyLightingPreset={handleApplyLightingPreset}
         />
       )}
 
