@@ -1,4 +1,4 @@
-import Hls from 'hls.js'
+import type Hls from 'hls.js'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import {
@@ -11,6 +11,15 @@ import {
   type YouTubeVideoItem,
 } from '../services/youtube'
 import type { PresenterState } from '../types/lounge'
+
+let hlsConstructorPromise: Promise<typeof Hls> | null = null
+
+function loadHlsConstructor(): Promise<typeof Hls> {
+  if (!hlsConstructorPromise) {
+    hlsConstructorPromise = import('hls.js').then((mod) => mod.default)
+  }
+  return hlsConstructorPromise
+}
 
 function isHlsUrl(url: string): boolean {
   return /\.m3u8(\?|#|$)/i.test(url) || url.includes('mpegurl')
@@ -227,62 +236,80 @@ export function useMediaScreen({
       }
 
       if (candidate.kind === 'hls' || isHlsUrl(candidate.streamUrl)) {
-        if (Hls.isSupported()) {
-          const hls = new Hls({
-            enableWorker: true,
-            lowLatencyMode: false,
-          })
-          hlsRef.current = hls
-          hls.loadSource(finalUrl)
-          hls.attachMedia(videoElement)
-          hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            if (cancelled) return
-            setHasVideoFrames(true)
-            const { currentTime, isPlaying } = latestPlaybackRef.current
-            if (currentTime > 0.5) {
-              videoElement.currentTime = currentTime
-            }
-            if (isPlaying) {
-              void videoElement.play().catch(() => {
-                videoElement.muted = true
-                companionAudioElement.muted = true
-                setNeedsAudioUnlock(true)
-                void videoElement.play().catch(() => undefined)
+        void loadHlsConstructor()
+          .then((HlsCtor) => {
+            if (cancelled || candidateIndexRef.current !== index) return
+            if (HlsCtor.isSupported()) {
+              const hls = new HlsCtor({
+                enableWorker: true,
+                lowLatencyMode: false,
               })
+              hlsRef.current = hls
+              hls.loadSource(finalUrl)
+              hls.attachMedia(videoElement)
+              hls.on(HlsCtor.Events.MANIFEST_PARSED, () => {
+                if (cancelled) return
+                setHasVideoFrames(true)
+                const { currentTime, isPlaying } = latestPlaybackRef.current
+                if (currentTime > 0.5) {
+                  videoElement.currentTime = currentTime
+                }
+                if (isPlaying) {
+                  void videoElement.play().catch(() => {
+                    videoElement.muted = true
+                    companionAudioElement.muted = true
+                    setNeedsAudioUnlock(true)
+                    void videoElement.play().catch(() => undefined)
+                  })
+                }
+              })
+              hls.on(HlsCtor.Events.ERROR, (_event, data) => {
+                if (cancelled || !data.fatal) return
+                // Fail over to next stream candidate if available!
+                const nextIdx = candidateIndexRef.current + 1
+                if (nextIdx < candidatesRef.current.length) {
+                  applyCandidate(nextIdx)
+                  return
+                }
+                if (
+                  canLocalProxy &&
+                  autoProxiedUrlRef.current !== candidate.streamUrl &&
+                  !presenterState.useCorsProxy
+                ) {
+                  autoProxiedUrlRef.current = candidate.streamUrl
+                  applyCandidate(candidateIndexRef.current)
+                  return
+                }
+                setMediaError(
+                  `HLS stream error (${data.details}). Try selecting another stream or switch relay.`,
+                )
+              })
+            } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
+              videoElement.src = finalUrl
+              videoElement.load()
+            } else {
+              const nextIdx = candidateIndexRef.current + 1
+              if (nextIdx < candidatesRef.current.length) {
+                applyCandidate(nextIdx)
+                return
+              }
+              setMediaError('HLS playback is not supported in this browser.')
             }
           })
-          hls.on(Hls.Events.ERROR, (_event, data) => {
-            if (cancelled || !data.fatal) return
-            // Fail over to next stream candidate if available!
-            const nextIdx = candidateIndexRef.current + 1
-            if (nextIdx < candidatesRef.current.length) {
-              applyCandidate(nextIdx)
-              return
+          .catch(() => {
+            if (cancelled || candidateIndexRef.current !== index) return
+            if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
+              videoElement.src = finalUrl
+              videoElement.load()
+            } else {
+              const nextIdx = candidateIndexRef.current + 1
+              if (nextIdx < candidatesRef.current.length) {
+                applyCandidate(nextIdx)
+                return
+              }
+              setMediaError('Unable to load HLS player module.')
             }
-            if (
-              canLocalProxy &&
-              autoProxiedUrlRef.current !== candidate.streamUrl &&
-              !presenterState.useCorsProxy
-            ) {
-              autoProxiedUrlRef.current = candidate.streamUrl
-              applyCandidate(candidateIndexRef.current)
-              return
-            }
-            setMediaError(
-              `HLS stream error (${data.details}). Try selecting another stream or switch relay.`,
-            )
           })
-        } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
-          videoElement.src = finalUrl
-          videoElement.load()
-        } else {
-          const nextIdx = candidateIndexRef.current + 1
-          if (nextIdx < candidatesRef.current.length) {
-            applyCandidate(nextIdx)
-            return
-          }
-          setMediaError('HLS playback is not supported in this browser.')
-        }
       } else {
         videoElement.src = finalUrl
         videoElement.load()

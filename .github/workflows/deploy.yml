@@ -1,0 +1,59 @@
+name: Deploy VR Lounge to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pages-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck & Lint
+        run: npm run typecheck && npm run lint
+
+      - name: Build production bundle
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || vars.VITE_SUPABASE_ANON_KEY }}
+          VITE_METERED_API_KEY: ${{ secrets.VITE_METERED_API_KEY || vars.VITE_METERED_API_KEY }}
+          VITE_METERED_DOMAIN: ${{ secrets.VITE_METERED_DOMAIN || vars.VITE_METERED_DOMAIN }}
+          VITE_METERED_TURN_URL: ${{ secrets.VITE_METERED_TURN_URL || vars.VITE_METERED_TURN_URL }}
+          VITE_TURN_URL: ${{ secrets.VITE_TURN_URL || vars.VITE_TURN_URL }}
+          VITE_TURN_USERNAME: ${{ secrets.VITE_TURN_USERNAME || vars.VITE_TURN_USERNAME }}
+          VITE_TURN_CREDENTIAL: ${{ secrets.VITE_TURN_CREDENTIAL || vars.VITE_TURN_CREDENTIAL }}
+          VITE_YOUTUBE_PROXY_URL: ${{ secrets.VITE_YOUTUBE_PROXY_URL || vars.VITE_YOUTUBE_PROXY_URL }}
+        run: npm run build && touch dist/.nojekyll
+
+      - name: Publish dist to gh-pages branch
+        run: |
+          cd dist
+          git init
+          git checkout -B gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Deploy VR Lounge (${GITHUB_SHA::7})"
+          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

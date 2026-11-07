@@ -1,0 +1,37 @@
+name: Supabase Free-Tier Keepalive
+
+on:
+  schedule:
+    # Runs every Monday and Thursday at 09:00 UTC so the free-tier Supabase project
+    # never hits the 7-day inactivity auto-pause between watch parties.
+    - cron: '0 9 * * 1,4'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping-supabase:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase Auth & Realtime endpoints
+        env:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || vars.VITE_SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || vars.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ]; then
+            echo "Supabase URL/Key not configured yet; skipping keepalive ping."
+            exit 0
+          fi
+          BASE_URL="${SUPABASE_URL%/}"
+          AUTH_STATUS=$(curl -sS -o /dev/null -w "%{http_code}" -H "apikey: ${SUPABASE_KEY}" "${BASE_URL}/auth/v1/settings")
+          RT_STATUS=$(curl -sS -o /dev/null -w "%{http_code}" -X POST \
+            -H "apikey: ${SUPABASE_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{"messages":[{"topic":"vr-lounge:KEEPALIVE","event":"ping","payload":{"ts":1}}]}' \
+            "${BASE_URL}/realtime/v1/api/broadcast")
+          echo "Supabase keepalive: auth=${AUTH_STATUS}, realtime=${RT_STATUS}"
+          if [ "$AUTH_STATUS" != "200" ]; then
+            echo "Unexpected HTTP status ${AUTH_STATUS} from ${BASE_URL}/auth/v1/settings"
+            exit 1
+          fi

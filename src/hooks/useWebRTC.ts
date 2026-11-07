@@ -14,7 +14,10 @@ interface PeerEntry {
   keepAliveChannel?: RTCDataChannel
 }
 
-function buildIceServers(): RTCIceServer[] {
+const METERED_TURN_STORAGE_KEY = 'vr-lounge:metered-turn-url'
+const ICE_CACHE_TTL_MS = 45 * 60 * 1000
+
+function buildStaticIceServers(): RTCIceServer[] {
   const servers: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
@@ -33,6 +36,160 @@ function buildIceServers(): RTCIceServer[] {
     })
   }
   return servers
+}
+
+function buildMeteredCredentialEndpoints(): string[] {
+  const storedUrl =
+    typeof window !== 'undefined'
+      ? window.localStorage.getItem(METERED_TURN_STORAGE_KEY)?.trim()
+      : ''
+  const rawTurnEndpoint =
+    storedUrl || (import.meta.env.VITE_METERED_TURN_URL as string | undefined)?.trim() || ''
+  const rawDomain = (import.meta.env.VITE_METERED_DOMAIN as string | undefined)?.trim() || ''
+  const apiKey = (import.meta.env.VITE_METERED_API_KEY as string | undefined)?.trim() || ''
+
+  const endpoints: string[] = []
+  const pushEndpoint = (url: string) => {
+    if (url && !endpoints.includes(url)) endpoints.push(url)
+  }
+
+  const formatDomainEndpoint = (domainInput: string): string | null => {
+    const clean = domainInput
+      .trim()
+      .replace(/^https?:\/\//i, '')
+      .replace(/\/.*$/, '')
+    if (!clean) return null
+    const host = clean.includes('.') ? clean : `${clean}.metered.live`
+    if (!apiKey) return null
+    return `https://${host}/api/v1/turn/credentials?apiKey=${encodeURIComponent(apiKey)}`
+  }
+
+  if (rawTurnEndpoint) {
+    if (/^https?:\/\//i.test(rawTurnEndpoint) && rawTurnEndpoint.includes('/api/')) {
+      if (apiKey && !rawTurnEndpoint.includes('apiKey=')) {
+        const sep = rawTurnEndpoint.includes('?') ? '&' : '?'
+        pushEndpoint(`${rawTurnEndpoint}${sep}apiKey=${encodeURIComponent(apiKey)}`)
+      } else {
+        pushEndpoint(rawTurnEndpoint)
+      }
+    } else {
+      const fromTurnVar = formatDomainEndpoint(rawTurnEndpoint)
+      if (fromTurnVar) pushEndpoint(fromTurnVar)
+    }
+  }
+
+  if (rawDomain) {
+    const fromDomain = formatDomainEndpoint(rawDomain)
+    if (fromDomain) pushEndpoint(fromDomain)
+  }
+
+  if (apiKey && endpoints.length === 0) {
+    // Fallback probe for OpenRelay global subdomain when only VITE_METERED_API_KEY is set
+    pushEndpoint(
+      `https://openrelayproject.metered.live/api/v1/turn/credentials?apiKey=${encodeURIComponent(apiKey)}`,
+    )
+  }
+
+  return endpoints
+}
+
+let cachedDynamicIceServers: RTCIceServer[] = []
+let dynamicIceFetchedAt = 0
+let dynamicIceInFlight: Promise<RTCIceServer[]> | null = null
+
+function mergeIceServers(base: RTCIceServer[], extra: RTCIceServer[]): RTCIceServer[] {
+  if (extra.length === 0) return base
+  const seen = new Set<string>()
+  const merged: RTCIceServer[] = []
+  for (const srv of [...base, ...extra]) {
+    if (!srv?.urls) continue
+    const key = `${ Array.isArray(srv.urls) ? srv.urls.join(',') : srv.urls }|${srv.username ?? ''}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      merged.push(srv)
+    }
+  }
+  return merged
+}
+
+function buildIceServers(): RTCIceServer[] {
+  return mergeIceServers(buildStaticIceServers(), cachedDynamicIceServers)
+}
+
+async function ensureDynamicTurnServers(): Promise<RTCIceServer[]> {
+  if (
+    cachedDynamicIceServers.length > 0 &&
+    Date.now() - dynamicIceFetchedAt < ICE_CACHE_TTL_MS
+  ) {
+    return buildIceServers()
+  }
+  if (dynamicIceInFlight) return dynamicIceInFlight
+
+  const endpoints = buildMeteredCredentialEndpoints()
+  if (endpoints.length === 0 || typeof fetch === 'undefined') {
+    return buildIceServers()
+  }
+
+  dynamicIceInFlight = (async () => {
+    for (const endpoint of endpoints) {
+      try {
+        const res = await fetch(endpoint, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          signal: AbortSignal.timeout(4500),
+        })
+        if (!res.ok) continue
+        const json = (await res.json()) as unknown
+        if (Array.isArray(json)) {
+          const valid = json.filter(
+            (item): item is RTCIceServer =>
+              Boolean(
+                item &&
+                  typeof item === 'object' &&
+                  'urls' in item &&
+                  (typeof (item as RTCIceServer).urls === 'string' ||
+                    Array.isArray((item as RTCIceServer).urls)),
+              ),
+          )
+          if (valid.length > 0) {
+            cachedDynamicIceServers = valid
+            dynamicIceFetchedAt = Date.now()
+            break
+          }
+        }
+      } catch {
+        // Ignore transient network errors and fall back to STUN/static TURN
+      }
+    }
+    dynamicIceInFlight = null
+    return buildIceServers()
+  })()
+
+  return dynamicIceInFlight
+}
+
+// Warm TURN credentials in the background as soon as the app loads
+if (typeof window !== 'undefined') {
+  void ensureDynamicTurnServers()
+}
+
+function applyScreenBitrateCap(sender: RTCRtpSender, peerCount: number): void {
+  if (!sender.track || sender.track.kind !== 'video' || typeof sender.getParameters !== 'function') {
+    return
+  }
+  try {
+    const params = sender.getParameters()
+    if (!params.encodings || params.encodings.length === 0) {
+      params.encodings = [{}]
+    }
+    const maxBitrate =
+      peerCount <= 2 ? 2_500_000 : peerCount <= 4 ? 1_600_000 : 1_100_000
+    params.encodings[0].maxBitrate = maxBitrate
+    params.degradationPreference = 'maintain-framerate'
+    void sender.setParameters(params).catch(() => undefined)
+  } catch {
+    // Ignore unsupported sender parameter browsers
+  }
 }
 
 export interface UseWebRTCOptions {
@@ -254,9 +411,25 @@ export function useWebRTC({
         return existing
       }
 
+      const initialIce = buildIceServers()
       const pc = new RTCPeerConnection({
-        iceServers: buildIceServers(),
+        iceServers: initialIce,
       })
+
+      void ensureDynamicTurnServers().then((freshServers) => {
+        if (pc.signalingState === 'closed' || freshServers.length <= initialIce.length) {
+          return
+        }
+        try {
+          pc.setConfiguration({ iceServers: freshServers })
+          if (pc.connectionState === 'failed' || pc.iceConnectionState === 'failed') {
+            pc.restartIce()
+          }
+        } catch {
+          // Ignore browsers that disallow hot setConfiguration
+        }
+      })
+
       const isPolite = localUserId < remoteUserId
 
       const entry: PeerEntry = {
@@ -282,8 +455,16 @@ export function useWebRTC({
       // Attach local presenter tab stream if currently sharing
       if (localScreenStreamRef.current) {
         const screenStream = localScreenStreamRef.current
+        const totalPeers = peersRef.current.size + 1
         for (const track of screenStream.getTracks()) {
-          entry.screenSenders.push(pc.addTrack(track, screenStream))
+          const sender = pc.addTrack(track, screenStream)
+          applyScreenBitrateCap(sender, totalPeers)
+          entry.screenSenders.push(sender)
+        }
+        for (const existingPeer of peersRef.current.values()) {
+          for (const sender of existingPeer.screenSenders) {
+            applyScreenBitrateCap(sender, totalPeers)
+          }
         }
       }
 
@@ -555,6 +736,7 @@ export function useWebRTC({
       localScreenStreamRef.current = displayStream
       setLocalScreenStream(displayStream)
 
+      const totalPeers = Math.max(1, peersRef.current.size)
       for (const entry of peersRef.current.values()) {
         for (const oldSender of entry.screenSenders) {
           try {
@@ -566,7 +748,9 @@ export function useWebRTC({
         entry.screenSenders = []
         if (entry.pc.signalingState !== 'closed') {
           for (const track of displayStream.getTracks()) {
-            entry.screenSenders.push(entry.pc.addTrack(track, displayStream))
+            const sender = entry.pc.addTrack(track, displayStream)
+            applyScreenBitrateCap(sender, totalPeers)
+            entry.screenSenders.push(sender)
           }
         }
       }

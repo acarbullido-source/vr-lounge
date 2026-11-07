@@ -1,5 +1,5 @@
 import { createClient, type RealtimeChannel, type SupabaseClient } from '@supabase/supabase-js'
-import mqtt, { type MqttClient } from 'mqtt'
+import type { MqttClient } from 'mqtt'
 import type {
   AvatarPose6DoF,
   ChatMessage,
@@ -53,9 +53,32 @@ const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.t
 const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim() ?? ''
 
 let sharedSupabaseClient: SupabaseClient | null = null
+let supabaseKeepaliveSent = false
 
 export function hasSupabaseCredentials(): boolean {
   return Boolean(supabaseUrl && supabaseAnonKey)
+}
+
+/**
+ * Lightweight Auth settings GET ping once per browser session so Supabase Free Tier
+ * registers project/database activity (preventing the 7-day inactivity pause even when
+ * VR Lounge only uses Realtime Broadcast & Presence). Works with both `sb_publishable_…`
+ * and legacy `anon` keys.
+ */
+function pingSupabaseKeepalive(): void {
+  if (supabaseKeepaliveSent || !hasSupabaseCredentials() || typeof fetch === 'undefined') return
+  supabaseKeepaliveSent = true
+  const base = supabaseUrl.replace(/\/+$/, '')
+  const isNewFormatKey =
+    supabaseAnonKey.startsWith('sb_publishable_') || supabaseAnonKey.startsWith('sb_secret_')
+  const headers: Record<string, string> = {
+    apikey: supabaseAnonKey,
+    ...(isNewFormatKey ? {} : { Authorization: `Bearer ${supabaseAnonKey}` }),
+  }
+  void fetch(`${base}/auth/v1/settings`, {
+    method: 'GET',
+    headers,
+  }).catch(() => undefined)
 }
 
 function getSupabaseClient(): SupabaseClient | null {
@@ -81,12 +104,12 @@ function shortPacketId(): string {
  * 1. Supabase Realtime (Presence + Broadcast) when VITE_SUPABASE_URL & VITE_SUPABASE_ANON_KEY are set.
  * 2. Zero-Config Cloud Relay (MQTT over TLS WebSockets + local BroadcastChannel mirror) out of the box,
  *    allowing Meta Quest 3 headsets and desktop browsers across different networks to connect immediately
- *    with zero account setup.
+ *    with zero account setup (or as an automatic fallback if a Supabase project is paused).
  */
 export class RoomRealtimeService {
   readonly roomCode: string
   readonly localUserId: string
-  readonly mode: TransportMode
+  mode: TransportMode
 
   private callbacks: RealtimeCallbacks
   private currentProfile: ParticipantProfile
@@ -125,9 +148,12 @@ export class RoomRealtimeService {
   private async connectSupabase(): Promise<void> {
     const client = getSupabaseClient()
     if (!client) {
+      this.mode = 'cloud-relay'
       this.connectCloudRelayAndLocal()
       return
     }
+
+    pingSupabaseKeepalive()
 
     const channelName = `vr-lounge:${this.roomCode}`
     const channel = client.channel(channelName, {
@@ -198,14 +224,26 @@ export class RoomRealtimeService {
       })
 
     this.supabaseChannel = channel
+    let subscribedOnce = false
 
     channel.subscribe(async (status) => {
       if (this.destroyed) return
       if (status === 'SUBSCRIBED') {
+        subscribedOnce = true
         this.callbacks.onConnectionStatus?.(true)
         await channel.track(this.currentProfile)
         this.requestRoomState()
-      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        if (!subscribedOnce && this.supabaseChannel === channel) {
+          // Automatic failover to Cloud Relay if Supabase project is paused or unreachable
+          this.supabaseChannel = null
+          this.mode = 'cloud-relay'
+          void client.removeChannel(channel).catch(() => undefined)
+          this.connectCloudRelayAndLocal()
+          return
+        }
+        this.callbacks.onConnectionStatus?.(false)
+      } else if (status === 'CLOSED') {
         this.callbacks.onConnectionStatus?.(false)
       }
     })
@@ -231,7 +269,7 @@ export class RoomRealtimeService {
     }
 
     // 2. Global TLS WebSocket Relay (MQTT over WSS) for cross-network headsets & friends
-    this.connectMqttBroker(0)
+    void this.connectMqttBroker(0)
 
     // Announce immediately + periodic heartbeat & stale-peer pruning
     this.publishRelay('presence-announce', this.currentProfile)
@@ -250,9 +288,18 @@ export class RoomRealtimeService {
     window.addEventListener('beforeunload', this.handleWindowUnload)
   }
 
-  private connectMqttBroker(brokerIndex: number): void {
+  private async connectMqttBroker(brokerIndex: number): Promise<void> {
     if (this.destroyed) return
     const url = PUBLIC_WSS_BROKERS[brokerIndex % PUBLIC_WSS_BROKERS.length]
+
+    let mqttConnect: typeof import('mqtt').connect
+    try {
+      const mqttMod = await import('mqtt')
+      mqttConnect = mqttMod.default?.connect ?? mqttMod.connect
+    } catch {
+      return
+    }
+    if (this.destroyed) return
 
     const willEnvelope: RelayEnvelope = {
       id: shortPacketId(),
@@ -261,7 +308,7 @@ export class RoomRealtimeService {
       payload: { userId: this.localUserId },
     }
 
-    const client = mqtt.connect(url, {
+    const client = mqttConnect(url, {
       clientId: `vrl-${this.localUserId.slice(0, 12)}-${Math.random().toString(36).slice(2, 6)}`,
       clean: true,
       keepalive: 25,
@@ -306,7 +353,7 @@ export class RoomRealtimeService {
       if (!connectedOnce && !this.destroyed && brokerIndex + 1 < PUBLIC_WSS_BROKERS.length) {
         client.end(true)
         this.mqttClient = null
-        this.connectMqttBroker(brokerIndex + 1)
+        void this.connectMqttBroker(brokerIndex + 1)
       }
     })
 

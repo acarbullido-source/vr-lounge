@@ -172,12 +172,61 @@ function streamCorsProxyPlugin(): Plugin {
   }
 }
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   base: './',
   resolve: {
     dedupe: ['three', 'react', 'react-dom'],
   },
-  plugins: [basicSsl(), tailwindcss(), react(), streamCorsProxyPlugin()],
+  plugins: [
+    ...(command === 'serve' ? [basicSsl()] : []),
+    tailwindcss(),
+    react(),
+    streamCorsProxyPlugin(),
+  ],
+  build: {
+    chunkSizeWarningLimit: 1600,
+    rolldownOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          // Leave dynamically imported modules (hls.js, mqtt, @iwer/*) as pure async chunks
+          if (
+            id.includes('/node_modules/hls.js/') ||
+            id.includes('/node_modules/mqtt/') ||
+            id.includes('/node_modules/@iwer/') ||
+            id.includes('/node_modules/@eligrey/')
+          ) {
+            return undefined
+          }
+          if (
+            id.includes('/node_modules/react/') ||
+            id.includes('/node_modules/react-dom/') ||
+            id.includes('/node_modules/scheduler/') ||
+            id.includes('/node_modules/zustand/')
+          ) {
+            return 'react-vendor'
+          }
+          if (id.includes('/node_modules/@supabase/')) {
+            return 'supabase-vendor'
+          }
+          if (id.includes('/node_modules/lucide-react/')) {
+            return 'ui-icons'
+          }
+          if (
+            id.includes('/node_modules/three') ||
+            id.includes('/node_modules/@react-three/') ||
+            id.includes('/node_modules/@pmndrs/') ||
+            id.includes('/node_modules/its-fine/') ||
+            id.includes('/node_modules/suspend-react/') ||
+            id.includes('/node_modules/react-reconciler/')
+          ) {
+            return 'xr-engine'
+          }
+          return undefined
+        },
+      },
+    },
+  },
   server: {
     host: true,
     port: 5173,
@@ -186,4 +235,4 @@ export default defineConfig({
     host: true,
     port: 4173,
   },
-})
+}))

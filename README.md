@@ -29,9 +29,11 @@ Vite launches with `@vitejs/plugin-basic-ssl` and `--host` on `https://localhost
 
 ---
 
-## Optional Cloud Upgrades (Vercel / Supabase / TURN)
+## Cloud Stack & Automated Deployment
 
-This repository also includes [vercel.json](vercel.json) and [api/stream-proxy.js](api/stream-proxy.js) if you ever want to deploy on Vercel with the server-side `/api/stream-proxy` CORS helper:
+Pushes to `main` automatically typecheck, lint, build vendor-split bundles, and deploy to GitHub Pages via [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml), while [`.github/workflows/supabase-keepalive.yml`](.github/workflows/supabase-keepalive.yml) keeps free-tier Supabase projects active year-round:
 
-- `VITE_SUPABASE_URL` & `VITE_SUPABASE_ANON_KEY` — Dedicated Supabase Realtime Presence & Broadcast channels.
-- `VITE_TURN_URL`, `VITE_TURN_USERNAME`, & `VITE_TURN_CREDENTIAL` — Optional TURN relay for friends behind strict NAT / 5G cellular routers.
+- `VITE_SUPABASE_URL` & `VITE_SUPABASE_ANON_KEY` — Dedicated **Supabase Realtime** Presence & 20Hz Avatar Pose Broadcast channels (supports `sb_publishable_...` and legacy `anon` keys, with automatic Cloud Relay failover).
+- `VITE_METERED_API_KEY` (plus optional `VITE_METERED_DOMAIN` / `VITE_METERED_TURN_URL`) — **Metered.ca OpenRelay TURN** (UDP/TCP/TLS on ports 80 & 443) for friends behind strict NATs, college Wi-Fi, or mobile hotspots.
+- `VITE_YOUTUBE_PROXY_URL` — Optional custom Piped/Invidious relay override (defaults to persistent latency-ranked community relay failover).
+

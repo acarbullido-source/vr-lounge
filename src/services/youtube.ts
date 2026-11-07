@@ -76,6 +76,18 @@ const DEFAULT_INVIDIOUS_INSTANCES: readonly string[] = [
   'https://yewtu.be',
 ]
 
+const RELAY_STATS_STORAGE_KEY = 'vr-lounge:yt-relay-stats-v1'
+const DISCOVERED_RELAYS_STORAGE_KEY = 'vr-lounge:yt-discovered-v1'
+const DISCOVERED_CACHE_TTL_MS = 12 * 60 * 60 * 1000
+const STATS_CACHE_TTL_MS = 24 * 60 * 60 * 1000
+
+interface StoredRelayStat {
+  kind: 'piped' | 'invidious'
+  ewmaMs: number
+  updatedAt: number
+  cooldownUntil?: number
+}
+
 let dynamicPipedInstances: string[] = [...DEFAULT_PIPED_INSTANCES]
 let dynamicInvidiousInstances: string[] = [...DEFAULT_INVIDIOUS_INSTANCES]
 let dynamicDiscoveryPromise: Promise<void> | null = null
@@ -83,8 +95,9 @@ let dynamicDiscoveryPromise: Promise<void> | null = null
 let preferredPipedBase: string | null = null
 let preferredInvidiousBase: string | null = null
 const instanceCooldownUntil = new Map<string, number>()
+const instanceLatencyMs = new Map<string, { kind: 'piped' | 'invidious'; ewmaMs: number }>()
 
-const COOLDOWN_MS = 90_000
+const COOLDOWN_MS = 120_000
 const REQUEST_TIMEOUT_MS = 4_800
 
 function normalizeBaseUrl(raw: string): string | null {
@@ -98,6 +111,105 @@ function normalizeBaseUrl(raw: string): string | null {
     return null
   }
 }
+
+function hydrateCachedRelayState(): void {
+  if (typeof window === 'undefined') return
+  const now = Date.now()
+
+  try {
+    const rawDiscovered = window.localStorage.getItem(DISCOVERED_RELAYS_STORAGE_KEY)
+    if (rawDiscovered) {
+      const parsed = JSON.parse(rawDiscovered) as {
+        savedAt?: number
+        piped?: string[]
+        invidious?: string[]
+      }
+      if (parsed?.savedAt && now - parsed.savedAt < DISCOVERED_CACHE_TTL_MS) {
+        if (Array.isArray(parsed.piped) && parsed.piped.length > 0) {
+          dynamicPipedInstances = Array.from(
+            new Set([...parsed.piped, ...DEFAULT_PIPED_INSTANCES]),
+          )
+        }
+        if (Array.isArray(parsed.invidious) && parsed.invidious.length > 0) {
+          dynamicInvidiousInstances = Array.from(
+            new Set([...parsed.invidious, ...DEFAULT_INVIDIOUS_INSTANCES]),
+          )
+        }
+      }
+    }
+  } catch {
+    // Ignore storage read errors
+  }
+
+  try {
+    const rawStats = window.localStorage.getItem(RELAY_STATS_STORAGE_KEY)
+    if (!rawStats) return
+    const parsed = JSON.parse(rawStats) as Record<string, StoredRelayStat>
+    if (!parsed || typeof parsed !== 'object') return
+
+    let bestPiped = Infinity
+    let bestInvidious = Infinity
+
+    for (const [base, stat] of Object.entries(parsed)) {
+      const norm = normalizeBaseUrl(base)
+      if (!norm || !stat || now - stat.updatedAt > STATS_CACHE_TTL_MS) continue
+      if (stat.cooldownUntil && stat.cooldownUntil > now) {
+        instanceCooldownUntil.set(norm, stat.cooldownUntil)
+        continue
+      }
+      if (typeof stat.ewmaMs === 'number' && stat.ewmaMs > 0) {
+        instanceLatencyMs.set(norm, { kind: stat.kind, ewmaMs: stat.ewmaMs })
+        if (stat.kind === 'piped' && stat.ewmaMs < bestPiped) {
+          bestPiped = stat.ewmaMs
+          preferredPipedBase = norm
+        } else if (stat.kind === 'invidious' && stat.ewmaMs < bestInvidious) {
+          bestInvidious = stat.ewmaMs
+          preferredInvidiousBase = norm
+        }
+      }
+    }
+  } catch {
+    // Ignore storage parse errors
+  }
+}
+
+function persistRelayStats(): void {
+  if (typeof window === 'undefined') return
+  try {
+    const now = Date.now()
+    const payload: Record<string, StoredRelayStat> = {}
+    const entries = Array.from(instanceLatencyMs.entries())
+      .sort((a, b) => a[1].ewmaMs - b[1].ewmaMs)
+      .slice(0, 24)
+
+    for (const [base, info] of entries) {
+      payload[base] = {
+        kind: info.kind,
+        ewmaMs: info.ewmaMs,
+        updatedAt: now,
+        cooldownUntil: instanceCooldownUntil.get(base),
+      }
+    }
+
+    for (const [base, until] of instanceCooldownUntil.entries()) {
+      if (until > now && !payload[base]) {
+        const looksInv = base.includes('inv') || base.includes('yewtu')
+        payload[base] = {
+          kind: looksInv ? 'invidious' : 'piped',
+          ewmaMs: REQUEST_TIMEOUT_MS,
+          updatedAt: now,
+          cooldownUntil: until,
+        }
+      }
+    }
+
+    window.localStorage.setItem(RELAY_STATS_STORAGE_KEY, JSON.stringify(payload))
+  } catch {
+    // Ignore quota or private-browsing storage errors
+  }
+}
+
+hydrateCachedRelayState()
 
 export function getCustomYouTubeInstance(): string {
   if (typeof window !== 'undefined') {
@@ -121,8 +233,16 @@ export function setCustomYouTubeInstance(url: string): void {
 
 export function resetInstanceCooldowns(): void {
   instanceCooldownUntil.clear()
+  instanceLatencyMs.clear()
   preferredPipedBase = null
   preferredInvidiousBase = null
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.removeItem(RELAY_STATS_STORAGE_KEY)
+    } catch {
+      // Ignore
+    }
+  }
 }
 
 function isCoolingDown(base: string): boolean {
@@ -137,17 +257,39 @@ function isCoolingDown(base: string): boolean {
 
 function markFailed(base: string): void {
   instanceCooldownUntil.set(base, Date.now() + COOLDOWN_MS)
+  const prev = instanceLatencyMs.get(base)
+  if (prev) {
+    instanceLatencyMs.set(base, {
+      kind: prev.kind,
+      ewmaMs: Math.min(REQUEST_TIMEOUT_MS * 2, Math.round(prev.ewmaMs * 1.6 + 900)),
+    })
+  }
   if (preferredPipedBase === base) preferredPipedBase = null
   if (preferredInvidiousBase === base) preferredInvidiousBase = null
+  persistRelayStats()
 }
 
-function markHealthy(base: string, kind: 'piped' | 'invidious'): void {
+function markHealthy(base: string, kind: 'piped' | 'invidious', elapsedMs = 600): void {
   instanceCooldownUntil.delete(base)
+  const clamped = Math.max(50, Math.min(REQUEST_TIMEOUT_MS, Math.round(elapsedMs)))
+  const prev = instanceLatencyMs.get(base)
+  const ewmaMs = prev ? Math.round(prev.ewmaMs * 0.55 + clamped * 0.45) : clamped
+  instanceLatencyMs.set(base, { kind, ewmaMs })
+
   if (kind === 'piped') {
-    preferredPipedBase = base
+    const curBest = preferredPipedBase ? instanceLatencyMs.get(preferredPipedBase)?.ewmaMs : undefined
+    if (!preferredPipedBase || curBest === undefined || ewmaMs <= curBest + 120) {
+      preferredPipedBase = base
+    }
   } else {
-    preferredInvidiousBase = base
+    const curBest = preferredInvidiousBase
+      ? instanceLatencyMs.get(preferredInvidiousBase)?.ewmaMs
+      : undefined
+    if (!preferredInvidiousBase || curBest === undefined || ewmaMs <= curBest + 120) {
+      preferredInvidiousBase = base
+    }
   }
+  persistRelayStats()
 }
 
 /**
@@ -168,6 +310,8 @@ function ensureDynamicInstancesLoaded(): Promise<void> {
         }),
       ])
 
+      let updated = false
+
       if (pipedRes.status === 'fulfilled' && pipedRes.value.ok) {
         const md = await pipedRes.value.text()
         const discovered: string[] = []
@@ -182,6 +326,7 @@ function ensureDynamicInstancesLoaded(): Promise<void> {
         if (discovered.length > 0) {
           const merged = new Set([...discovered, ...DEFAULT_PIPED_INSTANCES])
           dynamicPipedInstances = Array.from(merged)
+          updated = true
         }
       }
 
@@ -203,7 +348,23 @@ function ensureDynamicInstancesLoaded(): Promise<void> {
           if (discovered.length > 0) {
             const merged = new Set([...discovered, ...DEFAULT_INVIDIOUS_INSTANCES])
             dynamicInvidiousInstances = Array.from(merged)
+            updated = true
           }
+        }
+      }
+
+      if (updated && typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(
+            DISCOVERED_RELAYS_STORAGE_KEY,
+            JSON.stringify({
+              savedAt: Date.now(),
+              piped: dynamicPipedInstances.slice(0, 25),
+              invidious: dynamicInvidiousInstances.slice(0, 20),
+            }),
+          )
+        } catch {
+          // Ignore storage write errors
         }
       }
     } catch {
@@ -238,6 +399,14 @@ function buildOrderedProviderList(): ProviderTarget[] {
   }
   if (preferredPipedBase) pushTarget(preferredPipedBase, 'piped')
   if (preferredInvidiousBase) pushTarget(preferredInvidiousBase, 'invidious')
+
+  // Next, push any latency-benchmarked healthy relays from fastest to slowest
+  const rankedHealthy = Array.from(instanceLatencyMs.entries())
+    .filter(([base]) => !isCoolingDown(base))
+    .sort((a, b) => a[1].ewmaMs - b[1].ewmaMs)
+  for (const [base, info] of rankedHealthy) {
+    pushTarget(base, info.kind)
+  }
 
   // Interleave Piped and Invidious instances so waves test both architectures concurrently
   const maxLen = Math.max(dynamicPipedInstances.length, dynamicInvidiousInstances.length)
@@ -286,9 +455,14 @@ async function raceProviderWaves<T>(
     try {
       const winner = await Promise.any(
         wave.map(async (target, idx) => {
+          const startedAt =
+            typeof performance !== 'undefined' ? performance.now() : Date.now()
           try {
             const result = await runner(target, controllers[idx].signal)
-            markHealthy(target.base, target.kind)
+            const elapsed =
+              (typeof performance !== 'undefined' ? performance.now() : Date.now()) -
+              startedAt
+            markHealthy(target.base, target.kind, elapsed)
             return { result, provider: target, idx }
           } catch (err) {
             if (!controllers[idx].signal.aborted) {
