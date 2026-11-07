@@ -1,0 +1,1159 @@
+import {
+  Check,
+  Copy,
+  Crown,
+  Glasses,
+  Globe,
+  Headphones,
+  Link2,
+  Lock,
+  LogOut,
+  MessageSquare,
+  Mic,
+  MicOff,
+  MonitorUp,
+  Pause,
+  Play,
+  Radio,
+  RotateCcw,
+  RefreshCw,
+  Send,
+  ShieldAlert,
+  Sparkles,
+  Tv,
+  Unlock,
+  Users,
+  Volume2,
+  X,
+} from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import {
+  AVATAR_COLORS,
+  AVATAR_STYLES,
+  LOUNGE_SEATS,
+  QUICK_REACTIONS,
+  SAMPLE_MEDIA_PRESETS,
+  generateRoomCode,
+} from '../../constants/cinema'
+import type { JoinRoomOptions } from '../../hooks/useRoomSession'
+import type {
+  AvatarStyleId,
+  ChatMessage,
+  ParticipantProfile,
+  PresenterState,
+  TransportMode,
+} from '../../types/lounge'
+
+function formatDuration(sec: number): string {
+  if (!Number.isFinite(sec) || sec <= 0) return '0:00'
+  const s = Math.floor(sec)
+  const mins = Math.floor(s / 60)
+  const rem = s % 60
+  return `${mins}:${rem.toString().padStart(2, '0')}`
+}
+
+export interface CompanionOverlayProps {
+  joined: boolean
+  connected: boolean
+  inVRSession: boolean
+  roomCode: string
+  transportMode: TransportMode
+  localProfile: ParticipantProfile
+  participants: ParticipantProfile[]
+  presenterState: PresenterState
+  isLocalPresenter: boolean
+  canTakeControl: boolean
+  messages: ChatMessage[]
+  audioInputs: MediaDeviceInfo[]
+  audioOutputs: MediaDeviceInfo[]
+  selectedMicId: string
+  selectedSpeakerId: string
+  micPermissionError: string | null
+  localMicLevel: number
+  isSharingTab: boolean
+  cinemaVolume: number
+  voiceVolume: number
+  localCurrentTime: number
+  localDuration: number
+  mediaError: string | null
+  needsAudioUnlock: boolean
+  statusBanner: string | null
+  onDismissBanner: () => void
+  onSelectMic: (id: string) => void
+  onSelectSpeaker: (id: string) => void
+  onJoinRoom: (opts: JoinRoomOptions, enterVRImmediately: boolean) => Promise<void>
+  onEnterVR: () => Promise<void>
+  onLeaveRoom: () => Promise<void>
+  onToggleMute: () => void
+  onSelectSeat: (seatIndex: number) => void
+  onRecenterSeat: () => void
+  onTakeControl: () => void
+  onReleaseControl: () => void
+  onToggleHostLock: () => void
+  onStartTabShare: () => Promise<void>
+  onStopTabShare: () => void
+  onLoadStreamUrl: (url: string, title: string, useCorsProxy: boolean) => void
+  onTogglePlayPause: () => void
+  onSeekTo: (timeSeconds: number) => void
+  onChangeCinemaVolume: (vol: number) => void
+  onChangeVoiceVolume: (vol: number) => void
+  onUnlockAudio: () => void
+  onSendChat: (text: string) => void
+  onSendReaction: (emoji: string) => void
+}
+
+export function CompanionOverlay({
+  joined,
+  connected,
+  inVRSession,
+  roomCode,
+  transportMode,
+  localProfile,
+  participants,
+  presenterState,
+  isLocalPresenter,
+  canTakeControl,
+  messages,
+  audioInputs,
+  audioOutputs,
+  selectedMicId,
+  selectedSpeakerId,
+  micPermissionError,
+  localMicLevel,
+  isSharingTab,
+  cinemaVolume,
+  voiceVolume,
+  localCurrentTime,
+  localDuration,
+  mediaError,
+  needsAudioUnlock,
+  statusBanner,
+  onDismissBanner,
+  onSelectMic,
+  onSelectSpeaker,
+  onJoinRoom,
+  onEnterVR,
+  onLeaveRoom,
+  onToggleMute,
+  onSelectSeat,
+  onRecenterSeat,
+  onTakeControl,
+  onReleaseControl,
+  onToggleHostLock,
+  onStartTabShare,
+  onStopTabShare,
+  onLoadStreamUrl,
+  onTogglePlayPause,
+  onSeekTo,
+  onChangeCinemaVolume,
+  onChangeVoiceVolume,
+  onUnlockAudio,
+  onSendChat,
+  onSendReaction,
+}: CompanionOverlayProps) {
+  // Pre-join lobby form state
+  const [displayName, setDisplayName] = useState(() => {
+    const saved = window.localStorage.getItem('vr-lounge:name')
+    return saved || `Viewer ${Math.floor(100 + Math.random() * 899)}`
+  })
+  const [lobbyRoomCode, setLobbyRoomCode] = useState(() => {
+    const params = new URLSearchParams(window.location.search)
+    return params.get('room')?.toUpperCase() || 'CINEMA-1'
+  })
+  const [avatarColor, setAvatarColor] = useState<string>(AVATAR_COLORS[0].hex)
+  const [avatarStyle, setAvatarStyle] = useState<AvatarStyleId>(AVATAR_STYLES[0].id)
+  const [startMuted, setStartMuted] = useState(false)
+  const [joining, setJoining] = useState(false)
+
+  // In-room companion drawers
+  const [urlDrawerOpen, setUrlDrawerOpen] = useState(false)
+  const [chatDrawerOpen, setChatDrawerOpen] = useState(false)
+  const [rosterOpen, setRosterOpen] = useState(false)
+  const [audioPopoverOpen, setAudioPopoverOpen] = useState(false)
+  const [urlInput, setUrlInput] = useState(presenterState.mediaUrl)
+  const [urlTitleInput, setUrlTitleInput] = useState(presenterState.mediaTitle)
+  const [useCorsProxy, setUseCorsProxy] = useState(presenterState.useCorsProxy)
+  const [chatDraft, setChatDraft] = useState('')
+  const [copiedCode, setCopiedCode] = useState(false)
+  const [unreadCount, setUnreadCount] = useState(0)
+  const lastSeenMsgCountRef = useRef(0)
+  const chatScrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    setUrlInput(presenterState.mediaUrl)
+    setUrlTitleInput(presenterState.mediaTitle)
+    setUseCorsProxy(presenterState.useCorsProxy)
+  }, [presenterState.mediaTitle, presenterState.mediaUrl, presenterState.useCorsProxy])
+
+  useEffect(() => {
+    if (chatDrawerOpen) {
+      lastSeenMsgCountRef.current = messages.length
+      setUnreadCount(0)
+      if (chatScrollRef.current) {
+        chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight
+      }
+    } else if (messages.length > lastSeenMsgCountRef.current) {
+      setUnreadCount(messages.length - lastSeenMsgCountRef.current)
+    }
+  }, [chatDrawerOpen, messages.length])
+
+  // Hide 2D DOM UI while immersed in headset VR
+  if (inVRSession) {
+    return null
+  }
+
+  const handleLobbySubmit = async (enterVRImmediately: boolean) => {
+    if (joining) return
+    setJoining(true)
+    try {
+      const cleanName = displayName.trim() || 'Cinema Guest'
+      window.localStorage.setItem('vr-lounge:name', cleanName)
+      const normalizedRoom = lobbyRoomCode.trim().toUpperCase() || 'CINEMA-1'
+
+      // Update shareable URL query parameter without reloading
+      const nextUrl = new URL(window.location.href)
+      nextUrl.searchParams.set('room', normalizedRoom)
+      window.history.replaceState({}, '', nextUrl.toString())
+
+      await onJoinRoom(
+        {
+          roomCode: normalizedRoom,
+          displayName: cleanName,
+          avatarColor,
+          avatarStyle,
+          inVR: enterVRImmediately,
+          isMuted: startMuted,
+        },
+        enterVRImmediately,
+      )
+    } finally {
+      setJoining(false)
+    }
+  }
+
+  const handleCopyInvite = async () => {
+    const shareUrl = new URL(window.location.href)
+    shareUrl.searchParams.set('room', joined ? roomCode : lobbyRoomCode)
+    try {
+      await navigator.clipboard.writeText(shareUrl.toString())
+      setCopiedCode(true)
+      window.setTimeout(() => setCopiedCode(false), 2000)
+    } catch {
+      // Clipboard fallback ignored
+    }
+  }
+
+  // =========================================================================
+  // STAGE 1: PRE-JOIN 2D LOBBY OVERLAY
+  // =========================================================================
+  if (!joined) {
+    return (
+      <main
+        id="vr-lounge-lobby"
+        className="pointer-events-auto fixed inset-0 z-30 flex items-center justify-center overflow-y-auto bg-gradient-to-b from-[#080a0d]/80 via-[#080a0d]/68 to-[#080a0d]/88 p-4 sm:p-6"
+      >
+        <div className="lounge-panel w-full max-w-4xl rounded-2xl p-6 sm:p-8">
+          {/* Top Header */}
+          <div className="flex flex-col gap-4 border-b border-[#f4f1ea]/10 pb-6 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-[0.2em] text-[#e5a93c]">
+                WebXR Spatial Screening Room
+              </p>
+              <h1
+                className="mt-1.5 text-3xl font-semibold tracking-tight text-[#f4f1ea] sm:text-4xl"
+                style={{ fontFamily: 'var(--font-display)' }}
+              >
+                VR Lounge
+              </h1>
+              <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-[#c7c2b8]">
+                Step into a shared 3D cinema from Meta Quest 3 or desktop. Talk with spatial
+                voice, pass the remote with one click, and watch live browser tabs or
+                synchronized streams together.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2.5 self-start rounded-xl border border-[#f4f1ea]/10 bg-[#080a0d]/70 px-3.5 py-2 text-xs">
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  transportMode === 'supabase' || transportMode === 'cloud-relay'
+                    ? 'bg-[#49b384]'
+                    : 'bg-[#e5a93c]'
+                }`}
+              />
+              <span className="font-medium text-[#f4f1ea]">
+                {transportMode === 'supabase'
+                  ? 'Supabase Realtime Ready'
+                  : 'Global Cloud Rooms Ready'}
+              </span>
+            </div>
+          </div>
+
+          {statusBanner && (
+            <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-[#e5a93c]/40 bg-[#e5a93c]/10 px-4 py-2.5 text-xs text-[#f4f1ea]">
+              <span>{statusBanner}</span>
+              <button
+                id="btn-dismiss-lobby-banner"
+                type="button"
+                onClick={onDismissBanner}
+                className="text-[#c7c2b8] hover:text-[#f4f1ea]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+
+          {/* Two-Column Lobby Configuration */}
+          <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-12">
+            {/* Left Column: Identity & Avatar Customization */}
+            <section className="space-y-5 lg:col-span-7">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label
+                    htmlFor="input-display-name"
+                    className="block text-xs font-medium uppercase tracking-wider text-[#c7c2b8]"
+                  >
+                    Display Name
+                  </label>
+                  <input
+                    id="input-display-name"
+                    type="text"
+                    maxLength={24}
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder="Your name in 3D"
+                    className="lounge-input mt-1.5 w-full rounded-xl px-3.5 py-2.5 text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="input-room-code"
+                    className="block text-xs font-medium uppercase tracking-wider text-[#c7c2b8]"
+                  >
+                    Room Code
+                  </label>
+                  <div className="mt-1.5 flex gap-2">
+                    <input
+                      id="input-room-code"
+                      type="text"
+                      maxLength={14}
+                      value={lobbyRoomCode}
+                      onChange={(e) => setLobbyRoomCode(e.target.value.toUpperCase())}
+                      placeholder="CINEMA-1"
+                      className="lounge-input w-full rounded-xl px-3.5 py-2.5 font-mono text-sm uppercase tracking-wider"
+                    />
+                    <button
+                      id="btn-generate-room-code"
+                      type="button"
+                      title="Generate a fresh Room Code"
+                      onClick={() => setLobbyRoomCode(generateRoomCode())}
+                      className="flex shrink-0 items-center justify-center rounded-xl border border-[#f4f1ea]/12 bg-[#141922] px-3 text-[#c7c2b8] transition hover:border-[#e5a93c]/50 hover:text-[#f4f1ea]"
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                    </button>
+                    <button
+                      id="btn-copy-lobby-invite"
+                      type="button"
+                      title="Copy invite URL"
+                      onClick={() => void handleCopyInvite()}
+                      className="flex shrink-0 items-center justify-center rounded-xl border border-[#f4f1ea]/12 bg-[#141922] px-3 text-[#c7c2b8] transition hover:border-[#e5a93c]/50 hover:text-[#f4f1ea]"
+                    >
+                      {copiedCode ? (
+                        <Check className="h-4 w-4 text-[#49b384]" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Avatar Color Swatches */}
+              <div>
+                <span className="block text-xs font-medium uppercase tracking-wider text-[#c7c2b8]">
+                  Avatar Trim Color
+                </span>
+                <div className="mt-2 flex flex-wrap gap-2.5">
+                  {AVATAR_COLORS.map((swatch) => {
+                    const selected = avatarColor === swatch.hex
+                    return (
+                      <button
+                        key={swatch.hex}
+                        id={`btn-color-${swatch.name.toLowerCase().replace(/\s+/g, '-')}`}
+                        type="button"
+                        title={swatch.name}
+                        onClick={() => setAvatarColor(swatch.hex)}
+                        className={`group relative flex h-9 w-9 items-center justify-center rounded-full transition ${
+                          selected
+                            ? 'ring-2 ring-[#f4f1ea] ring-offset-2 ring-offset-[#0d1015]'
+                            : 'opacity-80 hover:opacity-100'
+                        }`}
+                        style={{ backgroundColor: swatch.hex }}
+                      >
+                        {selected && <Check className="h-4 w-4 text-[#080a0d]" />}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* Avatar Headband / Visor Style */}
+              <div>
+                <span className="block text-xs font-medium uppercase tracking-wider text-[#c7c2b8]">
+                  Headset Silhouette
+                </span>
+                <div className="mt-2 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                  {AVATAR_STYLES.map((style) => {
+                    const active = avatarStyle === style.id
+                    return (
+                      <button
+                        key={style.id}
+                        id={`btn-avatar-style-${style.id}`}
+                        type="button"
+                        onClick={() => setAvatarStyle(style.id)}
+                        className={`rounded-xl border px-3 py-2.5 text-left transition ${
+                          active
+                            ? 'border-[#e5a93c] bg-[#e5a93c]/12 text-[#f4f1ea]'
+                            : 'border-[#f4f1ea]/10 bg-[#0b0e13]/70 text-[#c7c2b8] hover:border-[#f4f1ea]/25'
+                        }`}
+                      >
+                        <div className="text-xs font-semibold">{style.label}</div>
+                        <div className="mt-0.5 text-[11px] text-[#8a867e]">
+                          {style.tagline}
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            </section>
+
+            {/* Right Column: Audio Devices & Entry Actions */}
+            <section className="flex flex-col justify-between rounded-xl border border-[#f4f1ea]/10 bg-[#080a0d]/65 p-5 lg:col-span-5">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium uppercase tracking-wider text-[#c7c2b8]">
+                    Spatial Voice &amp; Audio
+                  </span>
+                  <button
+                    id="btn-lobby-toggle-mute"
+                    type="button"
+                    onClick={() => setStartMuted((m) => !m)}
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                      startMuted
+                        ? 'bg-[#e05a47]/20 text-[#e05a47]'
+                        : 'bg-[#49b384]/20 text-[#49b384]'
+                    }`}
+                  >
+                    {startMuted ? (
+                      <>
+                        <MicOff className="h-3.5 w-3.5" /> Join Muted
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="h-3.5 w-3.5" /> Mic Enabled
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="select-lobby-mic"
+                    className="block text-xs text-[#8a867e]"
+                  >
+                    Microphone Input
+                  </label>
+                  <select
+                    id="select-lobby-mic"
+                    value={selectedMicId}
+                    onChange={(e) => onSelectMic(e.target.value)}
+                    className="lounge-input mt-1 w-full rounded-xl px-3 py-2 text-xs"
+                  >
+                    <option value="">System Default Microphone</option>
+                    {audioInputs.map((mic, i) => (
+                      <option key={mic.deviceId || i} value={mic.deviceId}>
+                        {mic.label || `Microphone ${i + 1}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="select-lobby-speaker"
+                    className="block text-xs text-[#8a867e]"
+                  >
+                    Audio Output Device
+                  </label>
+                  <select
+                    id="select-lobby-speaker"
+                    value={selectedSpeakerId}
+                    onChange={(e) => onSelectSpeaker(e.target.value)}
+                    className="lounge-input mt-1 w-full rounded-xl px-3 py-2 text-xs"
+                  >
+                    <option value="">System Default Speakers / Headset</option>
+                    {audioOutputs.map((spk, i) => (
+                      <option key={spk.deviceId || i} value={spk.deviceId}>
+                        {spk.label || `Speaker ${i + 1}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="rounded-lg border border-[#f4f1ea]/8 bg-[#0d1118] p-3 text-xs leading-relaxed text-[#8a867e]">
+                  <strong className="font-medium text-[#c7c2b8]">Watch Netflix or YouTube?</strong>{' '}
+                  Join in <span className="text-[#f4f1ea]">Companion Presenter Mode</span> from a
+                  desktop browser to stream any tab with stereo audio directly onto the curved VR
+                  cinema screen.
+                </div>
+              </div>
+
+              {/* Dual Primary Entry Buttons */}
+              <div className="mt-6 space-y-2.5">
+                <button
+                  id="btn-enter-vr"
+                  type="button"
+                  disabled={joining}
+                  onClick={() => void handleLobbySubmit(true)}
+                  className="flex w-full items-center justify-center gap-2.5 rounded-xl bg-[#e5a93c] px-4 py-3 text-sm font-semibold text-[#080a0d] shadow-lg transition hover:bg-[#f2be5c] active:scale-[0.99] disabled:opacity-60"
+                >
+                  <Glasses className="h-4 w-4" />
+                  <span>Enter VR (Quest 3 / WebXR)</span>
+                </button>
+
+                <button
+                  id="btn-join-desktop"
+                  type="button"
+                  disabled={joining}
+                  onClick={() => void handleLobbySubmit(false)}
+                  className="flex w-full items-center justify-center gap-2.5 rounded-xl border border-[#f4f1ea]/16 bg-[#151b26] px-4 py-3 text-sm font-medium text-[#f4f1ea] transition hover:border-[#e5a93c]/50 hover:bg-[#1c2433] active:scale-[0.99] disabled:opacity-60"
+                >
+                  <MonitorUp className="h-4 w-4 text-[#e5a93c]" />
+                  <span>Join in Desktop / Companion Presenter Mode</span>
+                </button>
+              </div>
+            </section>
+          </div>
+        </div>
+      </main>
+    )
+  }
+
+  // =========================================================================
+  // STAGE 2: IN-ROOM 2D COMPANION PRESENTER HUD
+  // =========================================================================
+  return (
+    <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-3 sm:p-4">
+      {/* Top Status & Room Header */}
+      <header className="pointer-events-auto flex flex-wrap items-center justify-between gap-2">
+        <div className="lounge-dock-bar flex items-center gap-3 rounded-xl px-3.5 py-2">
+          <div className="flex items-center gap-2">
+            <span
+              className={`h-2 w-2 rounded-full ${
+                connected ? 'bg-[#49b384]' : 'bg-[#e5a93c]'
+              }`}
+            />
+            <span
+              className="text-sm font-semibold tracking-tight text-[#f4f1ea]"
+              style={{ fontFamily: 'var(--font-display)' }}
+            >
+              VR Lounge
+            </span>
+          </div>
+
+          <div className="h-4 w-px bg-[#f4f1ea]/12" />
+
+          <button
+            id="btn-copy-room-code"
+            type="button"
+            onClick={() => void handleCopyInvite()}
+            title="Copy shareable room invite link"
+            className="flex items-center gap-1.5 rounded-lg bg-[#080a0d]/70 px-2.5 py-1 font-mono text-xs text-[#e5a93c] transition hover:bg-[#080a0d]"
+          >
+            <span>{roomCode}</span>
+            {copiedCode ? (
+              <Check className="h-3.5 w-3.5 text-[#49b384]" />
+            ) : (
+              <Copy className="h-3.5 w-3.5 text-[#8a867e]" />
+            )}
+          </button>
+
+          <button
+            id="btn-toggle-roster"
+            type="button"
+            onClick={() => setRosterOpen((v) => !v)}
+            className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-[#c7c2b8] transition hover:bg-[#f4f1ea]/8 hover:text-[#f4f1ea]"
+          >
+            <Users className="h-3.5 w-3.5 text-[#e5a93c]" />
+            <span>{participants.length}</span>
+          </button>
+        </div>
+
+        {/* Center Presenter Status Pill */}
+        <div className="lounge-dock-bar hidden items-center gap-2.5 rounded-xl px-3.5 py-2 text-xs md:flex">
+          <Radio
+            className={`h-3.5 w-3.5 ${
+              presenterState.activePresenterId ? 'text-[#e5a93c]' : 'text-[#8a867e]'
+            }`}
+          />
+          <span className="text-[#c7c2b8]">
+            {presenterState.activePresenterId ? (
+              <>
+                Presenter:{' '}
+                <strong className="font-semibold text-[#f4f1ea]">
+                  {presenterState.presenterName}
+                </strong>{' '}
+                <span className="text-[#8a867e]">
+                  ({presenterState.screenMode === 'tab-stream' ? 'Live Tab' : 'Sync URL'})
+                </span>
+              </>
+            ) : (
+              'Screen Idle — Click "Take Control" to present'
+            )}
+          </span>
+
+          {localProfile.isHost && (
+            <button
+              id="btn-host-lock-presenter"
+              type="button"
+              onClick={onToggleHostLock}
+              title="Host option: lock or unlock open presenter handoff"
+              className={`ml-1 inline-flex items-center gap-1 rounded-lg px-2 py-0.5 text-[11px] font-medium transition ${
+                presenterState.lockedByHostId
+                  ? 'bg-[#e05a47]/20 text-[#e05a47]'
+                  : 'bg-[#f4f1ea]/8 text-[#c7c2b8] hover:text-[#f4f1ea]'
+              }`}
+            >
+              {presenterState.lockedByHostId ? (
+                <>
+                  <Lock className="h-3 w-3" /> Locked
+                </>
+              ) : (
+                <>
+                  <Unlock className="h-3 w-3" /> Open Handoff
+                </>
+              )}
+            </button>
+          )}
+        </div>
+
+        {/* Right Utility Actions: Seat Selector, Enter VR, Leave */}
+        <div className="lounge-dock-bar flex items-center gap-2 rounded-xl px-2.5 py-1.5">
+          <select
+            id="select-hud-seat"
+            aria-label="Select theater seat"
+            value={localProfile.seatIndex}
+            onChange={(e) => onSelectSeat(Number(e.target.value))}
+            className="lounge-input rounded-lg px-2.5 py-1 text-xs"
+          >
+            {LOUNGE_SEATS.map((seat) => {
+              const takenByOther = participants.some(
+                (p) => p.userId !== localProfile.userId && p.seatIndex === seat.index,
+              )
+              return (
+                <option key={seat.index} value={seat.index} disabled={takenByOther}>
+                  {seat.label} {takenByOther ? '(Taken)' : ''}
+                </option>
+              )
+            })}
+          </select>
+
+          <button
+            id="btn-hud-recenter"
+            type="button"
+            onClick={onRecenterSeat}
+            title="Recenter camera on your lounge seat"
+            className="rounded-lg p-1.5 text-[#c7c2b8] transition hover:bg-[#f4f1ea]/10 hover:text-[#f4f1ea]"
+          >
+            <RotateCcw className="h-4 w-4" />
+          </button>
+
+          <button
+            id="btn-hud-enter-vr"
+            type="button"
+            onClick={() => void onEnterVR()}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[#e5a93c] px-3 py-1.5 text-xs font-semibold text-[#080a0d] transition hover:bg-[#f2be5c]"
+          >
+            <Glasses className="h-3.5 w-3.5" />
+            <span>Enter VR</span>
+          </button>
+
+          <button
+            id="btn-hud-leave"
+            type="button"
+            onClick={() => void onLeaveRoom()}
+            title="Leave room"
+            className="rounded-lg p-1.5 text-[#c7c2b8] transition hover:bg-[#e05a47]/20 hover:text-[#e05a47]"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
+        </div>
+      </header>
+
+      {/* Alerts / Autoplay Unlock / Roster Popovers */}
+      <div className="pointer-events-none relative my-auto flex flex-col items-center gap-2">
+        {(statusBanner || mediaError || micPermissionError) && (
+          <div className="pointer-events-auto lounge-panel flex max-w-xl items-center gap-3 rounded-xl px-4 py-2.5 text-xs text-[#f4f1ea]">
+            <ShieldAlert className="h-4 w-4 shrink-0 text-[#e5a93c]" />
+            <span>{statusBanner || mediaError || micPermissionError}</span>
+            {statusBanner && (
+              <button
+                type="button"
+                onClick={onDismissBanner}
+                className="ml-auto text-[#8a867e] hover:text-[#f4f1ea]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        )}
+
+        {needsAudioUnlock && (
+          <button
+            id="btn-unlock-cinema-audio"
+            type="button"
+            onClick={onUnlockAudio}
+            className="pointer-events-auto flex items-center gap-2 rounded-xl bg-[#e5a93c] px-4 py-2.5 text-xs font-semibold text-[#080a0d] shadow-xl transition hover:bg-[#f2be5c]"
+          >
+            <Volume2 className="h-4 w-4" />
+            <span>Click to Unmute Live Cinema Audio</span>
+          </button>
+        )}
+
+        {/* Participant Roster Popover */}
+        {rosterOpen && (
+          <div className="pointer-events-auto lounge-panel absolute left-0 top-2 w-72 rounded-xl p-4">
+            <div className="flex items-center justify-between border-b border-[#f4f1ea]/10 pb-2.5">
+              <span className="text-xs font-semibold uppercase tracking-wider text-[#e5a93c]">
+                In This Lounge ({participants.length})
+              </span>
+              <button
+                type="button"
+                onClick={() => setRosterOpen(false)}
+                className="text-[#8a867e] hover:text-[#f4f1ea]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <ul className="mt-3 space-y-2">
+              {participants.map((p) => (
+                <li
+                  key={p.userId}
+                  className="flex items-center justify-between rounded-lg bg-[#080a0d]/60 px-2.5 py-2 text-xs"
+                >
+                  <div className="flex items-center gap-2 truncate">
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: p.avatarColor }}
+                    />
+                    <span className="truncate font-medium text-[#f4f1ea]">
+                      {p.displayName}
+                      {p.userId === localProfile.userId ? ' (You)' : ''}
+                    </span>
+                    {p.isHost && <Crown className="h-3 w-3 shrink-0 text-[#e5a93c]" />}
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[11px] text-[#8a867e]">
+                    <span>{p.inVR ? 'VR' : 'PC'}</span>
+                    {p.isMuted ? (
+                      <MicOff className="h-3 w-3 text-[#e05a47]" />
+                    ) : (
+                      <Mic className="h-3 w-3 text-[#49b384]" />
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      {/* Mode 2 URL & Stream Preset Drawer */}
+      {urlDrawerOpen && (
+        <section className="pointer-events-auto lounge-panel mx-auto mb-3 w-full max-w-2xl rounded-2xl p-4 sm:p-5">
+          <div className="flex items-center justify-between border-b border-[#f4f1ea]/10 pb-3">
+            <div className="flex items-center gap-2">
+              <Globe className="h-4 w-4 text-[#e5a93c]" />
+              <h2 className="text-sm font-semibold text-[#f4f1ea]">
+                Synchronized Direct / HLS Stream Player (Mode 2)
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => setUrlDrawerOpen(false)}
+              className="text-[#8a867e] hover:text-[#f4f1ea]"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="mt-3.5 space-y-3">
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                id="input-stream-url"
+                type="url"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                placeholder="Paste direct .mp4, .m3u8 HLS stream, or proxied video URL..."
+                className="lounge-input flex-1 rounded-xl px-3.5 py-2 text-xs"
+              />
+              <button
+                id="btn-load-stream-url"
+                type="button"
+                onClick={() => {
+                  if (!urlInput.trim()) return
+                  onLoadStreamUrl(
+                    urlInput.trim(),
+                    urlTitleInput.trim() || 'Shared Cinema Stream',
+                    useCorsProxy,
+                  )
+                  setUrlDrawerOpen(false)
+                }}
+                className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#e5a93c] px-4 py-2 text-xs font-semibold text-[#080a0d] transition hover:bg-[#f2be5c]"
+              >
+                <Link2 className="h-3.5 w-3.5" />
+                <span>Play on Screen</span>
+              </button>
+            </div>
+
+            <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-[#c7c2b8]">
+              <input
+                type="checkbox"
+                checked={useCorsProxy}
+                onChange={(e) => setUseCorsProxy(e.target.checked)}
+                className="accent-[#e5a93c]"
+              />
+              <span>
+                Route through local CORS Stream Proxy (<code>/api/stream-proxy</code>) for
+                cross-origin MP4/HLS servers
+              </span>
+            </label>
+
+            <div>
+              <span className="block text-[11px] font-medium uppercase tracking-wider text-[#8a867e]">
+                Instant Cinema Reference Streams
+              </span>
+              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {SAMPLE_MEDIA_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    id={`btn-preset-${preset.id}`}
+                    type="button"
+                    onClick={() => {
+                      setUrlInput(preset.url)
+                      setUrlTitleInput(preset.title)
+                      onLoadStreamUrl(preset.url, preset.title, false)
+                      setUrlDrawerOpen(false)
+                    }}
+                    className="flex items-center justify-between rounded-xl border border-[#f4f1ea]/10 bg-[#080a0d]/70 px-3 py-2 text-left transition hover:border-[#e5a93c]/50"
+                  >
+                    <div className="min-w-0 pr-2">
+                      <div className="truncate text-xs font-medium text-[#f4f1ea]">
+                        {preset.title}
+                      </div>
+                      <div className="truncate text-[11px] text-[#8a867e]">
+                        {preset.subtitle}
+                      </div>
+                    </div>
+                    <span className="shrink-0 font-mono text-[11px] text-[#e5a93c]">
+                      {preset.durationHint}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Slide-Over 2D Text Chat Drawer */}
+      {chatDrawerOpen && (
+        <aside className="pointer-events-auto lounge-panel fixed bottom-20 right-4 z-30 flex h-96 w-80 flex-col rounded-2xl p-4 sm:w-96">
+          <div className="flex items-center justify-between border-b border-[#f4f1ea]/10 pb-2.5">
+            <span className="text-xs font-semibold uppercase tracking-wider text-[#e5a93c]">
+              Room Chat &amp; Reactions
+            </span>
+            <button
+              type="button"
+              onClick={() => setChatDrawerOpen(false)}
+              className="text-[#8a867e] hover:text-[#f4f1ea]"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div
+            ref={chatScrollRef}
+            className="lounge-scrollbar my-3 flex-1 space-y-2.5 overflow-y-auto pr-1"
+          >
+            {messages.length === 0 ? (
+              <p className="py-10 text-center text-xs text-[#8a867e]">
+                Say hello or trigger a floating 3D reaction!
+              </p>
+            ) : (
+              messages.map((m) => (
+                <div
+                  key={m.id}
+                  className={`rounded-xl px-3 py-2 text-xs ${
+                    m.isSystem ? 'bg-[#e5a93c]/10 text-[#c7c2b8]' : 'bg-[#080a0d]/70'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span
+                      className="font-semibold"
+                      style={{ color: m.isSystem ? '#e5a93c' : m.avatarColor }}
+                    >
+                      {m.displayName}
+                    </span>
+                    <span className="font-mono text-[10px] text-[#8a867e]">
+                      {new Date(m.createdAt).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 break-words text-[#f4f1ea]">{m.text}</p>
+                </div>
+              ))
+            )}
+          </div>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (!chatDraft.trim()) return
+              onSendChat(chatDraft)
+              setChatDraft('')
+            }}
+            className="flex gap-2"
+          >
+            <input
+              id="input-companion-chat"
+              type="text"
+              value={chatDraft}
+              onChange={(e) => setChatDraft(e.target.value)}
+              placeholder="Message the lounge..."
+              className="lounge-input flex-1 rounded-xl px-3 py-2 text-xs"
+            />
+            <button
+              id="btn-send-companion-chat"
+              type="submit"
+              className="flex items-center justify-center rounded-xl bg-[#e5a93c] px-3 text-[#080a0d] transition hover:bg-[#f2be5c]"
+            >
+              <Send className="h-3.5 w-3.5" />
+            </button>
+          </form>
+        </aside>
+      )}
+
+      {/* Audio Mixer Popover */}
+      {audioPopoverOpen && (
+        <div className="pointer-events-auto lounge-panel fixed bottom-20 left-1/2 z-30 w-72 -translate-x-1/2 space-y-3 rounded-2xl p-4">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-wider text-[#e5a93c]">
+              Lounge Audio Mix
+            </span>
+            <button
+              type="button"
+              onClick={() => setAudioPopoverOpen(false)}
+              className="text-[#8a867e] hover:text-[#f4f1ea]"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div>
+            <div className="flex justify-between text-xs text-[#c7c2b8]">
+              <span>Cinema Screen</span>
+              <span className="font-mono">{Math.round(cinemaVolume * 100)}%</span>
+            </div>
+            <input
+              id="slider-cinema-volume"
+              type="range"
+              min={0}
+              max={1}
+              step={0.02}
+              value={cinemaVolume}
+              onChange={(e) => onChangeCinemaVolume(Number(e.target.value))}
+              className="cinema-slider mt-1.5 w-full"
+            />
+          </div>
+
+          <div>
+            <div className="flex justify-between text-xs text-[#c7c2b8]">
+              <span>Spatial Voice Chat</span>
+              <span className="font-mono">{Math.round(voiceVolume * 100)}%</span>
+            </div>
+            <input
+              id="slider-voice-volume"
+              type="range"
+              min={0}
+              max={1}
+              step={0.02}
+              value={voiceVolume}
+              onChange={(e) => onChangeVoiceVolume(Number(e.target.value))}
+              className="cinema-slider mt-1.5 w-full"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Bottom Companion Presenter & Watch-Party Dock */}
+      <footer className="pointer-events-auto lounge-dock-bar mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-2.5 rounded-2xl px-3.5 py-2.5">
+        {/* Left: Presenter Handoff + Tab Share + URL Player */}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            id="btn-take-or-release-control"
+            type="button"
+            disabled={!isLocalPresenter && !canTakeControl}
+            onClick={isLocalPresenter ? onReleaseControl : onTakeControl}
+            className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold transition ${
+              isLocalPresenter
+                ? 'border border-[#e5a93c]/60 bg-[#e5a93c]/15 text-[#e5a93c]'
+                : 'bg-[#e5a93c] text-[#080a0d] hover:bg-[#f2be5c] disabled:opacity-45'
+            }`}
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            <span>{isLocalPresenter ? 'Presenting (Release)' : 'Take Control'}</span>
+          </button>
+
+          <button
+            id="btn-share-browser-tab"
+            type="button"
+            disabled={!isLocalPresenter && !canTakeControl}
+            onClick={() => {
+              if (isSharingTab) {
+                onStopTabShare()
+              } else {
+                void onStartTabShare()
+              }
+            }}
+            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition ${
+              isSharingTab
+                ? 'border-[#e05a47] bg-[#e05a47]/20 text-[#f4f1ea]'
+                : 'border-[#f4f1ea]/12 bg-[#141922] text-[#f4f1ea] hover:border-[#e5a93c]/50 disabled:opacity-45'
+            }`}
+          >
+            <MonitorUp className="h-3.5 w-3.5 text-[#e5a93c]" />
+            <span>{isSharingTab ? 'Stop Tab Stream' : 'Share Browser Tab'}</span>
+          </button>
+
+          <button
+            id="btn-open-url-player"
+            type="button"
+            disabled={!isLocalPresenter && !canTakeControl}
+            onClick={() => setUrlDrawerOpen((v) => !v)}
+            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition ${
+              urlDrawerOpen
+                ? 'border-[#e5a93c] bg-[#e5a93c]/15 text-[#f4f1ea]'
+                : 'border-[#f4f1ea]/12 bg-[#141922] text-[#f4f1ea] hover:border-[#e5a93c]/50 disabled:opacity-45'
+            }`}
+          >
+            <Tv className="h-3.5 w-3.5 text-[#e5a93c]" />
+            <span>Stream URL</span>
+          </button>
+        </div>
+
+        {/* Center: Mode 2 Synchronized Transport Controls */}
+        {presenterState.screenMode === 'url-sync' && presenterState.activePresenterId && (
+          <div className="flex flex-1 items-center gap-2.5 px-2 min-w-[200px]">
+            <button
+              id="btn-companion-play-pause"
+              type="button"
+              disabled={!isLocalPresenter}
+              onClick={onTogglePlayPause}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#f4f1ea]/10 text-[#f4f1ea] transition hover:bg-[#e5a93c] hover:text-[#080a0d] disabled:opacity-40"
+            >
+              {presenterState.isPlaying ? (
+                <Pause className="h-3.5 w-3.5" />
+              ) : (
+                <Play className="h-3.5 w-3.5" />
+              )}
+            </button>
+            <input
+              id="slider-timeline-scrub"
+              type="range"
+              min={0}
+              max={Math.max(1, localDuration)}
+              step={0.5}
+              disabled={!isLocalPresenter}
+              value={Math.min(localCurrentTime, Math.max(1, localDuration))}
+              onChange={(e) => onSeekTo(Number(e.target.value))}
+              className="cinema-slider w-full disabled:opacity-50"
+            />
+            <span className="shrink-0 font-mono text-[11px] text-[#c7c2b8]">
+              {formatDuration(localCurrentTime)} / {formatDuration(localDuration)}
+            </span>
+          </div>
+        )}
+
+        {/* Right: Mic + Mixers + Quick Reactions + Chat */}
+        <div className="flex items-center gap-1.5">
+          <button
+            id="btn-companion-mute"
+            type="button"
+            onClick={onToggleMute}
+            className={`relative inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-medium transition ${
+              localProfile.isMuted
+                ? 'bg-[#e05a47]/20 text-[#e05a47]'
+                : 'bg-[#141922] text-[#f4f1ea] hover:bg-[#1e2634]'
+            }`}
+          >
+            {localProfile.isMuted ? (
+              <MicOff className="h-3.5 w-3.5" />
+            ) : (
+              <Mic
+                className="h-3.5 w-3.5 transition-transform"
+                style={{
+                  color: localMicLevel > 0.08 ? '#49b384' : '#e5a93c',
+                  transform: `scale(${1 + localMicLevel * 0.28})`,
+                }}
+              />
+            )}
+            <span className="hidden sm:inline">
+              {localProfile.isMuted ? 'Muted' : 'Mic'}
+            </span>
+          </button>
+
+          <button
+            id="btn-open-audio-mixer"
+            type="button"
+            title="Screen & Spatial Voice Volume Mixer"
+            onClick={() => setAudioPopoverOpen((v) => !v)}
+            className="rounded-xl bg-[#141922] p-2 text-[#c7c2b8] transition hover:text-[#f4f1ea]"
+          >
+            <Headphones className="h-4 w-4" />
+          </button>
+
+          <div className="hidden items-center gap-1 rounded-xl bg-[#080a0d]/60 px-1.5 py-1 lg:flex">
+            {QUICK_REACTIONS.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                onClick={() => onSendReaction(emoji)}
+                className="rounded-lg px-1.5 py-0.5 text-sm transition hover:scale-125 hover:bg-[#f4f1ea]/10"
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+
+          <button
+            id="btn-toggle-companion-chat"
+            type="button"
+            onClick={() => setChatDrawerOpen((v) => !v)}
+            className="relative inline-flex items-center gap-1.5 rounded-xl bg-[#141922] px-3 py-2 text-xs font-medium text-[#f4f1ea] transition hover:bg-[#1e2634]"
+          >
+            <MessageSquare className="h-3.5 w-3.5 text-[#e5a93c]" />
+            <span className="hidden sm:inline">Chat</span>
+            {unreadCount > 0 && (
+              <span className="ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#e5a93c] px-1 text-[10px] font-bold text-[#080a0d]">
+                {unreadCount}
+              </span>
+            )}
+          </button>
+        </div>
+      </footer>
+    </div>
+  )
+}

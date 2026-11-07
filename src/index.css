@@ -1,0 +1,133 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", "Plus Jakarta Sans", ui-sans-serif, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-obsidian-950: #080a0d;
+  --color-obsidian-900: #0d1015;
+  --color-obsidian-850: #131820;
+  --color-obsidian-800: #1a202b;
+  --color-obsidian-700: #262f3f;
+
+  --color-amber-cinema: #e5a93c;
+  --color-amber-cinema-bright: #f2be5c;
+  --color-amber-cinema-muted: #9e7122;
+  --color-coral-live: #e05a47;
+  --color-sage-ready: #49b384;
+  --color-ivory-100: #f4f1ea;
+  --color-ivory-300: #c7c2b8;
+  --color-ivory-500: #8a867e;
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background-color: var(--color-obsidian-950);
+    color: var(--color-ivory-100);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+/* Tactile cinema lounge glass & brushed anodized aluminum surfaces */
+.lounge-panel {
+  background: linear-gradient(
+    165deg,
+    rgba(22, 27, 36, 0.9) 0%,
+    rgba(12, 15, 20, 0.94) 100%
+  );
+  backdrop-filter: blur(20px) saturate(135%);
+  -webkit-backdrop-filter: blur(20px) saturate(135%);
+  border: 1px solid rgba(244, 241, 234, 0.09);
+  box-shadow:
+    0 24px 60px -16px rgba(0, 0, 0, 0.78),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+}
+
+.lounge-dock-bar {
+  background: linear-gradient(
+    180deg,
+    rgba(21, 26, 35, 0.88) 0%,
+    rgba(11, 14, 19, 0.94) 100%
+  );
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid rgba(244, 241, 234, 0.1);
+  box-shadow:
+    0 18px 44px -10px rgba(0, 0, 0, 0.75),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.07);
+}
+
+.lounge-input {
+  background-color: rgba(8, 10, 14, 0.72);
+  border: 1px solid rgba(244, 241, 234, 0.12);
+  color: var(--color-ivory-100);
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.lounge-input:focus {
+  outline: none;
+  background-color: rgba(8, 10, 14, 0.92);
+  border-color: rgba(229, 169, 60, 0.65);
+  box-shadow: 0 0 0 3px rgba(229, 169, 60, 0.14);
+}
+
+.lounge-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.lounge-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.lounge-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(244, 241, 234, 0.16);
+  border-radius: 9999px;
+}
+
+.lounge-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(244, 241, 234, 0.28);
+}
+
+/* Custom warm tungsten range slider */
+input[type="range"].cinema-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: rgba(244, 241, 234, 0.14);
+  height: 5px;
+  border-radius: 9999px;
+  cursor: pointer;
+}
+
+input[type="range"].cinema-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #e5a93c;
+  border: 2px solid #0d1015;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  transition: transform 120ms ease;
+}
+
+input[type="range"].cinema-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.18);
+}
