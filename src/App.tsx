@@ -8,7 +8,15 @@ import {
   noEvents,
   useXR,
 } from '@react-three/xr'
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import {
+  Component,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { CompanionOverlay } from './components/ui/CompanionOverlay'
@@ -23,6 +31,26 @@ import { useRoomSession, type JoinRoomOptions } from './hooks/useRoomSession'
 import { useWebRTC } from './hooks/useWebRTC'
 import { exitVRSession, xrStore } from './store/xrStore'
 import type { WebRTCSignalMessage } from './types/lounge'
+
+class SceneSectionBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false }
+
+  static getDerivedStateFromError(): { hasError: boolean } {
+    return { hasError: true }
+  }
+
+  componentDidCatch(error: unknown) {
+    console.warn('3D panel boundary caught non-fatal error:', error)
+  }
+
+  render() {
+    if (this.state.hasError) return null
+    return <Suspense fallback={null}>{this.props.children}</Suspense>
+  }
+}
 
 interface SeatRigProps {
   seatIndex: number
@@ -355,19 +383,20 @@ export function App() {
         }}
         camera={{ fov: 62, near: 0.08, far: 60, position: [0, 1.35, 1.2] }}
       >
-        <color attach="background" args={['#07090c']} />
-        <fog attach="fog" args={['#07090c', 12, 24]} />
+        <color attach="background" args={['#090c12']} />
+        <fog attach="fog" args={['#090c12', 16, 36]} />
 
         <XR store={xrStore}>
           <PointerEvents batchEvents={false} />
 
-          <Suspense fallback={null}>
-            <SeatCameraAndOriginRig
-              seatIndex={room.localProfile.seatIndex}
-              recenterVersion={recenterVersion}
-              onInVRChange={handleInVRChange}
-            >
-              {room.joined && (
+          {/* Keep XROrigin & core CinemaRoom outside Suspense so VR renders on Frame 0 */}
+          <SeatCameraAndOriginRig
+            seatIndex={room.localProfile.seatIndex}
+            recenterVersion={recenterVersion}
+            onInVRChange={handleInVRChange}
+          >
+            {room.joined && (
+              <SceneSectionBoundary>
                 <SpatialControlDock
                   presenterState={room.presenterState}
                   isLocalPresenter={room.isLocalPresenter}
@@ -398,24 +427,26 @@ export function App() {
                   onToggleChatPanel={() => setSpatialChatOpen((v) => !v)}
                   onRecenterSeat={() => setRecenterVersion((v) => v + 1)}
                 />
-              )}
-            </SeatCameraAndOriginRig>
+              </SceneSectionBoundary>
+            )}
+          </SeatCameraAndOriginRig>
 
-            <CinemaRoom
-              roomCode={room.roomCode}
-              presenterState={room.presenterState}
-              videoTexture={media.videoTexture}
-              hasVideoFrames={media.hasVideoFrames}
-              mediaError={media.mediaError}
-              needsAudioUnlock={media.needsAudioUnlock}
-              localSeatIndex={room.localProfile.seatIndex}
-              participants={room.participants}
-              canTakeControl={room.canTakeControl}
-              onTakeControl={() => room.takeControl()}
-              onUnlockAudio={media.unlockAudio}
-              onSelectSeat={room.selectSeat}
-            />
+          <CinemaRoom
+            roomCode={room.roomCode}
+            presenterState={room.presenterState}
+            videoTexture={media.videoTexture}
+            hasVideoFrames={media.hasVideoFrames}
+            mediaError={media.mediaError}
+            needsAudioUnlock={media.needsAudioUnlock}
+            localSeatIndex={room.localProfile.seatIndex}
+            participants={room.participants}
+            canTakeControl={room.canTakeControl}
+            onTakeControl={() => room.takeControl()}
+            onUnlockAudio={media.unlockAudio}
+            onSelectSeat={room.selectSeat}
+          />
 
+          <SceneSectionBoundary>
             <AvatarManager
               joined={room.joined}
               localProfile={room.localProfile}
@@ -426,7 +457,9 @@ export function App() {
               voiceVolume={voiceVolume}
               broadcastPose={room.broadcastPose}
             />
+          </SceneSectionBoundary>
 
+          <SceneSectionBoundary>
             <SpatialChatPanel
               visible={room.joined && spatialChatOpen}
               messages={room.messages}
@@ -435,7 +468,7 @@ export function App() {
               onOpenChatKeyboard={() => setKeyboardMode('chat')}
               onClosePanel={() => setSpatialChatOpen(false)}
             />
-          </Suspense>
+          </SceneSectionBoundary>
         </XR>
       </Canvas>
 

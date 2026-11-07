@@ -9,9 +9,12 @@ export const xrStore = createXRStore({
   offerSession: false,
   emulate: false,
   foveation: 1,
-  frameRate: 'high',
+  frameRate: false,
   handTracking: true,
-  layers: false,
+  // CRITICAL: Must be `true` (`optionalFeatures: ['layers']`) because Three.js WebXRManager
+  // uses `XRWebGLBinding.createProjectionLayer` whenever `XRWebGLBinding` exists (Meta Quest 3).
+  // Setting `layers: false` causes `setSession()` to throw `NotSupportedError` and leave VR black.
+  layers: true,
   meshDetection: false,
   planeDetection: false,
   anchors: false,
@@ -148,29 +151,46 @@ export function triggerEnterVRFromGesture(): Promise<{
   error?: string
 }> {
   const hasXRObject = typeof navigator !== 'undefined' && navigator.xr != null
+  const isQuestHeadset =
+    typeof navigator !== 'undefined' &&
+    /Quest|OculusBrowser|MetaQuest/i.test(navigator.userAgent)
 
   // Path 1: Native Quest 3 / PCVR headset (or still probing on a device with navigator.xr)
-  if (hasXRObject && (cachedNativeVRSupported !== false || simulatorInstalled)) {
+  if (hasXRObject && (cachedNativeVRSupported !== false || simulatorInstalled || isQuestHeadset)) {
     // SYNCHRONOUS call on tick 0 of the click event!
     const nativePromise = xrStore.enterVR()
     return nativePromise.then(
-      () => ({
-        ok: true,
-        usedEmulator: simulatorInstalled,
-      }),
+      (session) => {
+        // Gently request 90Hz if supported without failing session setup if declined
+        if (session?.supportedFrameRates?.includes(90)) {
+          void session.updateTargetFrameRate(90).catch(() => undefined)
+        }
+        return {
+          ok: true,
+          usedEmulator: simulatorInstalled,
+        }
+      },
       async (err: unknown) => {
         const errName = err instanceof DOMException ? err.name : ''
         const errMsg = err instanceof Error ? err.message : String(err)
 
-        // If desktop Chrome had navigator.xr defined without a physical headset attached,
-        // seamlessly activate the Meta Quest 3 WebXR Simulator!
+        // Only fall back to desktop simulator when NOT on a physical Quest headset
+        // and native immersive-vr is genuinely unsupported (desktop browser without headset).
         if (
+          !isQuestHeadset &&
+          cachedNativeVRSupported !== true &&
           !simulatorInstalled &&
           (errName === 'NotSupportedError' ||
             errMsg.toLowerCase().includes('not supported'))
         ) {
           cachedNativeVRSupported = false
           return installQuest3SimulatorAndEnter()
+        }
+
+        // Ensure any half-opened session is closed so headset never stays on a blank screen
+        const dangling = xrStore.getState().session
+        if (dangling) {
+          void dangling.end().catch(() => undefined)
         }
 
         return {
@@ -186,7 +206,7 @@ export function triggerEnterVRFromGesture(): Promise<{
   const isTouchMobile =
     typeof navigator !== 'undefined' &&
     /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) &&
-    !/Quest|OculusBrowser/i.test(navigator.userAgent)
+    !isQuestHeadset
 
   if (isTouchMobile) {
     return Promise.resolve({
