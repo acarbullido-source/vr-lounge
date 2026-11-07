@@ -525,10 +525,102 @@ export function createDefaultRoomCustomization(): RoomCustomizationState {
   }
 }
 
+export interface BarGamesSpatialLayout {
+  dartboardCenter: [number, number, number]
+  scoreboardCenter: [number, number, number]
+  ocheFloorPos: [number, number, number]
+  chalkboardCenter: [number, number, number]
+  puttingStripOrigin: [number, number, number]
+  puttingTeePos: [number, number, number]
+  gameTableOrigin: [number, number, number]
+  rearDeckY: number
+}
+
+/**
+ * Computes collision-free world coordinates for the Dartboard, Digital Scoreboard,
+ * Mini-Golf Putting Strip, Interactive Game & Dice Table, and Prediction Chalkboard
+ * across all room sizes (`cozy`, `classic`, `grand`) and alcove configurations.
+ */
+export function computeBarGamesLayout(
+  customization: RoomCustomizationState,
+): BarGamesSpatialLayout {
+  const sizeSpec =
+    ROOM_SIZE_SPECS[customization.architecture.sizePreset] ?? ROOM_SIZE_SPECS.classic
+  const halfW = sizeSpec.width / 2
+  const centerZ = (sizeSpec.frontZ + sizeSpec.backZ) / 2
+  const rearDeckY = customization.architecture.rearBalcony ? 0.38 : 0
+
+  const dartboardX = Number(Math.min(halfW - 1.9, 3.45).toFixed(2))
+  const dartboardZ = Number((sizeSpec.backZ - 0.045).toFixed(3))
+  const dartboardCenter: [number, number, number] = [
+    dartboardX,
+    Number((rearDeckY + 1.73).toFixed(3)),
+    dartboardZ,
+  ]
+  const scoreboardCenter: [number, number, number] = [
+    Number((dartboardX - 1.32).toFixed(2)),
+    Number((rearDeckY + 1.78).toFixed(3)),
+    dartboardZ,
+  ]
+
+  // Regulation 2.37m throw distance; check if Oche sits on the elevated rear balcony riser
+  const ocheZ = Number((sizeSpec.backZ - 2.37).toFixed(2))
+  const balconyHalfW = Math.min(10.6, sizeSpec.width - 2.4) / 2
+  const ocheOnBalcony =
+    customization.architecture.rearBalcony &&
+    Math.abs(dartboardX) < balconyHalfW - 0.2 &&
+    ocheZ > sizeSpec.balconyZ - 1.65 &&
+    ocheZ < sizeSpec.balconyZ + 1.65
+  const ocheFloorY = ocheOnBalcony ? 0.38 : 0
+  const ocheFloorPos: [number, number, number] = [dartboardX, ocheFloorY, ocheZ]
+
+  // Live Prediction & Wager Chalkboard on Back-Left Wall
+  const chalkboardX = -Number(Math.min(halfW - 2.1, 3.35).toFixed(2))
+  const chalkboardCenter: [number, number, number] = [
+    chalkboardX,
+    Number((rearDeckY + 1.78).toFixed(3)),
+    dartboardZ,
+  ]
+
+  // Mini-Golf Putting Strip: tucks into Left Pub Alcove when opened, or Left Wing when closed
+  const puttingX = customization.architecture.leftBarAlcove
+    ? Number((-halfW - 1.85).toFixed(2))
+    : Number((-halfW + 1.12).toFixed(2))
+  const puttingZ = customization.architecture.leftBarAlcove
+    ? Number(centerZ.toFixed(2))
+    : -1.85
+  const puttingStripOrigin: [number, number, number] = [puttingX, 0, puttingZ]
+  const puttingTeePos: [number, number, number] = [
+    Number((puttingX + 0.58).toFixed(2)),
+    0,
+    Number((puttingZ + 1.52).toFixed(2)),
+  ]
+
+  // Interactive Game & Dice Table: Right Hangout Bay when alcove opened, or Right Wing when closed
+  const tableX = customization.architecture.rightArcadeAlcove
+    ? Number((halfW + 1.85).toFixed(2))
+    : Number((halfW - 1.95).toFixed(2))
+  const tableZ = customization.architecture.rightArcadeAlcove
+    ? Number(centerZ.toFixed(2))
+    : -1.95
+  const gameTableOrigin: [number, number, number] = [tableX, 0, tableZ]
+
+  return {
+    dartboardCenter,
+    scoreboardCenter,
+    ocheFloorPos,
+    chalkboardCenter,
+    puttingStripOrigin,
+    puttingTeePos,
+    gameTableOrigin,
+    rearDeckY,
+  }
+}
+
 /**
  * Computes world-space interactive seats attached to all seating furniture
- * currently placed in the room. Automatically follows moved, rotated, or
- * scaled sofas, armchairs, beanbags, and barstools.
+ * currently placed in the room, PLUS perimeter snap-to-seat spots around the
+ * Interactive Game & Dice Table, Dartboard Oche, and Putting Green Tee.
  */
 export function computeRoomSeats(customization: RoomCustomizationState): ComputedSeat[] {
   const seats: ComputedSeat[] = []
@@ -581,6 +673,7 @@ export function computeRoomSeats(customization: RoomCustomizationState): Compute
         localCushionOffset: slot.localPos,
         seatHeightOffset: slot.seatHeightOffset * itemScale,
         rotationY: item.rotationY + slot.localRotY,
+        stationKind: 'seat',
       })
     }
   }
@@ -604,9 +697,93 @@ export function computeRoomSeats(customization: RoomCustomizationState): Compute
         localCushionOffset: [0, 0, 0],
         seatHeightOffset: 0,
         rotationY: 0,
+        stationKind: 'seat',
       })
     })
   }
+
+  // Append 4 Game Table Perimeter Snap-to-Seat Positions + Dartboard Oche + Putting Tee
+  const barLayout = computeBarGamesLayout(customization)
+  const [tx, ty, tz] = barLayout.gameTableOrigin
+  const tableLookTarget: [number, number, number] = [tx, ty + 0.78, tz]
+  const tablePerimeter: Array<{
+    suffix: string
+    dx: number
+    dz: number
+    rotY: number
+  }> = [
+    { suffix: 'South', dx: 0, dz: 1.06, rotY: 0 },
+    { suffix: 'West', dx: -1.06, dz: 0, rotY: -Math.PI / 2 },
+    { suffix: 'North', dx: 0, dz: -1.06, rotY: Math.PI },
+    { suffix: 'East', dx: 1.06, dz: 0, rotY: Math.PI / 2 },
+  ]
+
+  tablePerimeter.forEach((spot, idx) => {
+    seats.push({
+      id: `game-table:seat-${idx}`,
+      index: seats.length,
+      furnitureId: 'game-table',
+      furnitureType: 'game-station',
+      label: `🎲 Game Table · ${spot.suffix}`,
+      position: [
+        Number((tx + spot.dx).toFixed(3)),
+        ty,
+        Number((tz + spot.dz).toFixed(3)),
+      ],
+      localCushionOffset: [0, 0, 0],
+      seatHeightOffset: 0.44,
+      rotationY: spot.rotY,
+      lookAtTarget: tableLookTarget,
+      stationKind: 'game-table',
+    })
+  })
+
+  // Dartboard Oche (Throw Line) Snap Spot facing +Z toward the Back-Wall Dartboard
+  seats.push({
+    id: 'station:darts-oche',
+    index: seats.length,
+    furnitureId: 'station-darts',
+    furnitureType: 'game-station',
+    label: '🎯 Darts Oche (Throw Line)',
+    position: barLayout.ocheFloorPos,
+    localCushionOffset: [0, 0, 0],
+    seatHeightOffset: 0.52,
+    rotationY: Math.PI,
+    lookAtTarget: barLayout.dartboardCenter,
+    stationKind: 'darts-oche',
+  })
+
+  // Putting Green Tee Snap Spot facing -Z toward the Mini-Golf Cup
+  const [px, py, pz] = barLayout.puttingStripOrigin
+  seats.push({
+    id: 'station:putting-tee',
+    index: seats.length,
+    furnitureId: 'station-putting',
+    furnitureType: 'game-station',
+    label: '⛳ Putting Green Tee',
+    position: barLayout.puttingTeePos,
+    localCushionOffset: [0, 0, 0],
+    seatHeightOffset: 0.44,
+    rotationY: 0.26,
+    lookAtTarget: [px, py + 0.12, pz - 1.25],
+    stationKind: 'putting-tee',
+  })
+
+  // Live Prediction & $1 Wager Chalkboard Snap Spot facing +Z toward Back-Left Wall
+  const [cx, , cz] = barLayout.chalkboardCenter
+  seats.push({
+    id: 'station:chalkboard',
+    index: seats.length,
+    furnitureId: 'station-chalkboard',
+    furnitureType: 'game-station',
+    label: '📋 Wager Chalkboard',
+    position: [cx, barLayout.rearDeckY, Number((cz - 2.32).toFixed(2))],
+    localCushionOffset: [0, 0, 0],
+    seatHeightOffset: 0.52,
+    rotationY: Math.PI,
+    lookAtTarget: barLayout.chalkboardCenter,
+    stationKind: 'chalkboard',
+  })
 
   return seats
 }

@@ -17,6 +17,7 @@ import {
   saveLocalRoomCustomization,
   scheduleCloudRoomSave,
 } from '../services/roomStorage'
+import type { BarGamesWireEvent } from '../types/barGames'
 import type {
   AvatarPose6DoF,
   AvatarStyleId,
@@ -47,6 +48,18 @@ export interface JoinRoomOptions {
   isMuted: boolean
 }
 
+export interface BarGamesTransportBridge {
+  onRoomJoined: (roomCode: string, sendEvent: (event: BarGamesWireEvent) => void) => void
+  onRoomConnected: (sendEvent: (event: BarGamesWireEvent) => void) => void
+  onEvent: (event: BarGamesWireEvent) => void
+  onStateRequest: (
+    requesterId: string,
+    isHost: boolean,
+    sendEvent: (event: BarGamesWireEvent) => void,
+  ) => void
+  onRoomLeft: () => void
+}
+
 function isNewerCustomization(
   incoming: RoomCustomizationState,
   current: RoomCustomizationState,
@@ -61,6 +74,7 @@ function isNewerCustomization(
 export function useRoomSession(
   onWebRTCSignalRef: React.RefObject<((signal: WebRTCSignalMessage) => void) | null>,
 ) {
+  const barGamesBridgeRef = useRef<BarGamesTransportBridge | null>(null)
   const [localUserId] = useState<string>(() => createSessionUserId())
   const [joined, setJoined] = useState(false)
   const [connected, setConnected] = useState(false)
@@ -200,6 +214,9 @@ export function useRoomSession(
         .map((p) => p.seatId as string),
     )
     const fallbackSeat =
+      computedSeats.find(
+        (s) => !takenIds.has(s.id) && (!s.stationKind || s.stationKind === 'seat'),
+      ) ??
       computedSeats.find((s) => !takenIds.has(s.id)) ??
       computedSeats[localProfile.seatIndex % computedSeats.length] ??
       computedSeats[0]
@@ -262,13 +279,14 @@ export function useRoomSession(
       const service = new RoomRealtimeService(normalizedCode, initialProfile, {
         onConnectionStatus: (isOnline) => {
           setConnected(isOnline)
-          if (
-            isOnline &&
-            !announcedSavedLayout &&
-            roomCustomizationRef.current.revision > 0
-          ) {
-            announcedSavedLayout = true
-            service.broadcastRoomCustomization(roomCustomizationRef.current)
+          if (isOnline) {
+            if (!announcedSavedLayout && roomCustomizationRef.current.revision > 0) {
+              announcedSavedLayout = true
+              service.broadcastRoomCustomization(roomCustomizationRef.current)
+            }
+            barGamesBridgeRef.current?.onRoomConnected((ev) =>
+              service.broadcastBarGamesEvent(ev),
+            )
           }
         },
         onParticipantsChange: (roster) => {
@@ -321,6 +339,11 @@ export function useRoomSession(
                     .filter(Boolean) as string[],
                 )
                 const freeSeat =
+                  seatsNow.find(
+                    (s) =>
+                      !takenIds.has(s.id) &&
+                      (!s.stationKind || s.stationKind === 'seat'),
+                  ) ??
                   seatsNow.find((s) => !takenIds.has(s.id)) ??
                   seatsNow[hydrated.length % seatsNow.length] ??
                   seatsNow[0]
@@ -387,7 +410,10 @@ export function useRoomSession(
             return incoming
           })
         },
-        onRoomStateRequest: () => {
+        onBarGamesEvent: (event) => {
+          barGamesBridgeRef.current?.onEvent(event)
+        },
+        onRoomStateRequest: (requesterId) => {
           const current = presenterStateRef.current
           const me = localProfileRef.current
           if (
@@ -410,6 +436,10 @@ export function useRoomSession(
           if (currentCustom.revision > 0 && me.isHost) {
             service.broadcastRoomCustomization(currentCustom)
           }
+
+          barGamesBridgeRef.current?.onStateRequest(requesterId, me.isHost, (ev) =>
+            service.broadcastBarGamesEvent(ev),
+          )
         },
         onChatMessage: (msg) => {
           setMessages((prev) =>
@@ -429,6 +459,9 @@ export function useRoomSession(
       })
 
       serviceRef.current = service
+      barGamesBridgeRef.current?.onRoomJoined(normalizedCode, (ev) =>
+        service.broadcastBarGamesEvent(ev),
+      )
       setTransportMode(service.mode)
       setJoined(true)
       await service.connect()
@@ -460,6 +493,7 @@ export function useRoomSession(
       serviceRef.current = null
     }
     remotePosesRef.current.clear()
+    barGamesBridgeRef.current?.onRoomLeft()
     setJoined(false)
     setConnected(false)
     setParticipants([])
@@ -730,6 +764,10 @@ export function useRoomSession(
     serviceRef.current?.broadcastPose(pose)
   }, [])
 
+  const broadcastBarGamesEvent = useCallback((event: BarGamesWireEvent) => {
+    serviceRef.current?.broadcastBarGamesEvent(event)
+  }, [])
+
   const sendWebRTCSignal = useCallback((signal: WebRTCSignalMessage) => {
     serviceRef.current?.sendWebRTCSignal(signal)
   }, [])
@@ -750,6 +788,7 @@ export function useRoomSession(
     messages,
     reactions,
     remotePosesRef,
+    barGamesBridgeRef,
     joinRoom,
     leaveRoom,
     updateLocalProfile,
@@ -764,6 +803,7 @@ export function useRoomSession(
     sendChatMessage,
     sendReaction,
     broadcastPose,
+    broadcastBarGamesEvent,
     sendWebRTCSignal,
     appendSystemMessage,
   }

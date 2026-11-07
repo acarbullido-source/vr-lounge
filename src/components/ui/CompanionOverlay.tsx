@@ -2,6 +2,7 @@ import {
   Check,
   Copy,
   Crown,
+  Dices,
   Glasses,
   Globe,
   Hammer,
@@ -150,6 +151,8 @@ export interface CompanionOverlayProps {
   onUnlockAudio: () => void
   onSendChat: (text: string) => void
   onSendReaction: (emoji: string) => void
+  barGamesOpen?: boolean
+  onToggleBarGames?: () => void
 }
 
 export function CompanionOverlay({
@@ -218,6 +221,8 @@ export function CompanionOverlay({
   onUnlockAudio,
   onSendChat,
   onSendReaction,
+  barGamesOpen = false,
+  onToggleBarGames,
 }: CompanionOverlayProps) {
   // Pre-join lobby form state
   const [displayName, setDisplayName] = useState(() => {
@@ -1471,6 +1476,29 @@ export function CompanionOverlay({
             <Hammer className="h-3.5 w-3.5 text-[#22d3ee]" />
             <span>Customize Room</span>
           </button>
+
+          {onToggleBarGames && (
+            <button
+              id="btn-open-bar-games"
+              type="button"
+              onClick={() => {
+                if (!barGamesOpen) {
+                  setBuildDrawerOpen(false)
+                  setUrlDrawerOpen(false)
+                  onToggleBuildMode(false)
+                }
+                onToggleBarGames()
+              }}
+              className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition ${
+                barGamesOpen
+                  ? 'border-[#e5a93c] bg-[#e5a93c]/18 text-[#fde68a]'
+                  : 'border-[#f4f1ea]/12 bg-[#141922] text-[#f4f1ea] hover:border-[#e5a93c]/60'
+              }`}
+            >
+              <Dices className="h-3.5 w-3.5 text-[#e5a93c]" />
+              <span>Games &amp; Props</span>
+            </button>
+          )}
         </div>
 
         {/* Center: Mode 2 Synchronized Transport Controls */}

@@ -203,10 +203,12 @@ export interface ComputedSeat {
   id: string
   index: number
   furnitureId: string
-  furnitureType: FurnitureCatalogId | 'fallback'
+  furnitureType: FurnitureCatalogId | 'fallback' | 'game-station'
   label: string
   position: [number, number, number]
   localCushionOffset: [number, number, number]
   seatHeightOffset: number
   rotationY: number
+  lookAtTarget?: [number, number, number]
+  stationKind?: 'seat' | 'game-table' | 'darts-oche' | 'putting-tee' | 'chalkboard'
 }

@@ -20,9 +20,11 @@ import {
 } from 'react'
 import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
+import { BarGamesDrawer, type BarGamesTabId } from './components/ui/BarGamesDrawer'
 import { CompanionOverlay } from './components/ui/CompanionOverlay'
 import { PasscodeGate } from './components/ui/PasscodeGate'
 import { AvatarManager } from './components/xr/AvatarManager'
+import { BarGamesCorner3D } from './components/xr/BarGamesCorner3D'
 import { BuildModePanel3D } from './components/xr/BuildModePanel3D'
 import { CinemaRoom } from './components/xr/CinemaRoom'
 import { SpatialChatPanel } from './components/xr/SpatialChatPanel'
@@ -34,6 +36,7 @@ import {
   ROOM_SIZE_SPECS,
   getCatalogEntry,
 } from './constants/hangout'
+import { useBarGames } from './hooks/useBarGames'
 import { useMediaScreen } from './hooks/useMediaScreen'
 import { useRoomSession, type JoinRoomOptions } from './hooks/useRoomSession'
 import { useWebRTC } from './hooks/useWebRTC'
@@ -208,11 +211,19 @@ function SeatCameraAndOriginRig({
         ergonomicFloorY + 1.38,
         seat.position[2] + backCos * 0.14,
       )
-      desiredLookTarget.set(
-        screenCenter[0],
-        screenCenter[1] - 0.35,
-        screenCenter[2] + 1.4,
-      )
+      if (seat.lookAtTarget) {
+        desiredLookTarget.set(
+          seat.lookAtTarget[0],
+          seat.lookAtTarget[1],
+          seat.lookAtTarget[2],
+        )
+      } else {
+        desiredLookTarget.set(
+          screenCenter[0],
+          screenCenter[1] - 0.35,
+          screenCenter[2] + 1.4,
+        )
+      }
 
       camera.position.lerp(desiredCamPos, camAlpha)
       if (orbitRef.current) {
@@ -257,10 +268,10 @@ function SeatCameraAndOriginRig({
         <OrbitControls
           ref={orbitRef}
           enablePan={false}
-          minDistance={2.2}
+          minDistance={0.95}
           maxDistance={15.5}
-          minPolarAngle={Math.PI * 0.22}
-          maxPolarAngle={Math.PI * 0.72}
+          minPolarAngle={Math.PI * 0.14}
+          maxPolarAngle={Math.PI * 0.78}
           rotateSpeed={0.62}
         />
       </IfInSessionMode>
@@ -287,6 +298,8 @@ export function App() {
   const [youtubeSearchQuery, setYoutubeSearchQuery] = useState('')
   const [youtubeSearchTrigger, setYoutubeSearchTrigger] = useState(0)
   const [buildMode, setBuildMode] = useState(false)
+  const [barGamesOpen, setBarGamesOpen] = useState(false)
+  const [barGamesTab, setBarGamesTab] = useState<BarGamesTabId>('play')
   const [selectedFurnitureId, setSelectedFurnitureId] = useState<string | null>(null)
   const [editingPosterItemId, setEditingPosterItemId] = useState<string | null>(null)
   const [keyboardMode, setKeyboardMode] = useState<VRKeyboardMode | null>(null)
@@ -294,6 +307,15 @@ export function App() {
   const [usingSimulator, setUsingSimulator] = useState(false)
 
   const room = useRoomSession(signalHandlerRef)
+  const barGames = useBarGames({
+    roomCode: room.roomCode,
+    joined: room.joined,
+    localUserId: room.localUserId,
+    localProfile: room.localProfile,
+    barGamesBridgeRef: room.barGamesBridgeRef,
+    broadcastBarGamesEvent: room.broadcastBarGamesEvent,
+    appendSystemMessage: room.appendSystemMessage,
+  })
 
   const {
     joined: roomJoined,
@@ -611,6 +633,7 @@ export function App() {
       const next = typeof enabled === 'boolean' ? enabled : !prev
       if (next) {
         setYoutubeBrowserOpen(false)
+        setBarGamesOpen(false)
       } else {
         setSelectedFurnitureId(null)
         setEditingPosterItemId(null)
@@ -902,46 +925,55 @@ export function App() {
                     />
                   </SceneSectionBoundary>
 
-                  <SceneSectionBoundary>
-                    <SpatialControlDock
-                      presenterState={room.presenterState}
-                      isLocalPresenter={room.isLocalPresenter}
-                      canTakeControl={room.canTakeControl}
-                      isMuted={room.localProfile.isMuted}
-                      cinemaVolume={cinemaVolume}
-                      voiceVolume={voiceVolume}
-                      localCurrentTime={media.localCurrentTime}
-                      localDuration={media.localDuration}
-                      chatPanelOpen={spatialChatOpen}
-                      youtubeBrowserOpen={youtubeBrowserOpen}
-                      buildModeOpen={buildMode}
-                      youtubeSearchQuery={youtubeSearchQuery}
-                      posterInitialValue={editingPosterInitialValue}
-                      keyboardMode={keyboardMode}
-                      onSetKeyboardMode={setKeyboardMode}
-                      onToggleYouTubeBrowser={handleToggleYouTubeBrowser}
-                      onToggleBuildMode={() => handleToggleBuildMode()}
-                      onSubmitYouTubeSearch={handleSubmitYouTubeSearch}
-                      onSubmitPosterValue={handleSubmitPosterKeyboardValue}
-                      onTakeControl={() => room.takeControl()}
-                      onReleaseControl={() => {
-                        webrtc.stopTabShare()
-                        room.releaseControl()
-                      }}
-                      onTogglePlayPause={handleTogglePlayPause}
-                      onSeekRelative={handleSeekRelative}
-                      onSeekFraction={handleSeekFraction}
-                      onSelectStreamUrl={(url, title) => handleLoadStreamUrl(url, title, false)}
-                      onStartTabShare={() => void handleStartTabShare()}
-                      onToggleMute={handleToggleMute}
-                      onChangeCinemaVolume={setCinemaVolume}
-                      onChangeVoiceVolume={setVoiceVolume}
-                      onSendReaction={(emoji) => room.sendReaction(emoji)}
-                      onSendChatMessage={room.sendChatMessage}
-                      onToggleChatPanel={() => setSpatialChatOpen((v) => !v)}
-                      onRecenterSeat={() => setRecenterVersion((v) => v + 1)}
-                    />
-                  </SceneSectionBoundary>
+                  {(inVRSession ||
+                    !activeSeat?.stationKind ||
+                    activeSeat.stationKind === 'seat') && (
+                    <SceneSectionBoundary>
+                      <SpatialControlDock
+                        presenterState={room.presenterState}
+                        isLocalPresenter={room.isLocalPresenter}
+                        canTakeControl={room.canTakeControl}
+                        isMuted={room.localProfile.isMuted}
+                        cinemaVolume={cinemaVolume}
+                        voiceVolume={voiceVolume}
+                        localCurrentTime={media.localCurrentTime}
+                        localDuration={media.localDuration}
+                        chatPanelOpen={spatialChatOpen}
+                        youtubeBrowserOpen={youtubeBrowserOpen}
+                        buildModeOpen={buildMode}
+                        youtubeSearchQuery={youtubeSearchQuery}
+                        posterInitialValue={editingPosterInitialValue}
+                        keyboardMode={keyboardMode}
+                        onSetKeyboardMode={setKeyboardMode}
+                        onToggleYouTubeBrowser={handleToggleYouTubeBrowser}
+                        onToggleBuildMode={() => handleToggleBuildMode()}
+                        onSubmitYouTubeSearch={handleSubmitYouTubeSearch}
+                        onSubmitPosterValue={handleSubmitPosterKeyboardValue}
+                        onTakeControl={() => room.takeControl()}
+                        onReleaseControl={() => {
+                          webrtc.stopTabShare()
+                          room.releaseControl()
+                        }}
+                        onTogglePlayPause={handleTogglePlayPause}
+                        onSeekRelative={handleSeekRelative}
+                        onSeekFraction={handleSeekFraction}
+                        onSelectStreamUrl={(url, title) => handleLoadStreamUrl(url, title, false)}
+                        onStartTabShare={() => void handleStartTabShare()}
+                        onToggleMute={handleToggleMute}
+                        onChangeCinemaVolume={setCinemaVolume}
+                        onChangeVoiceVolume={setVoiceVolume}
+                        onSendReaction={(emoji) => room.sendReaction(emoji)}
+                        onSendChatMessage={room.sendChatMessage}
+                        onToggleChatPanel={() => setSpatialChatOpen((v) => !v)}
+                        onRecenterSeat={() => setRecenterVersion((v) => v + 1)}
+                        localSeatId={room.localProfile.seatId}
+                        onSelectSeat={room.selectSeat}
+                        atGameStation={Boolean(
+                          activeSeat?.stationKind && activeSeat.stationKind !== 'seat',
+                        )}
+                      />
+                    </SceneSectionBoundary>
+                  )}
                 </>
               )}
             </SeatCameraAndOriginRig>
@@ -973,6 +1005,59 @@ export function App() {
               onDeleteFurnitureItem={handleDeleteFurnitureItem}
               onEditFurnitureMedia={handleEditFurnitureMediaInVR}
             />
+
+            <SceneSectionBoundary>
+              <BarGamesCorner3D
+                localUserId={room.localUserId}
+                localDisplayName={room.localProfile.displayName}
+                localSeatId={room.localProfile.seatId}
+                participants={room.participants}
+                roomCustomization={roomCustomization}
+                buildMode={buildMode}
+                dartsState={barGames.dartsState}
+                puttingState={barGames.puttingState}
+                tabletopState={barGames.tabletopState}
+                clubhouseState={barGames.clubhouseState}
+                activeDartShot={barGames.activeDartShot}
+                activePuttShot={barGames.activePuttShot}
+                onSelectSeat={room.selectSeat}
+                onOpen2DPropsDrawer={
+                  !inVRSession
+                    ? () => {
+                        setBuildMode(false)
+                        setBarGamesTab('props')
+                        setBarGamesOpen(true)
+                      }
+                    : undefined
+                }
+                onLaunchDartShot={barGames.launchDartShot}
+                onSettleDartShot={barGames.settleDartShot}
+                onJoinDarts={barGames.joinDartsMatch}
+                onConfigureDarts={barGames.configureDartsMatch}
+                onResetDarts={barGames.resetDartsMatch}
+                onLaunchPuttShot={barGames.launchPuttShot}
+                onSettlePuttShot={barGames.settlePuttShot}
+                onJoinPutting={barGames.joinPuttingMatch}
+                onConfigurePutting={barGames.configurePuttingMatch}
+                onResetBallToTee={barGames.resetPuttingBallToTee}
+                onResetPutting={barGames.resetPuttingMatch}
+                onRollDice={barGames.rollPolyhedralDice}
+                onRerollSingleDie={barGames.rerollSingleDie}
+                onSetSurface={barGames.setTableSurface}
+                onShuffleDeck={barGames.shuffleDeck}
+                onDrawCardToHand={barGames.drawCardToHand}
+                onPlayCardFromHand={barGames.playCardFromHand}
+                onDealCardToTable={barGames.dealCardToTable}
+                onFlipTableCard={barGames.flipTableCard}
+                onResetDeck={barGames.resetCardDeck}
+                onSpawnToken={barGames.spawnTableToken}
+                onMoveToken={barGames.moveTableToken}
+                onCreateProp={barGames.createPredictionProp}
+                onPickPropOption={barGames.pickPropOption}
+                onLockProp={barGames.lockPredictionProp}
+                onResolveProp={barGames.resolvePredictionProp}
+              />
+            </SceneSectionBoundary>
 
             <SceneSectionBoundary>
               <AvatarManager
@@ -1056,6 +1141,7 @@ export function App() {
           onLeaveRoom={async () => {
             webrtc.stopTabShare()
             setBuildMode(false)
+            setBarGamesOpen(false)
             setSelectedFurnitureId(null)
             await room.leaveRoom()
           }}
@@ -1090,6 +1176,54 @@ export function App() {
           onUnlockAudio={media.unlockAudio}
           onSendChat={room.sendChatMessage}
           onSendReaction={(emoji) => room.sendReaction(emoji)}
+          barGamesOpen={barGamesOpen}
+          onToggleBarGames={() => setBarGamesOpen((v) => !v)}
+        />
+      )}
+
+      {/* 2D Bar Games, Tabletop & Clubhouse Props Drawer */}
+      {passcodeUnlocked && room.joined && !inVRSession && (
+        <BarGamesDrawer
+          open={barGamesOpen}
+          activeTab={barGamesTab}
+          onChangeTab={setBarGamesTab}
+          onClose={() => setBarGamesOpen(false)}
+          localUserId={room.localUserId}
+          localDisplayName={room.localProfile.displayName}
+          localSeatId={room.localProfile.seatId}
+          roomCustomization={roomCustomization}
+          dartsState={barGames.dartsState}
+          puttingState={barGames.puttingState}
+          tabletopState={barGames.tabletopState}
+          clubhouseState={barGames.clubhouseState}
+          hasActiveDartShot={Boolean(barGames.activeDartShot)}
+          hasActivePuttShot={Boolean(barGames.activePuttShot)}
+          onSelectSeat={room.selectSeat}
+          onLaunchDartShot={barGames.launchDartShot}
+          onJoinDarts={barGames.joinDartsMatch}
+          onConfigureDarts={barGames.configureDartsMatch}
+          onResetDarts={barGames.resetDartsMatch}
+          onLaunchPuttShot={barGames.launchPuttShot}
+          onJoinPutting={barGames.joinPuttingMatch}
+          onConfigurePutting={barGames.configurePuttingMatch}
+          onResetBallToTee={barGames.resetPuttingBallToTee}
+          onResetPutting={barGames.resetPuttingMatch}
+          onRollDice={barGames.rollPolyhedralDice}
+          onSetSurface={barGames.setTableSurface}
+          onShuffleDeck={barGames.shuffleDeck}
+          onDrawCardToHand={barGames.drawCardToHand}
+          onPlayCardFromHand={barGames.playCardFromHand}
+          onDealCardToTable={barGames.dealCardToTable}
+          onFlipTableCard={barGames.flipTableCard}
+          onResetDeck={barGames.resetCardDeck}
+          onSpawnToken={barGames.spawnTableToken}
+          onMoveToken={barGames.moveTableToken}
+          onClearTokens={barGames.clearTableTokens}
+          onCreateProp={barGames.createPredictionProp}
+          onPickPropOption={barGames.pickPropOption}
+          onLockProp={barGames.lockPredictionProp}
+          onResolveProp={barGames.resolvePredictionProp}
+          onDeleteProp={barGames.deletePredictionProp}
         />
       )}
 

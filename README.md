@@ -38,9 +38,9 @@ Pushes to `main` automatically typecheck, lint, build vendor-split bundles, and 
 - `VITE_METERED_API_KEY` (plus optional `VITE_METERED_DOMAIN` / `VITE_METERED_TURN_URL`) — **Metered.ca OpenRelay TURN** (UDP/TCP/TLS on ports 80 & 443) for friends behind strict NATs, college Wi-Fi, or mobile hotspots.
 - `VITE_YOUTUBE_PROXY_URL` — Optional custom Piped/Invidious relay override (defaults to persistent latency-ranked community relay failover).
 
-### Optional Server-Side Room Layout Table (Supabase)
+### Optional Server-Side Room Layout & Clubhouse Tables (Supabase)
 
-Room customizations (furniture, wall/floor themes, alcoves, screen transform, and lighting moods) automatically persist per `roomCode` in every participant's `localStorage` and sync across peers via Realtime Broadcast with **zero SQL setup required**. If you also want cloud database persistence when all browsers clear storage, run this optional snippet in your Supabase SQL Editor:
+Room customizations (furniture, wall/floor themes, alcoves, screen transform, and lighting moods) as well as **Bar Games & Clubhouse** records (501/Cricket match wins, high checkouts, longest putting streaks, and `$1` prediction ledger balances) automatically persist per `roomCode` in every participant's `localStorage` and sync across peers via Realtime Broadcast with **zero SQL setup required**. If you also want cloud database persistence when all browsers clear storage, run this optional snippet in your Supabase SQL Editor:
 
 ```sql
 create table if not exists public.room_layouts (
@@ -52,6 +52,14 @@ create table if not exists public.room_layouts (
 alter table public.room_layouts enable row level security;
 create policy "Allow public room layout sync" on public.room_layouts
   for all to anon using (true) with check (true);
+
+create table if not exists public.clubhouse_stats (
+  room_code text primary key,
+  clubhouse_json jsonb not null,
+  revision integer not null default 1,
+  updated_at timestamptz not null default now()
+);
+alter table public.clubhouse_stats enable row level security;
+create policy "Allow public clubhouse stats sync" on public.clubhouse_stats
+  for all to anon using (true) with check (true);
 ```
-
-

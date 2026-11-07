@@ -1,5 +1,6 @@
 import { createClient, type RealtimeChannel, type SupabaseClient } from '@supabase/supabase-js'
 import type { MqttClient } from 'mqtt'
+import type { BarGamesWireEvent } from '../types/barGames'
 import type {
   AvatarPose6DoF,
   ChatMessage,
@@ -16,6 +17,7 @@ export interface RealtimeCallbacks {
   onPoseUpdate: (pose: AvatarPose6DoF) => void
   onPresenterState: (state: PresenterState) => void
   onRoomCustomization?: (state: RoomCustomizationState) => void
+  onBarGamesEvent?: (event: BarGamesWireEvent) => void
   onRoomStateRequest: (requesterId: string) => void
   onChatMessage: (message: ChatMessage) => void
   onReaction: (reaction: FloatingReaction) => void
@@ -29,6 +31,7 @@ interface RelayEnvelope {
     | 'pose-update'
     | 'presenter-state'
     | 'room-customization'
+    | 'bar-games-event'
     | 'request-room-state'
     | 'chat-message'
     | 'emoji-reaction'
@@ -206,6 +209,11 @@ export class RoomRealtimeService {
       .on('broadcast', { event: 'room-customization' }, ({ payload }) => {
         if (!this.destroyed && payload) {
           this.callbacks.onRoomCustomization?.(payload as RoomCustomizationState)
+        }
+      })
+      .on('broadcast', { event: 'bar-games-event' }, ({ payload }) => {
+        if (!this.destroyed && payload) {
+          this.callbacks.onBarGamesEvent?.(payload as BarGamesWireEvent)
         }
       })
       .on('broadcast', { event: 'request-room-state' }, ({ payload }) => {
@@ -427,6 +435,9 @@ export class RoomRealtimeService {
       case 'room-customization':
         this.callbacks.onRoomCustomization?.(env.payload as RoomCustomizationState)
         break
+      case 'bar-games-event':
+        this.callbacks.onBarGamesEvent?.(env.payload as BarGamesWireEvent)
+        break
       case 'request-room-state': {
         const req = env.payload as { requesterId: string }
         if (req?.requesterId) this.callbacks.onRoomStateRequest(req.requesterId)
@@ -541,6 +552,19 @@ export class RoomRealtimeService {
       })
     } else {
       this.publishRelay('room-customization', state)
+    }
+  }
+
+  broadcastBarGamesEvent(event: BarGamesWireEvent): void {
+    if (this.destroyed) return
+    if (this.supabaseChannel) {
+      void this.supabaseChannel.send({
+        type: 'broadcast',
+        event: 'bar-games-event',
+        payload: event,
+      })
+    } else {
+      this.publishRelay('bar-games-event', event)
     }
   }
 

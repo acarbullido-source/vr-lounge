@@ -136,6 +136,9 @@ export interface SpatialControlDockProps {
   onSendChatMessage: (text: string) => void
   onToggleChatPanel: () => void
   onRecenterSeat: () => void
+  localSeatId?: string
+  onSelectSeat?: (seatId: string) => void
+  atGameStation?: boolean
 }
 
 export function SpatialControlDock({
@@ -172,6 +175,9 @@ export function SpatialControlDock({
   onSendChatMessage,
   onToggleChatPanel,
   onRecenterSeat,
+  localSeatId,
+  onSelectSeat,
+  atGameStation = false,
 }: SpatialControlDockProps) {
   const [minimized, setMinimized] = useState(false)
 
@@ -180,7 +186,10 @@ export function SpatialControlDock({
 
   if (minimized) {
     return (
-      <group position={[0, 0.72, -0.68]} rotation={[-0.45, 0, 0]}>
+      <group
+        position={atGameStation ? [-0.52, 0.62, -0.45] : [0, 0.72, -0.68]}
+        rotation={atGameStation ? [-0.42, 0.28, 0] : [-0.45, 0, 0]}
+      >
         <DockButton
           label="Open Lounge Controls ▲"
           position={[0, 0, 0]}
@@ -194,7 +203,12 @@ export function SpatialControlDock({
   }
 
   return (
-    <group name="spatial-control-dock" position={[0, 0.76, -0.72]} rotation={[-0.46, 0, 0]}>
+    <group
+      name="spatial-control-dock"
+      position={atGameStation ? [-0.64, 0.62, -0.46] : [0, 0.76, -0.72]}
+      rotation={atGameStation ? [-0.42, 0.32, 0] : [-0.46, 0, 0]}
+      scale={atGameStation ? 0.74 : 1}
+    >
       {/* Floating 3D Virtual Keyboard above dock when active */}
       {keyboardMode && (
         <group position={[0, 0.68, 0.08]} rotation={[0.24, 0, 0]}>
@@ -452,6 +466,61 @@ export function SpatialControlDock({
           onClick={() => onSetKeyboardMode(keyboardMode === 'chat' ? null : 'chat')}
         />
       </group>
+
+      {/* VR Bar Games & Lounge Station Quick-Hop Strip */}
+      {onSelectSeat && (
+        <group position={[0, -0.305, 0.016]}>
+          <RoundedBox args={[1.18, 0.088, 0.018]} radius={0.022} smoothness={2}>
+            <meshBasicMaterial color="#0A0E15" />
+          </RoundedBox>
+          <DockButton
+            label="🛋 Sofa"
+            position={[-0.46, 0, 0.008]}
+            width={0.21}
+            height={0.068}
+            variant={
+              localSeatId &&
+              !localSeatId.startsWith('station:') &&
+              !localSeatId.startsWith('game-table:')
+                ? 'primary'
+                : 'default'
+            }
+            onClick={() => onSelectSeat('furn-sofa-front:0')}
+          />
+          <DockButton
+            label="🎯 Darts"
+            position={[-0.23, 0, 0.008]}
+            width={0.21}
+            height={0.068}
+            variant={localSeatId === 'station:darts-oche' ? 'primary' : 'default'}
+            onClick={() => onSelectSeat('station:darts-oche')}
+          />
+          <DockButton
+            label="⛳ Putting"
+            position={[0, 0, 0.008]}
+            width={0.21}
+            height={0.068}
+            variant={localSeatId === 'station:putting-tee' ? 'primary' : 'default'}
+            onClick={() => onSelectSeat('station:putting-tee')}
+          />
+          <DockButton
+            label="🎲 Table"
+            position={[0.23, 0, 0.008]}
+            width={0.21}
+            height={0.068}
+            variant={localSeatId?.startsWith('game-table:') ? 'primary' : 'default'}
+            onClick={() => onSelectSeat('game-table:seat-0')}
+          />
+          <DockButton
+            label="📋 Props"
+            position={[0.46, 0, 0.008]}
+            width={0.21}
+            height={0.068}
+            variant={localSeatId === 'station:chalkboard' ? 'primary' : 'default'}
+            onClick={() => onSelectSeat('station:chalkboard')}
+          />
+        </group>
+      )}
     </group>
   )
 }
