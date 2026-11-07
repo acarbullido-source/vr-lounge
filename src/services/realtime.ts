@@ -183,6 +183,7 @@ export class RoomRealtimeService {
                 displayName: latest.displayName,
                 avatarColor: latest.avatarColor,
                 avatarStyle: latest.avatarStyle,
+                avatarCustomization: latest.avatarCustomization,
                 seatIndex: latest.seatIndex,
                 seatId: latest.seatId,
                 isHost: latest.isHost,

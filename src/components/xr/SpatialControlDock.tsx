@@ -115,12 +115,14 @@ export interface SpatialControlDockProps {
   chatPanelOpen: boolean
   youtubeBrowserOpen: boolean
   buildModeOpen: boolean
+  wardrobeOpen?: boolean
   youtubeSearchQuery: string
   posterInitialValue?: string
   keyboardMode: VRKeyboardMode | null
   onSetKeyboardMode: (mode: VRKeyboardMode | null) => void
   onToggleYouTubeBrowser: () => void
   onToggleBuildMode: () => void
+  onToggleWardrobe?: () => void
   onSubmitYouTubeSearch: (query: string) => void
   onSubmitPosterValue?: (val: string) => void
   onTakeControl: () => void
@@ -156,12 +158,14 @@ export function SpatialControlDock({
   chatPanelOpen,
   youtubeBrowserOpen,
   buildModeOpen,
+  wardrobeOpen = false,
   youtubeSearchQuery,
   posterInitialValue = '',
   keyboardMode,
   onSetKeyboardMode,
   onToggleYouTubeBrowser,
   onToggleBuildMode,
+  onToggleWardrobe,
   onSubmitYouTubeSearch,
   onSubmitPosterValue,
   onTakeControl,
@@ -300,7 +304,7 @@ export function SpatialControlDock({
         <meshBasicMaterial color="#E5A93C" />
       </mesh>
 
-      {/* Top Row: Presenter Control Handoff + YouTube VR Deck + Source Switchers + Build + Minimize */}
+      {/* Top Row: Presenter Control Handoff + YouTube VR Deck + Source Switchers + Build + Avatar + Minimize */}
       <DockButton
         label={isLocalPresenter ? 'Release' : 'Control'}
         sublabel={
@@ -310,8 +314,8 @@ export function SpatialControlDock({
               ? `${presenterState.presenterName.slice(0, 9)}`
               : 'Claim screen'
         }
-        position={[-0.49, 0.165, 0.016]}
-        width={0.21}
+        position={[-0.505, 0.165, 0.016]}
+        width={0.185}
         variant={isLocalPresenter ? 'active' : 'primary'}
         disabled={!isLocalPresenter && !canTakeControl}
         onClick={isLocalPresenter ? onReleaseControl : onTakeControl}
@@ -320,8 +324,8 @@ export function SpatialControlDock({
       <DockButton
         label="▶ YouTube"
         sublabel="VR Browse"
-        position={[-0.255, 0.165, 0.016]}
-        width={0.22}
+        position={[-0.305, 0.165, 0.016]}
+        width={0.185}
         variant={youtubeBrowserOpen ? 'primary' : 'danger'}
         onClick={onToggleYouTubeBrowser}
       />
@@ -329,8 +333,8 @@ export function SpatialControlDock({
       <DockButton
         label="URL / HLS"
         sublabel="Direct Link"
-        position={[-0.035, 0.165, 0.016]}
-        width={0.19}
+        position={[-0.115, 0.165, 0.016]}
+        width={0.165}
         variant={keyboardMode === 'url' ? 'primary' : 'default'}
         onClick={() => {
           if (!isLocalPresenter && canTakeControl) {
@@ -343,25 +347,34 @@ export function SpatialControlDock({
       <DockButton
         label="Share Tab"
         sublabel="PC WebRTC"
-        position={[0.165, 0.165, 0.016]}
-        width={0.18}
+        position={[0.06, 0.165, 0.016]}
+        width={0.155}
         variant={presenterState.screenMode === 'tab-stream' && isLocalPresenter ? 'primary' : 'default'}
         onClick={onStartTabShare}
       />
 
       <DockButton
         label={buildModeOpen ? '🛠 Done' : '🛠 Build'}
-        sublabel="Customize"
-        position={[0.365, 0.165, 0.016]}
-        width={0.19}
+        sublabel="Room"
+        position={[0.23, 0.165, 0.016]}
+        width={0.155}
         variant={buildModeOpen ? 'primary' : 'active'}
         onClick={onToggleBuildMode}
       />
 
       <DockButton
+        label={wardrobeOpen ? '👤 Done' : '👤 Avatar'}
+        sublabel="3D Mirror"
+        position={[0.4, 0.165, 0.016]}
+        width={0.155}
+        variant={wardrobeOpen ? 'primary' : 'active'}
+        onClick={() => onToggleWardrobe?.()}
+      />
+
+      <DockButton
         label="Hide ▾"
-        position={[0.535, 0.165, 0.016]}
-        width={0.12}
+        position={[0.548, 0.165, 0.016]}
+        width={0.11}
         onClick={() => setMinimized(true)}
       />
 

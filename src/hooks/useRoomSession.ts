@@ -2,8 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AVATAR_COLORS,
   AVATAR_STYLES,
-  createInitialPresenterState,
-} from '../constants/cinema'
+  DEFAULT_AVATAR_CUSTOMIZATION,
+  loadSavedAvatarPreferences,
+  resolveAvatarCustomization,
+  saveAvatarPreferences,
+} from '../constants/avatars'
+import { createInitialPresenterState } from '../constants/cinema'
 import {
   FREE_ROAM_SEAT_ID,
   computeRoomSeats,
@@ -20,6 +24,7 @@ import {
 } from '../services/roomStorage'
 import type { BarGamesWireEvent } from '../types/barGames'
 import type {
+  AvatarCustomization,
   AvatarPose6DoF,
   AvatarStyleId,
   ChatMessage,
@@ -45,6 +50,7 @@ export interface JoinRoomOptions {
   displayName: string
   avatarColor: string
   avatarStyle: AvatarStyleId
+  avatarCustomization?: AvatarCustomization
   inVR: boolean
   isMuted: boolean
 }
@@ -93,18 +99,23 @@ export function useRoomSession(
     [roomCustomization],
   )
 
-  const [localProfile, setLocalProfile] = useState<ParticipantProfile>(() => ({
-    userId: localUserId,
-    displayName: 'Guest',
-    avatarColor: AVATAR_COLORS[0].hex,
-    avatarStyle: AVATAR_STYLES[0].id,
-    seatIndex: 0,
-    seatId: 'furn-sofa-front:0',
-    isHost: true,
-    isMuted: false,
-    inVR: false,
-    joinedAt: Date.now(),
-  }))
+  const [localProfile, setLocalProfile] = useState<ParticipantProfile>(() => {
+    const saved = loadSavedAvatarPreferences()
+    return {
+      userId: localUserId,
+      displayName: saved?.displayName || 'Guest',
+      avatarColor: saved?.avatarColor ?? AVATAR_COLORS[0].hex,
+      avatarStyle: saved?.avatarStyle ?? AVATAR_STYLES[0].id,
+      avatarCustomization:
+        saved?.avatarCustomization ?? { ...DEFAULT_AVATAR_CUSTOMIZATION },
+      seatIndex: 0,
+      seatId: 'furn-sofa-front:0',
+      isHost: true,
+      isMuted: false,
+      inVR: false,
+      joinedAt: Date.now(),
+    }
+  })
 
   const [participants, setParticipants] = useState<ParticipantProfile[]>([])
   const [presenterState, setPresenterState] = useState<PresenterState>(() =>
@@ -258,11 +269,23 @@ export function useRoomSession(
       const initialSeats = computeRoomSeats(savedLocalLayout)
       const firstSeat = initialSeats[0]
 
-      const initialProfile: ParticipantProfile = {
-        userId: localUserId,
-        displayName: opts.displayName.trim() || 'Cinema Guest',
+      const resolvedCustomization = resolveAvatarCustomization(
+        opts.avatarCustomization ?? localProfileRef.current.avatarCustomization,
+      )
+      const cleanName = opts.displayName.trim() || 'Cinema Guest'
+      saveAvatarPreferences({
+        displayName: cleanName,
         avatarColor: opts.avatarColor,
         avatarStyle: opts.avatarStyle,
+        avatarCustomization: resolvedCustomization,
+      })
+
+      const initialProfile: ParticipantProfile = {
+        userId: localUserId,
+        displayName: cleanName,
+        avatarColor: opts.avatarColor,
+        avatarStyle: opts.avatarStyle,
+        avatarCustomization: resolvedCustomization,
         seatIndex: 0,
         seatId: firstSeat?.id ?? 'furn-sofa-front:0',
         isHost: false,
@@ -796,6 +819,42 @@ export function useRoomSession(
     [localUserId],
   )
 
+  const updateAvatarAppearance = useCallback(
+    (patch: {
+      displayName?: string
+      avatarColor?: string
+      avatarStyle?: AvatarStyleId
+      avatarCustomization?: Partial<AvatarCustomization>
+    }) => {
+      const cur = localProfileRef.current
+      const nextName =
+        patch.displayName !== undefined
+          ? patch.displayName.trim().slice(0, 24) || cur.displayName
+          : cur.displayName
+      const nextColor = patch.avatarColor ?? cur.avatarColor
+      const nextStyle = patch.avatarStyle ?? cur.avatarStyle
+      const nextCustomization = resolveAvatarCustomization({
+        ...resolveAvatarCustomization(cur.avatarCustomization),
+        ...(patch.avatarCustomization ?? {}),
+      })
+
+      saveAvatarPreferences({
+        displayName: nextName,
+        avatarColor: nextColor,
+        avatarStyle: nextStyle,
+        avatarCustomization: nextCustomization,
+      })
+
+      updateLocalProfile({
+        displayName: nextName,
+        avatarColor: nextColor,
+        avatarStyle: nextStyle,
+        avatarCustomization: nextCustomization,
+      })
+    },
+    [updateLocalProfile],
+  )
+
   const broadcastPose = useCallback((pose: AvatarPose6DoF) => {
     serviceRef.current?.broadcastPose(pose)
   }, [])
@@ -828,6 +887,7 @@ export function useRoomSession(
     joinRoom,
     leaveRoom,
     updateLocalProfile,
+    updateAvatarAppearance,
     selectSeat,
     updateRoomCustomization,
     resetRoomCustomization,

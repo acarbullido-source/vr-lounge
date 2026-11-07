@@ -21,6 +21,7 @@ import {
 } from 'react'
 import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
+import { AvatarWardrobeDrawer } from './components/ui/AvatarWardrobeDrawer'
 import { BarGamesDrawer, type BarGamesTabId } from './components/ui/BarGamesDrawer'
 import { CompanionOverlay } from './components/ui/CompanionOverlay'
 import { PasscodeGate } from './components/ui/PasscodeGate'
@@ -31,6 +32,7 @@ import { CinemaRoom } from './components/xr/CinemaRoom'
 import { SpatialChatPanel } from './components/xr/SpatialChatPanel'
 import { SpatialControlDock } from './components/xr/SpatialControlDock'
 import type { VRKeyboardMode } from './components/xr/VRKeyboard3D'
+import { WardrobeMirror3D } from './components/xr/WardrobeMirror3D'
 import { YouTubeBrowser3D } from './components/xr/YouTubeBrowser3D'
 import {
   FREE_ROAM_SEAT_ID,
@@ -892,6 +894,7 @@ export function App() {
   const [buildMode, setBuildMode] = useState(false)
   const [barGamesOpen, setBarGamesOpen] = useState(false)
   const [barGamesTab, setBarGamesTab] = useState<BarGamesTabId>('play')
+  const [wardrobeOpen, setWardrobeOpen] = useState(false)
   const [selectedFurnitureId, setSelectedFurnitureId] = useState<string | null>(null)
   const [editingPosterItemId, setEditingPosterItemId] = useState<string | null>(null)
   const [keyboardMode, setKeyboardMode] = useState<VRKeyboardMode | null>(null)
@@ -1207,6 +1210,7 @@ export function App() {
       const next = !open
       if (next) {
         setBuildMode(false)
+        setWardrobeOpen(false)
       } else {
         setKeyboardMode((m) => (m === 'youtube' ? null : m))
       }
@@ -1216,6 +1220,7 @@ export function App() {
 
   const handleOpenYouTubeBrowser = useCallback(() => {
     setBuildMode(false)
+    setWardrobeOpen(false)
     setYoutubeBrowserOpen(true)
   }, [])
 
@@ -1252,8 +1257,20 @@ export function App() {
   )
 
   // =========================================================================
-  // HANGOUT BUILDER, ARCHITECTURE, SCREEN & MOOD HANDLERS
+  // HANGOUT BUILDER, ARCHITECTURE, SCREEN, MOOD & AVATAR STUDIO HANDLERS
   // =========================================================================
+
+  const handleToggleWardrobe = useCallback((enabled?: boolean) => {
+    setWardrobeOpen((prev) => {
+      const next = typeof enabled === 'boolean' ? enabled : !prev
+      if (next) {
+        setBuildMode(false)
+        setBarGamesOpen(false)
+        setYoutubeBrowserOpen(false)
+      }
+      return next
+    })
+  }, [])
 
   const handleToggleBuildMode = useCallback((enabled?: boolean) => {
     setBuildMode((prev) => {
@@ -1261,6 +1278,7 @@ export function App() {
       if (next) {
         setYoutubeBrowserOpen(false)
         setBarGamesOpen(false)
+        setWardrobeOpen(false)
       } else {
         setSelectedFurnitureId(null)
         setEditingPosterItemId(null)
@@ -1561,6 +1579,17 @@ export function App() {
                     />
                   </SceneSectionBoundary>
 
+                  <SceneSectionBoundary>
+                    <WardrobeMirror3D
+                      open={wardrobeOpen && inVRSession}
+                      inVR={true}
+                      localProfile={room.localProfile}
+                      localMicLevel={webrtc.localMicLevel}
+                      onUpdateAvatar={room.updateAvatarAppearance}
+                      onClose={() => handleToggleWardrobe(false)}
+                    />
+                  </SceneSectionBoundary>
+
                   {(inVRSession ||
                     (!isFreeRoaming &&
                       (!activeSeat?.stationKind ||
@@ -1578,12 +1607,14 @@ export function App() {
                         chatPanelOpen={spatialChatOpen}
                         youtubeBrowserOpen={youtubeBrowserOpen}
                         buildModeOpen={buildMode}
+                        wardrobeOpen={wardrobeOpen}
                         youtubeSearchQuery={youtubeSearchQuery}
                         posterInitialValue={editingPosterInitialValue}
                         keyboardMode={keyboardMode}
                         onSetKeyboardMode={setKeyboardMode}
                         onToggleYouTubeBrowser={handleToggleYouTubeBrowser}
                         onToggleBuildMode={() => handleToggleBuildMode()}
+                        onToggleWardrobe={() => handleToggleWardrobe()}
                         onSubmitYouTubeSearch={handleSubmitYouTubeSearch}
                         onSubmitPosterValue={handleSubmitPosterKeyboardValue}
                         onTakeControl={() => room.takeControl()}
@@ -1667,6 +1698,7 @@ export function App() {
                   !inVRSession
                     ? () => {
                         setBuildMode(false)
+                        setWardrobeOpen(false)
                         setBarGamesTab('props')
                         setBarGamesOpen(true)
                       }
@@ -1713,6 +1745,17 @@ export function App() {
                 remoteVoiceStreams={webrtc.remoteVoiceStreams}
                 voiceVolume={voiceVolume}
                 broadcastPose={room.broadcastPose}
+              />
+            </SceneSectionBoundary>
+
+            <SceneSectionBoundary>
+              <WardrobeMirror3D
+                open={room.joined && wardrobeOpen && !inVRSession}
+                inVR={false}
+                localProfile={room.localProfile}
+                localMicLevel={webrtc.localMicLevel}
+                onUpdateAvatar={room.updateAvatarAppearance}
+                onClose={() => handleToggleWardrobe(false)}
               />
             </SceneSectionBoundary>
 
@@ -1785,6 +1828,7 @@ export function App() {
             webrtc.stopTabShare()
             setBuildMode(false)
             setBarGamesOpen(false)
+            setWardrobeOpen(false)
             setSelectedFurnitureId(null)
             await room.leaveRoom()
           }}
@@ -1820,7 +1864,25 @@ export function App() {
           onSendChat={room.sendChatMessage}
           onSendReaction={(emoji) => room.sendReaction(emoji)}
           barGamesOpen={barGamesOpen}
-          onToggleBarGames={() => setBarGamesOpen((v) => !v)}
+          onToggleBarGames={() => {
+            setBarGamesOpen((v) => {
+              const next = !v
+              if (next) setWardrobeOpen(false)
+              return next
+            })
+          }}
+          wardrobeOpen={wardrobeOpen}
+          onToggleWardrobe={handleToggleWardrobe}
+        />
+      )}
+
+      {/* 2D Avatar Studio & Live 3D Mirror Drawer */}
+      {passcodeUnlocked && room.joined && !inVRSession && (
+        <AvatarWardrobeDrawer
+          open={wardrobeOpen}
+          localProfile={room.localProfile}
+          onUpdateAvatar={room.updateAvatarAppearance}
+          onClose={() => handleToggleWardrobe(false)}
         />
       )}
 

@@ -26,11 +26,17 @@ import {
   Sparkles,
   Tv,
   Unlock,
+  User,
   Users,
   Volume2,
   X,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import {
+  DEFAULT_AVATAR_CUSTOMIZATION,
+  loadSavedAvatarPreferences,
+  resolveAvatarCustomization,
+} from '../../constants/avatars'
 import {
   AVATAR_COLORS,
   AVATAR_STYLES,
@@ -58,6 +64,7 @@ import {
   type VRSupportKind,
 } from '../../store/xrStore'
 import type {
+  AvatarCustomization,
   AvatarStyleId,
   ChatMessage,
   ComputedSeat,
@@ -72,6 +79,7 @@ import type {
   RoomScreenTransform,
   TransportMode,
 } from '../../types/lounge'
+import { AvatarCustomizerControls } from './AvatarCustomizerControls'
 import { BuildCatalogDrawer } from './BuildCatalogDrawer'
 
 function formatDuration(sec: number): string {
@@ -155,6 +163,8 @@ export interface CompanionOverlayProps {
   onSendReaction: (emoji: string) => void
   barGamesOpen?: boolean
   onToggleBarGames?: () => void
+  wardrobeOpen?: boolean
+  onToggleWardrobe?: (open?: boolean) => void
 }
 
 export function CompanionOverlay({
@@ -225,18 +235,32 @@ export function CompanionOverlay({
   onSendReaction,
   barGamesOpen = false,
   onToggleBarGames,
+  wardrobeOpen = false,
+  onToggleWardrobe,
 }: CompanionOverlayProps) {
-  // Pre-join lobby form state
+  // Pre-join lobby form state hydrated from saved avatar preferences
+  const [savedAvatarPrefs] = useState(() => loadSavedAvatarPreferences())
   const [displayName, setDisplayName] = useState(() => {
-    const saved = window.localStorage.getItem('vr-lounge:name')
+    const saved =
+      savedAvatarPrefs?.displayName || window.localStorage.getItem('vr-lounge:name')
     return saved || `Viewer ${Math.floor(100 + Math.random() * 899)}`
   })
   const [lobbyRoomCode, setLobbyRoomCode] = useState(() => {
     const params = new URLSearchParams(window.location.search)
     return params.get('room')?.toUpperCase() || 'CINEMA-1'
   })
-  const [avatarColor, setAvatarColor] = useState<string>(AVATAR_COLORS[0].hex)
-  const [avatarStyle, setAvatarStyle] = useState<AvatarStyleId>(AVATAR_STYLES[0].id)
+  const [avatarColor, setAvatarColor] = useState<string>(
+    savedAvatarPrefs?.avatarColor ?? AVATAR_COLORS[0].hex,
+  )
+  const [avatarStyle, setAvatarStyle] = useState<AvatarStyleId>(
+    savedAvatarPrefs?.avatarStyle ?? AVATAR_STYLES[0].id,
+  )
+  const [avatarCustomization, setAvatarCustomization] = useState<AvatarCustomization>(
+    () =>
+      resolveAvatarCustomization(
+        savedAvatarPrefs?.avatarCustomization ?? DEFAULT_AVATAR_CUSTOMIZATION,
+      ),
+  )
   const [startMuted, setStartMuted] = useState(false)
   const [joining, setJoining] = useState(false)
 
@@ -357,6 +381,7 @@ export function CompanionOverlay({
           displayName: cleanName,
           avatarColor,
           avatarStyle,
+          avatarCustomization,
           inVR: enterVRImmediately,
           isMuted: startMuted,
         },
@@ -527,64 +552,27 @@ export function CompanionOverlay({
                 </div>
               </div>
 
-              {/* Avatar Color Swatches */}
-              <div>
-                <span className="block text-xs font-medium uppercase tracking-wider text-[#c7c2b8]">
-                  Avatar Trim Color
-                </span>
-                <div className="mt-2 flex flex-wrap gap-2.5">
-                  {AVATAR_COLORS.map((swatch) => {
-                    const selected = avatarColor === swatch.hex
-                    return (
-                      <button
-                        key={swatch.hex}
-                        id={`btn-color-${swatch.name.toLowerCase().replace(/\s+/g, '-')}`}
-                        type="button"
-                        title={swatch.name}
-                        onClick={() => setAvatarColor(swatch.hex)}
-                        className={`group relative flex h-9 w-9 items-center justify-center rounded-full transition ${
-                          selected
-                            ? 'ring-2 ring-[#f4f1ea] ring-offset-2 ring-offset-[#0d1015]'
-                            : 'opacity-80 hover:opacity-100'
-                        }`}
-                        style={{ backgroundColor: swatch.hex }}
-                      >
-                        {selected && <Check className="h-4 w-4 text-[#080a0d]" />}
-                      </button>
+              {/* Modular Avatar Studio (Presets, Head & Face, Hat & Outfit, Colors & Flair) */}
+              <AvatarCustomizerControls
+                idPrefix="lobby"
+                avatarColor={avatarColor}
+                avatarStyle={avatarStyle}
+                customization={avatarCustomization}
+                flairPreviewName={displayName}
+                compact
+                onChange={(patch) => {
+                  if (patch.avatarColor) setAvatarColor(patch.avatarColor)
+                  if (patch.avatarStyle) setAvatarStyle(patch.avatarStyle)
+                  if (patch.avatarCustomization) {
+                    setAvatarCustomization((prev) =>
+                      resolveAvatarCustomization({
+                        ...prev,
+                        ...patch.avatarCustomization,
+                      }),
                     )
-                  })}
-                </div>
-              </div>
-
-              {/* Avatar Headband / Visor Style */}
-              <div>
-                <span className="block text-xs font-medium uppercase tracking-wider text-[#c7c2b8]">
-                  Headset Silhouette
-                </span>
-                <div className="mt-2 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-                  {AVATAR_STYLES.map((style) => {
-                    const active = avatarStyle === style.id
-                    return (
-                      <button
-                        key={style.id}
-                        id={`btn-avatar-style-${style.id}`}
-                        type="button"
-                        onClick={() => setAvatarStyle(style.id)}
-                        className={`rounded-xl border px-3 py-2.5 text-left transition ${
-                          active
-                            ? 'border-[#e5a93c] bg-[#e5a93c]/12 text-[#f4f1ea]'
-                            : 'border-[#f4f1ea]/10 bg-[#0b0e13]/70 text-[#c7c2b8] hover:border-[#f4f1ea]/25'
-                        }`}
-                      >
-                        <div className="text-xs font-semibold">{style.label}</div>
-                        <div className="mt-0.5 text-[11px] text-[#8a867e]">
-                          {style.tagline}
-                        </div>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
+                  }
+                }}
+              />
             </section>
 
             {/* Right Column: Audio Devices & Entry Actions */}
@@ -984,6 +972,9 @@ export function CompanionOverlay({
                       style={{ backgroundColor: p.avatarColor }}
                     />
                     <span className="truncate font-medium text-[#f4f1ea]">
+                      {p.avatarCustomization?.flairEmoji
+                        ? `${p.avatarCustomization.flairEmoji} `
+                        : ''}
                       {p.displayName}
                       {p.userId === localProfile.userId ? ' (You)' : ''}
                     </span>
@@ -1459,7 +1450,8 @@ export function CompanionOverlay({
         !inVRSession &&
         !buildDrawerOpen &&
         !urlDrawerOpen &&
-        !barGamesOpen && (
+        !barGamesOpen &&
+        !wardrobeOpen && (
           <div className="pointer-events-none mx-auto mb-2 flex items-center gap-2 rounded-full border border-[#38bdf8]/35 bg-[#080a0d]/85 px-3.5 py-1 text-[11px] text-[#cbd5e1] shadow-lg backdrop-blur-md">
             <Footprints className="h-3.5 w-3.5 text-[#38bdf8]" />
             <span>
@@ -1482,7 +1474,7 @@ export function CompanionOverlay({
 
       {/* Bottom Companion Presenter & Watch-Party Dock */}
       <footer className="pointer-events-auto lounge-dock-bar mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-2.5 rounded-2xl px-3.5 py-2.5">
-        {/* Left: Presenter Handoff + Tab Share + URL Player + Customize Room */}
+        {/* Left: Presenter Handoff + Tab Share + URL Player + Customize Room + Games + Avatar */}
         <div className="flex flex-wrap items-center gap-2">
           <button
             id="btn-take-or-release-control"
@@ -1527,7 +1519,10 @@ export function CompanionOverlay({
             onClick={() => {
               setUrlDrawerOpen((v) => {
                 const next = !v
-                if (next) setBuildDrawerOpen(false)
+                if (next) {
+                  setBuildDrawerOpen(false)
+                  onToggleWardrobe?.(false)
+                }
                 return next
               })
             }}
@@ -1549,6 +1544,7 @@ export function CompanionOverlay({
                 const next = !v
                 if (next) {
                   setUrlDrawerOpen(false)
+                  onToggleWardrobe?.(false)
                   onToggleBuildMode(true)
                 } else {
                   onToggleBuildMode(false)
@@ -1575,6 +1571,7 @@ export function CompanionOverlay({
                   setBuildDrawerOpen(false)
                   setUrlDrawerOpen(false)
                   onToggleBuildMode(false)
+                  onToggleWardrobe?.(false)
                 }
                 onToggleBarGames()
               }}
@@ -1586,6 +1583,33 @@ export function CompanionOverlay({
             >
               <Dices className="h-3.5 w-3.5 text-[#e5a93c]" />
               <span>Games &amp; Props</span>
+            </button>
+          )}
+
+          {onToggleWardrobe && (
+            <button
+              id="btn-open-avatar-wardrobe"
+              type="button"
+              onClick={() => {
+                if (!wardrobeOpen) {
+                  setBuildDrawerOpen(false)
+                  setUrlDrawerOpen(false)
+                  setChatDrawerOpen(false)
+                  onToggleBuildMode(false)
+                }
+                onToggleWardrobe()
+              }}
+              className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition ${
+                wardrobeOpen
+                  ? 'border-[#c084fc] bg-[#c084fc]/18 text-[#e9d5ff]'
+                  : 'border-[#f4f1ea]/12 bg-[#141922] text-[#f4f1ea] hover:border-[#c084fc]/60'
+              }`}
+            >
+              <User
+                className="h-3.5 w-3.5"
+                style={{ color: wardrobeOpen ? '#d8b4fe' : localProfile.avatarColor }}
+              />
+              <span>Avatar</span>
             </button>
           )}
         </div>

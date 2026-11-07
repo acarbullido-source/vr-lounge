@@ -1,4 +1,5 @@
-import type { AvatarStyleId, PresenterState, SampleMediaPreset, SeatDefinition } from '../types/lounge'
+import type { PresenterState, SampleMediaPreset, SeatDefinition } from '../types/lounge'
+export { AVATAR_COLORS, AVATAR_STYLES } from './avatars'
 
 /**
  * Curved cinema screen placement & dimensions (16:9 aspect ratio)
@@ -72,28 +73,6 @@ export const LOUNGE_SEATS: readonly SeatDefinition[] = [
     position: [3.0, 0.38, 3.2],
     rotationY: 0.28,
   },
-] as const
-
-export const AVATAR_COLORS = [
-  { name: 'Tungsten Amber', hex: '#E5A93C' },
-  { name: 'Cinema Vermilion', hex: '#E05A47' },
-  { name: 'Glacier Teal', hex: '#3FB8AF' },
-  { name: 'Sage Jade', hex: '#52B788' },
-  { name: 'Cobalt Horizon', hex: '#4A8FE7' },
-  { name: 'Warm Copper', hex: '#D97B43' },
-  { name: 'Champagne Ivory', hex: '#DFD5C0' },
-  { name: 'Crimson Velvet', hex: '#C84B61' },
-] as const
-
-export const AVATAR_STYLES: ReadonlyArray<{
-  id: AvatarStyleId
-  label: string
-  tagline: string
-}> = [
-  { id: 'visor-classic', label: 'Quest Proline', tagline: 'Curved anodized visor' },
-  { id: 'visor-sleek', label: 'Aero Blade', tagline: 'Low-profile wraparound' },
-  { id: 'visor-halo', label: 'Crown Halo', tagline: 'Dual-ring studio headband' },
-  { id: 'visor-studio', label: 'Acoustic Pod', tagline: 'Integrated spatial cans' },
 ] as const
 
 export const QUICK_REACTIONS = ['🔥', '😂', '👏', '🤯', '🍿', '❤️'] as const

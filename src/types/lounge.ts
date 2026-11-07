@@ -1,4 +1,55 @@
-export type AvatarStyleId = 'visor-classic' | 'visor-sleek' | 'visor-halo' | 'visor-studio'
+export type AvatarStyleId =
+  | 'visor-classic'
+  | 'visor-sleek'
+  | 'visor-halo'
+  | 'visor-studio'
+  | 'bot-retro'
+  | 'astro-dome'
+  | 'cat-ears'
+  | 'knight-helm'
+
+export type AvatarFaceId =
+  | 'visor-led'
+  | 'happy-pixel'
+  | 'cool-shades'
+  | 'starry'
+  | 'cyber-scan'
+  | 'wink'
+  | 'minimal'
+
+export type AvatarHatId =
+  | 'none'
+  | 'beanie'
+  | 'baseball-cap'
+  | 'crown'
+  | 'cowboy'
+  | 'wizard'
+  | 'top-hat'
+  | 'party-cone'
+
+export type AvatarOutfitId =
+  | 'hoodie'
+  | 'varsity'
+  | 'cyber-vest'
+  | 'tuxedo'
+  | 'astronaut'
+  | 'cloak'
+
+export type AvatarAccessoryId =
+  | 'none'
+  | 'shoulder-drone'
+  | 'orbit-rings'
+  | 'vip-halo'
+  | 'bowtie'
+
+export interface AvatarCustomization {
+  bodyColor: string
+  faceStyle: AvatarFaceId
+  hat: AvatarHatId
+  outfit: AvatarOutfitId
+  accessory: AvatarAccessoryId
+  flairEmoji: string
+}
 
 export type ScreenMode = 'idle' | 'tab-stream' | 'url-sync'
 
@@ -40,6 +91,7 @@ export interface ParticipantProfile {
   displayName: string
   avatarColor: string
   avatarStyle: AvatarStyleId
+  avatarCustomization?: AvatarCustomization
   seatIndex: number
   seatId?: string
   isHost: boolean
