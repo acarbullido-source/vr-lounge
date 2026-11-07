@@ -241,6 +241,35 @@ export interface RoomLightingConfig {
   autoDimOnPlay: boolean
 }
 
+export type LoungeWingId =
+  | 'main-lounge'
+  | 'hallway'
+  | 'boardroom'
+  | 'library'
+  | 'command-center'
+  | 'outdoor-deck'
+
+export type OutdoorSkyPresetId =
+  | 'golden-sunset'
+  | 'starlit-aurora'
+  | 'alpine-morning'
+
+export type CommandNewsCategoryId = 'top' | 'tech' | 'space' | 'markets'
+
+export interface ExpansionWingSyncedState {
+  boardroomScreenMode: 'agenda' | 'mirror-lounge'
+  boardroomAgendaIndex: number
+  libraryFireLit: boolean
+  outdoorSkyPreset: OutdoorSkyPresetId
+  commandScreenMode: 'mirror-lounge' | 'ops-stream'
+  commandStreamPresetId: string
+  commandCustomStreamUrl: string
+  commandCustomStreamTitle: string
+  commandWeatherCityId: string
+  commandCustomCityQuery: string
+  commandNewsCategory: CommandNewsCategoryId
+}
+
 export interface RoomCustomizationState {
   revision: number
   updatedAt: number
@@ -249,13 +278,14 @@ export interface RoomCustomizationState {
   lighting: RoomLightingConfig
   screen: RoomScreenTransform
   furniture: PlacedFurnitureItem[]
+  expansionWing?: ExpansionWingSyncedState
 }
 
 export interface ComputedSeat {
   id: string
   index: number
   furnitureId: string
-  furnitureType: FurnitureCatalogId | 'fallback' | 'game-station'
+  furnitureType: FurnitureCatalogId | 'fallback' | 'game-station' | 'wing-seat'
   label: string
   position: [number, number, number]
   localCushionOffset: [number, number, number]
@@ -263,4 +293,6 @@ export interface ComputedSeat {
   rotationY: number
   lookAtTarget?: [number, number, number]
   stationKind?: 'seat' | 'game-table' | 'darts-oche' | 'putting-tee' | 'chalkboard'
+  roomWing?: LoungeWingId
 }
+

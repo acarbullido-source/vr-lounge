@@ -548,7 +548,8 @@ export function SpatialControlDock({
               localSeatId &&
               localSeatId !== FREE_ROAM_SEAT_ID &&
               !localSeatId.startsWith('station:') &&
-              !localSeatId.startsWith('game-table:')
+              !localSeatId.startsWith('game-table:') &&
+              !localSeatId.startsWith('wing:')
                 ? 'primary'
                 : 'default'
             }
@@ -585,6 +586,48 @@ export function SpatialControlDock({
             height={0.068}
             variant={localSeatId === 'station:chalkboard' ? 'primary' : 'default'}
             onClick={() => onSelectSeat('station:chalkboard')}
+          />
+
+          {/* Clubhouse Expansion Wing Rooms Quick-Hop Strip */}
+          <RoundedBox
+            args={[1.24, 0.084, 0.018]}
+            position={[0, -0.096, 0]}
+            radius={0.022}
+            smoothness={2}
+          >
+            <meshBasicMaterial color="#080C13" />
+          </RoundedBox>
+          <DockButton
+            label="💼 Boardroom"
+            position={[-0.45, -0.096, 0.008]}
+            width={0.275}
+            height={0.064}
+            variant={localSeatId?.startsWith('wing:boardroom') ? 'primary' : 'default'}
+            onClick={() => onSelectSeat('wing:boardroom-head')}
+          />
+          <DockButton
+            label="🔥 Library"
+            position={[-0.15, -0.096, 0.008]}
+            width={0.275}
+            height={0.064}
+            variant={localSeatId?.startsWith('wing:library') ? 'primary' : 'default'}
+            onClick={() => onSelectSeat('wing:library-chair-1')}
+          />
+          <DockButton
+            label="🛰 Command"
+            position={[0.15, -0.096, 0.008]}
+            width={0.275}
+            height={0.064}
+            variant={localSeatId?.startsWith('wing:command') ? 'primary' : 'default'}
+            onClick={() => onSelectSeat('wing:command-seat-1')}
+          />
+          <DockButton
+            label="🏔 Lake Deck"
+            position={[0.45, -0.096, 0.008]}
+            width={0.275}
+            height={0.064}
+            variant={localSeatId?.startsWith('wing:deck') ? 'primary' : 'default'}
+            onClick={() => onSelectSeat('wing:deck-chair-1')}
           />
         </group>
       )}

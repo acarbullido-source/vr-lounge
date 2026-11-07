@@ -485,18 +485,93 @@ export function CinemaRoom({
         <meshStandardMaterial color={themeSpec.backWallColor} roughness={0.93} />
       </mesh>
 
-      <mesh
-        position={[0, sizeSpec.height / 2, sizeSpec.backZ]}
-        rotation={[0, Math.PI, 0]}
-        onClick={(e) => {
-          if (!buildMode || selectedEntry?.placementSurface !== 'wall') return
-          e.stopPropagation()
-          applyWallPlacement(e.point, Math.PI)
-        }}
-      >
-        <planeGeometry args={[sizeSpec.width, sizeSpec.height]} />
-        <meshStandardMaterial color={themeSpec.wallColor} roughness={0.93} />
-      </mesh>
+      {/* Back Wall split around the 3.10m × 3.60m Central Clubhouse Hallway Archway */}
+      <group name="main-lounge-back-wall-with-archway">
+        {/* Left Back Wall Segment (x in [-halfW, -1.55]) */}
+        <mesh
+          position={[-(halfW + 1.55) / 2, sizeSpec.height / 2, sizeSpec.backZ]}
+          rotation={[0, Math.PI, 0]}
+          onClick={(e) => {
+            if (!buildMode || selectedEntry?.placementSurface !== 'wall') return
+            e.stopPropagation()
+            applyWallPlacement(e.point, Math.PI)
+          }}
+        >
+          <planeGeometry args={[halfW - 1.55, sizeSpec.height]} />
+          <meshStandardMaterial color={themeSpec.wallColor} roughness={0.93} />
+        </mesh>
+
+        {/* Right Back Wall Segment (x in [+1.55, +halfW]) */}
+        <mesh
+          position={[(halfW + 1.55) / 2, sizeSpec.height / 2, sizeSpec.backZ]}
+          rotation={[0, Math.PI, 0]}
+          onClick={(e) => {
+            if (!buildMode || selectedEntry?.placementSurface !== 'wall') return
+            e.stopPropagation()
+            applyWallPlacement(e.point, Math.PI)
+          }}
+        >
+          <planeGeometry args={[halfW - 1.55, sizeSpec.height]} />
+          <meshStandardMaterial color={themeSpec.wallColor} roughness={0.93} />
+        </mesh>
+
+        {/* Upper Lintel Above Central Hallway Archway (y in [3.60, sizeSpec.height]) */}
+        {sizeSpec.height > 3.6 && (
+          <mesh
+            position={[
+              0,
+              3.6 + (sizeSpec.height - 3.6) / 2,
+              sizeSpec.backZ,
+            ]}
+            rotation={[0, Math.PI, 0]}
+          >
+            <planeGeometry args={[3.1, sizeSpec.height - 3.6]} />
+            <meshStandardMaterial color={themeSpec.wallColor} roughness={0.93} />
+          </mesh>
+        )}
+
+        {/* Illuminated Architectural Pilasters & Hallway Marquee Sign */}
+        {[-1.58, 1.58].map((px) => (
+          <group key={px} position={[px, 1.8, sizeSpec.backZ - 0.04]}>
+            <mesh>
+              <boxGeometry args={[0.14, 3.6, 0.14]} />
+              <meshStandardMaterial color={themeSpec.slatColor} roughness={0.68} metalness={0.2} />
+            </mesh>
+            <mesh position={[px > 0 ? -0.075 : 0.075, 0, -0.04]}>
+              <boxGeometry args={[0.018, 3.3, 0.02]} />
+              <meshBasicMaterial color={lighting.accentColor} />
+            </mesh>
+          </group>
+        ))}
+
+        <group position={[0, 3.74, sizeSpec.backZ - 0.05]} rotation={[0, Math.PI, 0]}>
+          <RoundedBox args={[3.16, 0.34, 0.05]} radius={0.025} smoothness={2}>
+            <meshBasicMaterial color="#0A0E17" />
+          </RoundedBox>
+          <mesh position={[0, -0.155, 0.028]}>
+            <planeGeometry args={[3.04, 0.018]} />
+            <meshBasicMaterial color={lighting.accentColor} />
+          </mesh>
+          <Text
+            position={[0, 0.045, 0.03]}
+            fontSize={0.082}
+            color="#F8FAFC"
+            anchorX="center"
+            anchorY="middle"
+          >
+            🏛 CLUBHOUSE WING &amp; HALLWAY →
+          </Text>
+          <Text
+            position={[0, -0.068, 0.03]}
+            fontSize={0.045}
+            color="#94A3B8"
+            anchorX="center"
+            anchorY="middle"
+          >
+            Boardroom · Cozy Library · Command Center · Outdoor Lake Deck
+          </Text>
+        </group>
+      </group>
 
       {/* Left Wall — Solid OR Opened into the Pub & Bar Hangout Alcove */}
       {!architecture.leftBarAlcove ? (

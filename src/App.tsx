@@ -23,17 +23,26 @@ import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { AvatarWardrobeDrawer } from './components/ui/AvatarWardrobeDrawer'
 import { BarGamesDrawer, type BarGamesTabId } from './components/ui/BarGamesDrawer'
+import {
+  ClubhouseRoomsAndOpsDrawer,
+  type ClubhouseDrawerTabId,
+} from './components/ui/ClubhouseRoomsAndOpsDrawer'
 import { CompanionOverlay } from './components/ui/CompanionOverlay'
 import { PasscodeGate } from './components/ui/PasscodeGate'
 import { AvatarManager } from './components/xr/AvatarManager'
 import { BarGamesCorner3D } from './components/xr/BarGamesCorner3D'
 import { BuildModePanel3D } from './components/xr/BuildModePanel3D'
 import { CinemaRoom } from './components/xr/CinemaRoom'
+import { ExpansionWing3D } from './components/xr/ExpansionWing3D'
 import { SpatialChatPanel } from './components/xr/SpatialChatPanel'
 import { SpatialControlDock } from './components/xr/SpatialControlDock'
 import type { VRKeyboardMode } from './components/xr/VRKeyboard3D'
 import { WardrobeMirror3D } from './components/xr/WardrobeMirror3D'
 import { YouTubeBrowser3D } from './components/xr/YouTubeBrowser3D'
+import {
+  resolveExpansionWingState,
+  type ExpansionRoomDestination,
+} from './constants/expansionRooms'
 import {
   FREE_ROAM_SEAT_ID,
   LIGHTING_PRESETS,
@@ -59,6 +68,7 @@ import type { YouTubeVideoItem } from './services/youtube'
 import { exitVRSession, xrStore } from './store/xrStore'
 import type {
   ComputedSeat,
+  ExpansionWingSyncedState,
   FurnitureCatalogId,
   LightingPresetId,
   PlacedFurnitureItem,
@@ -133,6 +143,7 @@ function isEditableDomElement(el: Element | null): boolean {
 export interface TeleportFloorRequest {
   id: number
   position: [number, number, number]
+  yaw?: number
 }
 
 interface SeatRigProps {
@@ -426,7 +437,7 @@ function SeatCameraAndOriginRig({
     tmpEuler,
   ])
 
-  // Handle explicit floor double-click / teleport requests on both VR and Desktop
+  // Handle explicit floor double-click / room fast-travel requests on both VR and Desktop
   useEffect(() => {
     if (!teleportRequest || teleportRequest.id === handledTeleportIdRef.current) return
     handledTeleportIdRef.current = teleportRequest.id
@@ -442,6 +453,32 @@ function SeatCameraAndOriginRig({
       vrOriginTargetPosRef.current.z += target[2] - scratchHeadWorld.z
       vrOriginTargetPosRef.current.y = target[1]
       localRoamPoseRef.current.position = target
+      if (typeof teleportRequest.yaw === 'number') {
+        vrOriginYawRef.current = teleportRequest.yaw
+        vrDockYawRef.current = teleportRequest.yaw
+        localRoamPoseRef.current.yaw = teleportRequest.yaw
+      }
+    } else if (typeof teleportRequest.yaw === 'number') {
+      // Room fast-travel: snap cleanly into the target room doorway facing the room centerpiece
+      desktopGlideTargetRef.current = null
+      desktopFloorYRef.current = target[1]
+      localRoamPoseRef.current = {
+        position: target,
+        yaw: teleportRequest.yaw,
+      }
+      const fx = -Math.sin(teleportRequest.yaw)
+      const fz = -Math.cos(teleportRequest.yaw)
+      camera.position.set(target[0], target[1] + 1.56, target[2])
+      if (orbitRef.current) {
+        orbitRef.current.target.set(
+          target[0] + fx * 0.85,
+          target[1] + 1.54,
+          target[2] + fz * 0.85,
+        )
+        orbitRef.current.update()
+      } else {
+        camera.lookAt(target[0] + fx * 3, target[1] + 1.5, target[2] + fz * 3)
+      }
     } else {
       desktopGlideTargetRef.current = target
     }
@@ -523,7 +560,7 @@ function SeatCameraAndOriginRig({
           scratchRayDir.set(0, 0, -1).applyQuaternion(scratchRayQuat).normalize()
           if (scratchRayDir.y < -0.06) {
             const tZero = -scratchRayPos.y / scratchRayDir.y
-            if (tZero > 0.25 && tZero < 13.5) {
+            if (tZero > 0.25 && tZero < 17.0) {
               const hitX = scratchRayPos.x + scratchRayDir.x * tZero
               const hitZ = scratchRayPos.z + scratchRayDir.z * tZero
               const clamped = resolveWalkablePosition(hitX, hitZ, architecture)
@@ -895,6 +932,8 @@ export function App() {
   const [barGamesOpen, setBarGamesOpen] = useState(false)
   const [barGamesTab, setBarGamesTab] = useState<BarGamesTabId>('play')
   const [wardrobeOpen, setWardrobeOpen] = useState(false)
+  const [clubhouseOpen, setClubhouseOpen] = useState(false)
+  const [clubhouseTab, setClubhouseTab] = useState<ClubhouseDrawerTabId>('rooms')
   const [selectedFurnitureId, setSelectedFurnitureId] = useState<string | null>(null)
   const [editingPosterItemId, setEditingPosterItemId] = useState<string | null>(null)
   const [keyboardMode, setKeyboardMode] = useState<VRKeyboardMode | null>(null)
@@ -1269,6 +1308,7 @@ export function App() {
       if (next) {
         setBuildMode(false)
         setBarGamesOpen(false)
+        setClubhouseOpen(false)
         setYoutubeBrowserOpen(false)
       }
       return next
@@ -1282,6 +1322,7 @@ export function App() {
         setYoutubeBrowserOpen(false)
         setBarGamesOpen(false)
         setWardrobeOpen(false)
+        setClubhouseOpen(false)
       } else {
         setSelectedFurnitureId(null)
         setEditingPosterItemId(null)
@@ -1290,6 +1331,48 @@ export function App() {
       return next
     })
   }, [])
+
+  const handleToggleClubhouse = useCallback(
+    (enabled?: boolean, tab?: ClubhouseDrawerTabId) => {
+      if (tab) setClubhouseTab(tab)
+      setClubhouseOpen((prev) => {
+        const next = typeof enabled === 'boolean' ? enabled : !prev
+        if (next) {
+          setBuildMode(false)
+          setBarGamesOpen(false)
+          setWardrobeOpen(false)
+          setYoutubeBrowserOpen(false)
+        }
+        return next
+      })
+    },
+    [],
+  )
+
+  const handleJumpToDestination = useCallback(
+    (dest: ExpansionRoomDestination) => {
+      roomSelectSeat(FREE_ROAM_SEAT_ID)
+      setTeleportRequest((prev) => ({
+        id: (prev?.id ?? 0) + 1,
+        position: dest.spawnPosition,
+        yaw: dest.spawnYaw,
+      }))
+    },
+    [roomSelectSeat],
+  )
+
+  const handleUpdateWingState = useCallback(
+    (patch: Partial<ExpansionWingSyncedState>) => {
+      roomUpdateCustomization((prev) => ({
+        ...prev,
+        expansionWing: {
+          ...resolveExpansionWingState(prev.expansionWing),
+          ...patch,
+        },
+      }))
+    },
+    [roomUpdateCustomization],
+  )
 
   const handleSpawnFurniture = useCallback(
     (type: FurnitureCatalogId) => {
@@ -1521,10 +1604,10 @@ export function App() {
           antialias: true,
           powerPreference: 'high-performance',
         }}
-        camera={{ fov: 62, near: 0.08, far: 65, position: [0, 1.35, 1.2] }}
+        camera={{ fov: 62, near: 0.08, far: 185, position: [0, 1.35, 1.2] }}
       >
         <color attach="background" args={[skyBgColor]} />
-        <fog attach="fog" args={[skyBgColor, 18, 44]} />
+        <fog attach="fog" args={[skyBgColor, 34, 125]} />
 
         <CanvasRootBoundary>
           <XR store={xrStore}>
@@ -1594,7 +1677,10 @@ export function App() {
                   </SceneSectionBoundary>
 
                   {(inVRSession ||
+                    keyboardMode !== null ||
                     (!isFreeRoaming &&
+                      (!activeSeat?.roomWing ||
+                        activeSeat.roomWing === 'main-lounge') &&
                       (!activeSeat?.stationKind ||
                         activeSeat.stationKind === 'seat'))) && (
                     <SceneSectionBoundary>
@@ -1683,6 +1769,28 @@ export function App() {
             />
 
             <SceneSectionBoundary>
+              <ExpansionWing3D
+                roomCustomization={roomCustomization}
+                presenterState={room.presenterState}
+                mainVideoTexture={media.videoTexture}
+                hasMainVideoFrames={media.hasVideoFrames}
+                computedSeats={computedSeats}
+                localSeatId={room.localProfile.seatId}
+                participants={room.participants}
+                cinemaVolume={cinemaVolume}
+                onSelectSeat={room.selectSeat}
+                onTeleportToFloor={room.joined ? handleTeleportToFloor : undefined}
+                onJumpToDestination={handleJumpToDestination}
+                onUpdateWingState={handleUpdateWingState}
+                onOpenCommandOpsDrawer={
+                  !inVRSession
+                    ? () => handleToggleClubhouse(true, 'command-ops')
+                    : undefined
+                }
+              />
+            </SceneSectionBoundary>
+
+            <SceneSectionBoundary>
               <BarGamesCorner3D
                 localUserId={room.localUserId}
                 localDisplayName={room.localProfile.displayName}
@@ -1702,6 +1810,7 @@ export function App() {
                     ? () => {
                         setBuildMode(false)
                         setWardrobeOpen(false)
+                        setClubhouseOpen(false)
                         setBarGamesTab('props')
                         setBarGamesOpen(true)
                       }
@@ -1834,6 +1943,7 @@ export function App() {
             setBuildMode(false)
             setBarGamesOpen(false)
             setWardrobeOpen(false)
+            setClubhouseOpen(false)
             setSelectedFurnitureId(null)
             await room.leaveRoom()
           }}
@@ -1873,12 +1983,35 @@ export function App() {
           onToggleBarGames={() => {
             setBarGamesOpen((v) => {
               const next = !v
-              if (next) setWardrobeOpen(false)
+              if (next) {
+                setWardrobeOpen(false)
+                setClubhouseOpen(false)
+              }
               return next
             })
           }}
           wardrobeOpen={wardrobeOpen}
           onToggleWardrobe={handleToggleWardrobe}
+          clubhouseOpen={clubhouseOpen}
+          onToggleClubhouse={(open) => handleToggleClubhouse(open)}
+        />
+      )}
+
+      {/* 2D Clubhouse Wing Directory & Command Ops Drawer */}
+      {passcodeUnlocked && room.joined && !inVRSession && (
+        <ClubhouseRoomsAndOpsDrawer
+          open={clubhouseOpen}
+          activeTab={clubhouseTab}
+          onChangeTab={setClubhouseTab}
+          onClose={() => handleToggleClubhouse(false)}
+          roomCustomization={roomCustomization}
+          computedSeats={computedSeats}
+          participants={room.participants}
+          localUserId={room.localUserId}
+          localRoamPosition={localRoamPoseRef.current.position}
+          onSelectSeat={room.selectSeat}
+          onJumpToDestination={handleJumpToDestination}
+          onUpdateWingState={handleUpdateWingState}
         />
       )}
 

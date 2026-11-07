@@ -11,6 +11,11 @@ import type {
   RoomSizePreset,
 } from '../types/lounge'
 import { SCREEN_CONFIG } from './cinema'
+import {
+  DEFAULT_EXPANSION_WING_STATE,
+  computeExpansionWingLayout,
+  resolveExpansionWingWalkablePosition,
+} from './expansionRooms'
 
 export interface RoomSizeSpec {
   id: RoomSizePreset
@@ -523,6 +528,7 @@ export function createDefaultRoomCustomization(): RoomCustomizationState {
       curved: true,
     },
     furniture: createDefaultFurnitureLayout(),
+    expansionWing: { ...DEFAULT_EXPANSION_WING_STATE },
   }
 }
 
@@ -540,7 +546,8 @@ export interface BarGamesSpatialLayout {
 /**
  * Computes collision-free world coordinates for the Dartboard, Digital Scoreboard,
  * Mini-Golf Putting Strip, Interactive Game & Dice Table, and Prediction Chalkboard
- * across all room sizes (`cozy`, `classic`, `grand`) and alcove configurations.
+ * across all room sizes (`cozy`, `classic`, `grand`) and alcove configurations,
+ * leaving a generous central opening (`x ∈ [-1.55, +1.55]`) for the Grand Hallway Archway.
  */
 export function computeBarGamesLayout(
   customization: RoomCustomizationState,
@@ -551,7 +558,7 @@ export function computeBarGamesLayout(
   const centerZ = (sizeSpec.frontZ + sizeSpec.backZ) / 2
   const rearDeckY = customization.architecture.rearBalcony ? 0.38 : 0
 
-  const dartboardX = Number(Math.min(halfW - 1.9, 3.45).toFixed(2))
+  const dartboardX = Number(Math.min(halfW - 1.65, 3.85).toFixed(2))
   const dartboardZ = Number((sizeSpec.backZ - 0.045).toFixed(3))
   const dartboardCenter: [number, number, number] = [
     dartboardX,
@@ -575,8 +582,8 @@ export function computeBarGamesLayout(
   const ocheFloorY = ocheOnBalcony ? 0.38 : 0
   const ocheFloorPos: [number, number, number] = [dartboardX, ocheFloorY, ocheZ]
 
-  // Live Prediction & Wager Chalkboard on Back-Left Wall
-  const chalkboardX = -Number(Math.min(halfW - 2.1, 3.35).toFixed(2))
+  // Live Prediction & Wager Chalkboard on Back-Left Wall (clear of central archway)
+  const chalkboardX = -Number(Math.min(halfW - 2.1, 3.55).toFixed(2))
   const chalkboardCenter: [number, number, number] = [
     chalkboardX,
     Number((rearDeckY + 1.78).toFixed(3)),
@@ -622,8 +629,9 @@ export const FREE_ROAM_SEAT_ID = 'roam:free'
 
 /**
  * Clamps any horizontal `(x, z)` walk/teleport target to the walkable lounge floor,
- * smoothly allowing entry into opened Left/Right Hangout Alcoves (while sliding cleanly
- * along alcove side walls) and stepping onto the `0.38m` Rear Balcony riser.
+ * smoothly allowing entry into opened Left/Right Hangout Alcoves, stepping onto the
+ * `0.38m` Rear Balcony riser, AND walking through the central Rear Archway down the
+ * Grand Clubhouse Hallway into the Boardroom, Library, Command Center, and Outdoor Lake Deck.
  */
 export function resolveWalkablePosition(
   x: number,
@@ -631,6 +639,12 @@ export function resolveWalkablePosition(
   architecture: RoomArchitectureConfig,
 ): [number, number, number] {
   const sizeSpec = ROOM_SIZE_SPECS[architecture.sizePreset] ?? ROOM_SIZE_SPECS.classic
+
+  // Seamless doorway transition into the Grand Hallway & Expansion Wing rooms (+Z beyond backZ)
+  if ((Math.abs(x) <= 1.24 && z >= sizeSpec.backZ - 0.6) || z > sizeSpec.backZ - 0.12) {
+    return resolveExpansionWingWalkablePosition(x, z, sizeSpec.backZ)
+  }
+
   const halfW = sizeSpec.width / 2
   const centerZ = (sizeSpec.frontZ + sizeSpec.backZ) / 2
   const alcoveHalfZ = 2.82
@@ -671,8 +685,9 @@ export function resolveWalkablePosition(
 
 /**
  * Computes world-space interactive seats attached to all seating furniture
- * currently placed in the room, PLUS perimeter snap-to-seat spots around the
- * Interactive Game & Dice Table, Dartboard Oche, and Putting Green Tee.
+ * currently placed in the room, perimeter snap-to-seat spots around the
+ * Interactive Game & Dice Table / Bar Games stations, AND all 23 seats across
+ * the Executive Boardroom, Cozy Library, Command Center, and Outdoor Lake Deck.
  */
 export function computeRoomSeats(customization: RoomCustomizationState): ComputedSeat[] {
   const seats: ComputedSeat[] = []
@@ -726,6 +741,7 @@ export function computeRoomSeats(customization: RoomCustomizationState): Compute
         seatHeightOffset: slot.seatHeightOffset * itemScale,
         rotationY: item.rotationY + slot.localRotY,
         stationKind: 'seat',
+        roomWing: 'main-lounge',
       })
     }
   }
@@ -750,6 +766,7 @@ export function computeRoomSeats(customization: RoomCustomizationState): Compute
         seatHeightOffset: 0,
         rotationY: 0,
         stationKind: 'seat',
+        roomWing: 'main-lounge',
       })
     })
   }
@@ -787,6 +804,7 @@ export function computeRoomSeats(customization: RoomCustomizationState): Compute
       rotationY: spot.rotY,
       lookAtTarget: tableLookTarget,
       stationKind: 'game-table',
+      roomWing: 'main-lounge',
     })
   })
 
@@ -803,6 +821,7 @@ export function computeRoomSeats(customization: RoomCustomizationState): Compute
     rotationY: Math.PI,
     lookAtTarget: barLayout.dartboardCenter,
     stationKind: 'darts-oche',
+    roomWing: 'main-lounge',
   })
 
   // Putting Green Tee Snap Spot facing -Z toward the Mini-Golf Cup
@@ -819,6 +838,7 @@ export function computeRoomSeats(customization: RoomCustomizationState): Compute
     rotationY: 0.26,
     lookAtTarget: [px, py + 0.12, pz - 1.25],
     stationKind: 'putting-tee',
+    roomWing: 'main-lounge',
   })
 
   // Live Prediction & $1 Wager Chalkboard Snap Spot facing +Z toward Back-Left Wall
@@ -835,7 +855,18 @@ export function computeRoomSeats(customization: RoomCustomizationState): Compute
     rotationY: Math.PI,
     lookAtTarget: barLayout.chalkboardCenter,
     stationKind: 'chalkboard',
+    roomWing: 'main-lounge',
   })
+
+  // Append Clubhouse Expansion Wing Seats (Boardroom, Library, Command Center, Outdoor Deck)
+  const wingLayout = computeExpansionWingLayout(sizeSpec.backZ)
+  for (const wingSeat of wingLayout.wingSeats) {
+    seats.push({
+      ...wingSeat,
+      index: seats.length,
+    })
+  }
 
   return seats
 }
+
