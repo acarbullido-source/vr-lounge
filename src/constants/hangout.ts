@@ -5,6 +5,7 @@ import type {
   FurnitureCategory,
   LightingPresetId,
   PlacedFurnitureItem,
+  RoomArchitectureConfig,
   RoomCustomizationState,
   RoomMaterialThemeId,
   RoomSizePreset,
@@ -615,6 +616,57 @@ export function computeBarGamesLayout(
     gameTableOrigin,
     rearDeckY,
   }
+}
+
+export const FREE_ROAM_SEAT_ID = 'roam:free'
+
+/**
+ * Clamps any horizontal `(x, z)` walk/teleport target to the walkable lounge floor,
+ * smoothly allowing entry into opened Left/Right Hangout Alcoves (while sliding cleanly
+ * along alcove side walls) and stepping onto the `0.38m` Rear Balcony riser.
+ */
+export function resolveWalkablePosition(
+  x: number,
+  z: number,
+  architecture: RoomArchitectureConfig,
+): [number, number, number] {
+  const sizeSpec = ROOM_SIZE_SPECS[architecture.sizePreset] ?? ROOM_SIZE_SPECS.classic
+  const halfW = sizeSpec.width / 2
+  const centerZ = (sizeSpec.frontZ + sizeSpec.backZ) / 2
+  const alcoveHalfZ = 2.82
+
+  const minMainZ = sizeSpec.frontZ + 2.35
+  const maxMainZ = sizeSpec.backZ - 0.55
+
+  // If currently deep inside an opened side alcove, clamp Z to that alcove's walls first
+  // so walking against an alcove wall slides smoothly instead of snapping X into the main hall
+  let clampedZ: number
+  if (architecture.leftBarAlcove && x < -halfW - 0.08) {
+    clampedZ = Math.max(centerZ - alcoveHalfZ, Math.min(centerZ + alcoveHalfZ, z))
+  } else if (architecture.rightArcadeAlcove && x > halfW + 0.08) {
+    clampedZ = Math.max(centerZ - alcoveHalfZ, Math.min(centerZ + alcoveHalfZ, z))
+  } else {
+    clampedZ = Math.max(minMainZ, Math.min(maxMainZ, z))
+  }
+
+  const inArchwayZ = Math.abs(clampedZ - centerZ) <= alcoveHalfZ
+  const minX =
+    architecture.leftBarAlcove && inArchwayZ ? -halfW - 3.25 : -halfW + 0.55
+  const maxX =
+    architecture.rightArcadeAlcove && inArchwayZ ? halfW + 3.25 : halfW - 0.55
+  const clampedX = Math.max(minX, Math.min(maxX, x))
+
+  const balconyHalfW = Math.min(10.6, sizeSpec.width - 2.4) / 2
+  const onBalcony =
+    architecture.rearBalcony &&
+    Math.abs(clampedX) <= balconyHalfW &&
+    Math.abs(clampedZ - sizeSpec.balconyZ) <= 1.65
+
+  return [
+    Number(clampedX.toFixed(3)),
+    onBalcony ? 0.38 : 0,
+    Number(clampedZ.toFixed(3)),
+  ]
 }
 
 /**

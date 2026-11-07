@@ -3,6 +3,7 @@ import {
   Copy,
   Crown,
   Dices,
+  Footprints,
   Glasses,
   Globe,
   Hammer,
@@ -37,6 +38,7 @@ import {
   SAMPLE_MEDIA_PRESETS,
   generateRoomCode,
 } from '../../constants/cinema'
+import { FREE_ROAM_SEAT_ID } from '../../constants/hangout'
 import type { JoinRoomOptions } from '../../hooks/useRoomSession'
 import {
   fetchYouTubeCategory,
@@ -806,21 +808,82 @@ export function CompanionOverlay({
           )}
         </div>
 
-        {/* Right Utility Actions: Seat Selector, Enter VR, Leave */}
+        {/* Right Utility Actions: Walk Free Toggle, Seat Selector, Enter VR, Leave */}
         <div className="lounge-dock-bar flex items-center gap-2 rounded-xl px-2.5 py-1.5">
+          <button
+            id="btn-hud-free-roam"
+            type="button"
+            onClick={() => {
+              if (localProfile.seatId === FREE_ROAM_SEAT_ID) {
+                const takenIds = new Set(
+                  participants
+                    .filter(
+                      (p) =>
+                        p.userId !== localProfile.userId &&
+                        p.seatId &&
+                        p.seatId !== FREE_ROAM_SEAT_ID,
+                    )
+                    .map((p) => p.seatId as string),
+                )
+                const openSofa =
+                  computedSeats.find(
+                    (s) =>
+                      !takenIds.has(s.id) &&
+                      (!s.stationKind || s.stationKind === 'seat'),
+                  ) ?? computedSeats[0]
+                if (openSofa) {
+                  onSelectSeat(openSofa.id)
+                }
+              } else {
+                onSelectSeat(FREE_ROAM_SEAT_ID)
+              }
+            }}
+            title={
+              localProfile.seatId === FREE_ROAM_SEAT_ID
+                ? 'Walking freely (WASD / Double-click floor) — click to sit on nearest open chair'
+                : 'Stand up and walk freely around the lounge (WASD / Arrows / Double-click floor)'
+            }
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
+              localProfile.seatId === FREE_ROAM_SEAT_ID
+                ? 'border-[#38bdf8]/60 bg-[#38bdf8]/18 text-[#7dd3fc]'
+                : 'border-[#f4f1ea]/12 bg-[#141922] text-[#c7c2b8] hover:border-[#38bdf8]/45 hover:text-[#f4f1ea]'
+            }`}
+          >
+            <Footprints className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">
+              {localProfile.seatId === FREE_ROAM_SEAT_ID ? 'Walking' : 'Walk Free'}
+            </span>
+          </button>
+
           <select
             id="select-hud-seat"
-            aria-label="Select lounge seat"
-            value={localProfile.seatId ?? computedSeats[localProfile.seatIndex]?.id ?? ''}
+            aria-label="Select lounge seat or walk mode"
+            value={
+              localProfile.seatId === FREE_ROAM_SEAT_ID
+                ? FREE_ROAM_SEAT_ID
+                : (localProfile.seatId ??
+                  (localProfile.seatIndex >= 0
+                    ? computedSeats[localProfile.seatIndex]?.id
+                    : undefined) ??
+                  '')
+            }
             onChange={(e) => onSelectSeat(e.target.value)}
             className="lounge-input max-w-[185px] truncate rounded-lg px-2.5 py-1 text-xs"
           >
+            <option value={FREE_ROAM_SEAT_ID}>🚶 Free Roam (Walk Around)</option>
             {computedSeats.map((seat) => {
-              const takenByOther = participants.some((p) => {
-                if (p.userId === localProfile.userId) return false
-                if (p.seatId) return p.seatId === seat.id
-                return p.seatIndex === seat.index
-              })
+              const isExclusiveChair =
+                !seat.stationKind ||
+                seat.stationKind === 'seat' ||
+                seat.stationKind === 'game-table'
+              const takenByOther =
+                isExclusiveChair &&
+                participants.some((p) => {
+                  if (p.userId === localProfile.userId) return false
+                  if (p.seatId === FREE_ROAM_SEAT_ID) return false
+                  if (p.seatId) return p.seatId === seat.id
+                  return p.seatIndex >= 0 && p.seatIndex === seat.index
+                })
               return (
                 <option key={seat.id} value={seat.id} disabled={takenByOther}>
                   {seat.label} {takenByOther ? '(Taken)' : ''}
@@ -1390,6 +1453,32 @@ export function CompanionOverlay({
           onToggleBuildMode(false)
         }}
       />
+
+      {/* Subtle Free-Roam Controls Hint Pill (Desktop only, non-blocking) */}
+      {localProfile.seatId === FREE_ROAM_SEAT_ID &&
+        !inVRSession &&
+        !buildDrawerOpen &&
+        !urlDrawerOpen &&
+        !barGamesOpen && (
+          <div className="pointer-events-none mx-auto mb-2 flex items-center gap-2 rounded-full border border-[#38bdf8]/35 bg-[#080a0d]/85 px-3.5 py-1 text-[11px] text-[#cbd5e1] shadow-lg backdrop-blur-md">
+            <Footprints className="h-3.5 w-3.5 text-[#38bdf8]" />
+            <span>
+              <strong className="font-semibold text-[#7dd3fc]">Free Roam</strong> ·{' '}
+              <kbd className="rounded bg-[#1e293b] px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
+                WASD
+              </kbd>{' '}
+              /{' '}
+              <kbd className="rounded bg-[#1e293b] px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
+                Arrows
+              </kbd>{' '}
+              to walk ·{' '}
+              <kbd className="rounded bg-[#1e293b] px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
+                Shift
+              </kbd>{' '}
+              faster · Double-click floor to glide · Click any chair to sit
+            </span>
+          </div>
+        )}
 
       {/* Bottom Companion Presenter & Watch-Party Dock */}
       <footer className="pointer-events-auto lounge-dock-bar mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-2.5 rounded-2xl px-3.5 py-2.5">

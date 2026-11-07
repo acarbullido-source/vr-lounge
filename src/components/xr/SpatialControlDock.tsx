@@ -1,6 +1,7 @@
 import { RoundedBox, Text } from '@react-three/drei'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { QUICK_REACTIONS } from '../../constants/cinema'
+import { FREE_ROAM_SEAT_ID } from '../../constants/hangout'
 import type { PresenterState } from '../../types/lounge'
 import { VRKeyboard3D, type VRKeyboardMode } from './VRKeyboard3D'
 
@@ -139,6 +140,8 @@ export interface SpatialControlDockProps {
   localSeatId?: string
   onSelectSeat?: (seatId: string) => void
   atGameStation?: boolean
+  isFreeRoaming?: boolean
+  dockSummonToggleVersion?: number
 }
 
 export function SpatialControlDock({
@@ -178,8 +181,31 @@ export function SpatialControlDock({
   localSeatId,
   onSelectSeat,
   atGameStation = false,
+  isFreeRoaming = false,
+  dockSummonToggleVersion = 0,
 }: SpatialControlDockProps) {
-  const [minimized, setMinimized] = useState(false)
+  const [minimized, setMinimized] = useState(() => Boolean(isFreeRoaming))
+  const prevRoamingRef = useRef(isFreeRoaming)
+  const prevSummonVersionRef = useRef(dockSummonToggleVersion)
+
+  // Auto-collapse console into a compact waist pill when starting to walk around,
+  // and auto-restore when sitting back down on a lounge chair
+  useEffect(() => {
+    if (isFreeRoaming && !prevRoamingRef.current) {
+      setMinimized(true)
+    } else if (!isFreeRoaming && prevRoamingRef.current && !atGameStation) {
+      setMinimized(false)
+    }
+    prevRoamingRef.current = isFreeRoaming
+  }, [atGameStation, isFreeRoaming])
+
+  // Quest B/Y button toggles the floating controls dock open/closed from anywhere
+  useEffect(() => {
+    if (dockSummonToggleVersion !== prevSummonVersionRef.current) {
+      prevSummonVersionRef.current = dockSummonToggleVersion
+      setMinimized((v) => !v)
+    }
+  }, [dockSummonToggleVersion])
 
   const progressRatio =
     localDuration > 0 ? Math.max(0, Math.min(1, localCurrentTime / localDuration)) : 0
@@ -187,14 +213,21 @@ export function SpatialControlDock({
   if (minimized) {
     return (
       <group
-        position={atGameStation ? [-0.52, 0.62, -0.45] : [0, 0.72, -0.68]}
-        rotation={atGameStation ? [-0.42, 0.28, 0] : [-0.45, 0, 0]}
+        position={
+          isFreeRoaming
+            ? [0, 0.72, -0.56]
+            : atGameStation
+              ? [-0.52, 0.62, -0.45]
+              : [0, 0.72, -0.68]
+        }
+        rotation={atGameStation && !isFreeRoaming ? [-0.42, 0.28, 0] : [-0.45, 0, 0]}
       >
         <DockButton
-          label="Open Lounge Controls ▲"
+          label={isFreeRoaming ? '🚶 Walking · Controls ▲' : 'Open Lounge Controls ▲'}
+          sublabel={isFreeRoaming ? 'Tap or press B/Y' : undefined}
           position={[0, 0, 0]}
-          width={0.44}
-          height={0.09}
+          width={0.48}
+          height={isFreeRoaming ? 0.098 : 0.09}
           variant="active"
           onClick={() => setMinimized(false)}
         />
@@ -205,9 +238,21 @@ export function SpatialControlDock({
   return (
     <group
       name="spatial-control-dock"
-      position={atGameStation ? [-0.64, 0.62, -0.46] : [0, 0.76, -0.72]}
-      rotation={atGameStation ? [-0.42, 0.32, 0] : [-0.46, 0, 0]}
-      scale={atGameStation ? 0.74 : 1}
+      position={
+        isFreeRoaming
+          ? [0, 0.92, -0.66]
+          : atGameStation
+            ? [-0.64, 0.62, -0.46]
+            : [0, 0.76, -0.72]
+      }
+      rotation={
+        isFreeRoaming
+          ? [-0.32, 0, 0]
+          : atGameStation
+            ? [-0.42, 0.32, 0]
+            : [-0.46, 0, 0]
+      }
+      scale={isFreeRoaming ? 0.82 : atGameStation ? 0.74 : 1}
     >
       {/* Floating 3D Virtual Keyboard above dock when active */}
       {keyboardMode && (
@@ -467,19 +512,28 @@ export function SpatialControlDock({
         />
       </group>
 
-      {/* VR Bar Games & Lounge Station Quick-Hop Strip */}
+      {/* VR Bar Games, Free-Roam & Lounge Station Quick-Hop Strip */}
       {onSelectSeat && (
         <group position={[0, -0.305, 0.016]}>
-          <RoundedBox args={[1.18, 0.088, 0.018]} radius={0.022} smoothness={2}>
+          <RoundedBox args={[1.24, 0.088, 0.018]} radius={0.022} smoothness={2}>
             <meshBasicMaterial color="#0A0E15" />
           </RoundedBox>
           <DockButton
+            label="🚶 Walk"
+            position={[-0.495, 0, 0.008]}
+            width={0.185}
+            height={0.068}
+            variant={localSeatId === FREE_ROAM_SEAT_ID ? 'primary' : 'active'}
+            onClick={() => onSelectSeat(FREE_ROAM_SEAT_ID)}
+          />
+          <DockButton
             label="🛋 Sofa"
-            position={[-0.46, 0, 0.008]}
-            width={0.21}
+            position={[-0.297, 0, 0.008]}
+            width={0.185}
             height={0.068}
             variant={
               localSeatId &&
+              localSeatId !== FREE_ROAM_SEAT_ID &&
               !localSeatId.startsWith('station:') &&
               !localSeatId.startsWith('game-table:')
                 ? 'primary'
@@ -489,32 +543,32 @@ export function SpatialControlDock({
           />
           <DockButton
             label="🎯 Darts"
-            position={[-0.23, 0, 0.008]}
-            width={0.21}
+            position={[-0.099, 0, 0.008]}
+            width={0.185}
             height={0.068}
             variant={localSeatId === 'station:darts-oche' ? 'primary' : 'default'}
             onClick={() => onSelectSeat('station:darts-oche')}
           />
           <DockButton
             label="⛳ Putting"
-            position={[0, 0, 0.008]}
-            width={0.21}
+            position={[0.099, 0, 0.008]}
+            width={0.185}
             height={0.068}
             variant={localSeatId === 'station:putting-tee' ? 'primary' : 'default'}
             onClick={() => onSelectSeat('station:putting-tee')}
           />
           <DockButton
             label="🎲 Table"
-            position={[0.23, 0, 0.008]}
-            width={0.21}
+            position={[0.297, 0, 0.008]}
+            width={0.185}
             height={0.068}
             variant={localSeatId?.startsWith('game-table:') ? 'primary' : 'default'}
             onClick={() => onSelectSeat('game-table:seat-0')}
           />
           <DockButton
             label="📋 Props"
-            position={[0.46, 0, 0.008]}
-            width={0.21}
+            position={[0.495, 0, 0.008]}
+            width={0.185}
             height={0.068}
             variant={localSeatId === 'station:chalkboard' ? 'primary' : 'default'}
             onClick={() => onSelectSeat('station:chalkboard')}

@@ -16,6 +16,7 @@ import {
   stepDartFlightCCD,
   type ActiveDartSim,
 } from '../../services/barGamesPhysics'
+import { readXRSpaceWorldPose } from '../../services/xrTracking'
 import type {
   ClubhousePersistentState,
   DartGameMode,
@@ -275,8 +276,10 @@ export function DartboardStation3D({
   onConfigureDarts,
   onResetDarts,
 }: DartboardStation3DProps) {
-  const { gl } = useThree()
+  const { gl, camera } = useThree()
   const xrSession = useXR((s) => s.session)
+  const xrOrigin = useXR((s) => s.origin)
+  const xrOriginRefSpace = useXR((s) => s.originReferenceSpace)
   const boardTexture = useMemo(() => getDartboardTexture(), [])
 
   const [aimBoardLocal, setAimBoardLocal] = useState<[number, number] | null>(null)
@@ -301,6 +304,10 @@ export function DartboardStation3D({
   const tmpDir = useMemo(() => new THREE.Vector3(), [])
   const tmpQuat = useMemo(() => new THREE.Quaternion(), [])
   const forwardAxis = useMemo(() => new THREE.Vector3(0, 0, 1), [])
+  const scratchHeadWorld = useMemo(() => new THREE.Vector3(), [])
+  const scratchOriginVec = useMemo(() => new THREE.Vector3(), [])
+  const scratchRotQuat = useMemo(() => new THREE.Quaternion(), [])
+  const scratchRayForward = useMemo(() => new THREE.Vector3(), [])
 
   const throwOriginWorld: [number, number, number] = useMemo(
     () => [ocheFloorPos[0], ocheFloorPos[1] + 1.5, ocheFloorPos[2]],
@@ -368,7 +375,7 @@ export function DartboardStation3D({
       flyingDartRef.current.visible = false
     }
 
-    // 2. VR Controller Trigger-Hold & Release Throw when standing at Oche or aiming at Dartboard
+    // 2. World-space VR Controller Trigger-Hold & Release Throw at Oche or Free-Roam Throw Zone
     if (!xrSession || buildMode || activeDartShot) {
       if (vrTriggerWasPressedRef.current) {
         vrTriggerWasPressedRef.current = false
@@ -378,7 +385,7 @@ export function DartboardStation3D({
     }
 
     const xrFrame = gl.xr.getFrame?.()
-    const refSpace = gl.xr.getReferenceSpace?.()
+    const refSpace = xrOriginRefSpace ?? gl.xr.getReferenceSpace?.()
     if (!xrFrame || !refSpace) return
 
     let chosenSource: XRInputSource | null = null
@@ -391,55 +398,57 @@ export function DartboardStation3D({
     }
     if (!chosenSource?.targetRaySpace || !chosenSource.gamepad) return
 
-    // Use squeeze (button 1) OR trigger (button 0) ONLY when pointing directly at the dartboard zone
-    const rayPose = xrFrame.getPose(chosenSource.targetRaySpace, refSpace)
-    if (!rayPose) return
+    const hasPose = readXRSpaceWorldPose(
+      xrFrame,
+      chosenSource.targetRaySpace,
+      refSpace,
+      xrOrigin,
+      scratchOriginVec,
+      scratchRotQuat,
+    )
+    if (!hasPose) return
 
-    const originVec = new THREE.Vector3(
-      rayPose.transform.position.x,
-      rayPose.transform.position.y,
-      rayPose.transform.position.z,
-    )
-    const rotQuat = new THREE.Quaternion(
-      rayPose.transform.orientation.x,
-      rayPose.transform.orientation.y,
-      rayPose.transform.orientation.z,
-      rayPose.transform.orientation.w,
-    )
-    const rayForward = new THREE.Vector3(0, 0, -1).applyQuaternion(rotQuat).normalize()
+    scratchRayForward.set(0, 0, -1).applyQuaternion(scratchRotQuat).normalize()
 
     // Check ray intersection with the dartboard plane (Z = dartboardCenter[2] - 0.028)
     const boardPlaneZ = dartboardCenter[2] - 0.028
-    const dz = boardPlaneZ - originVec.z
+    const dz = boardPlaneZ - scratchOriginVec.z
     const aimingAtBoard =
-      rayForward.z > 0.35 &&
+      scratchRayForward.z > 0.35 &&
       dz > 0.4 &&
       (() => {
-        const t = dz / rayForward.z
-        const hitX = originVec.x + rayForward.x * t
-        const hitY = originVec.y + rayForward.y * t
+        const t = dz / scratchRayForward.z
+        const hitX = scratchOriginVec.x + scratchRayForward.x * t
+        const hitY = scratchOriginVec.y + scratchRayForward.y * t
         return (
-          Math.abs(hitX - dartboardCenter[0]) <= 0.42 &&
-          Math.abs(hitY - dartboardCenter[1]) <= 0.42
+          Math.abs(hitX - dartboardCenter[0]) <= 0.44 &&
+          Math.abs(hitY - dartboardCenter[1]) <= 0.44
         )
       })()
 
-    const triggerPressed = Boolean(chosenSource.gamepad.buttons[1]?.pressed) ||
-      (localSeatId === 'station:darts-oche' &&
+    camera.getWorldPosition(scratchHeadWorld)
+    const nearOcheZone =
+      Math.abs(scratchHeadWorld.x - ocheFloorPos[0]) < 1.95 &&
+      scratchHeadWorld.z > ocheFloorPos[2] - 1.65 &&
+      scratchHeadWorld.z < dartboardCenter[2] - 0.75
+
+    const triggerPressed =
+      Boolean(chosenSource.gamepad.buttons[1]?.pressed) ||
+      ((localSeatId === 'station:darts-oche' || nearOcheZone) &&
         aimingAtBoard &&
         Boolean(chosenSource.gamepad.buttons[0]?.pressed))
 
     const nowMs = performance.now()
     if (triggerPressed && aimingAtBoard) {
-      vrHandHistoryRef.current.push({ pos: originVec.clone(), t: nowMs })
+      vrHandHistoryRef.current.push({ pos: scratchOriginVec.clone(), t: nowMs })
       if (vrHandHistoryRef.current.length > 7) {
         vrHandHistoryRef.current.shift()
       }
 
-      const tRay = dz / rayForward.z
+      const tRay = dz / scratchRayForward.z
       const targetWorld: [number, number, number] = [
-        originVec.x + rayForward.x * tRay,
-        originVec.y + rayForward.y * tRay,
+        scratchOriginVec.x + scratchRayForward.x * tRay,
+        scratchOriginVec.y + scratchRayForward.y * tRay,
         boardPlaneZ,
       ]
 
@@ -448,14 +457,14 @@ export function DartboardStation3D({
       if (vrHandHistoryRef.current.length >= 2) {
         const first = vrHandHistoryRef.current[0]
         const dtSec = Math.max(0.016, (nowMs - first.t) / 1000)
-        const handSpeed = originVec.distanceTo(first.pos) / dtSec
+        const handSpeed = scratchOriginVec.distanceTo(first.pos) / dtSec
         speedMult = Math.max(0.88, Math.min(1.42, 0.92 + handSpeed * 0.22))
       }
 
       const originTuple: [number, number, number] = [
-        Number(originVec.x.toFixed(3)),
-        Number(originVec.y.toFixed(3)),
-        Number(originVec.z.toFixed(3)),
+        Number(scratchOriginVec.x.toFixed(3)),
+        Number(scratchOriginVec.y.toFixed(3)),
+        Number(scratchOriginVec.z.toFixed(3)),
       ]
       const vel = computeBallisticDartVelocity(originTuple, targetWorld, speedMult)
       vrLastOriginRef.current = originTuple

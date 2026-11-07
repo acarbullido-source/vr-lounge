@@ -5,6 +5,7 @@ import {
   createInitialPresenterState,
 } from '../constants/cinema'
 import {
+  FREE_ROAM_SEAT_ID,
   computeRoomSeats,
   createDefaultRoomCustomization,
 } from '../constants/hangout'
@@ -196,6 +197,7 @@ export function useRoomSession(
   // Keep localProfile.seatId & seatIndex valid if furniture was deleted or reordered
   useEffect(() => {
     if (!joined || computedSeats.length === 0) return
+    if (localProfile.seatId === FREE_ROAM_SEAT_ID) return
     const matchedById = localProfile.seatId
       ? computedSeats.find((s) => s.id === localProfile.seatId)
       : undefined
@@ -210,7 +212,12 @@ export function useRoomSession(
     // Current seat furniture was removed -> pick first unoccupied seat
     const takenIds = new Set(
       participants
-        .filter((p) => p.userId !== localUserId && p.seatId)
+        .filter(
+          (p) =>
+            p.userId !== localUserId &&
+            p.seatId &&
+            p.seatId !== FREE_ROAM_SEAT_ID,
+        )
         .map((p) => p.seatId as string),
     )
     const fallbackSeat =
@@ -316,26 +323,39 @@ export function useRoomSession(
           const me = hydrated.find((p) => p.userId === localUserId)
           if (me) {
             const seatsNow = computedSeatsRef.current
-            const occupiedByEarlierPeer = hydrated.some((other) => {
-              if (other.userId === localUserId) return false
-              const sameSeat =
-                me.seatId && other.seatId
-                  ? other.seatId === me.seatId
-                  : other.seatIndex === me.seatIndex
-              if (!sameSeat) return false
-              return (
-                other.joinedAt < me.joinedAt ||
-                (other.joinedAt === me.joinedAt && other.userId < me.userId)
-              )
-            })
+            const isSharedOrRoam =
+              me.seatId === FREE_ROAM_SEAT_ID || me.seatId?.startsWith('station:')
+            const occupiedByEarlierPeer =
+              !isSharedOrRoam &&
+              hydrated.some((other) => {
+                if (other.userId === localUserId) return false
+                if (other.seatId === FREE_ROAM_SEAT_ID) return false
+                const sameSeat =
+                  me.seatId && other.seatId
+                    ? other.seatId === me.seatId
+                    : other.seatIndex >= 0 && other.seatIndex === me.seatIndex
+                if (!sameSeat) return false
+                return (
+                  other.joinedAt < me.joinedAt ||
+                  (other.joinedAt === me.joinedAt && other.userId < me.userId)
+                )
+              })
 
             if (!seatSettled || occupiedByEarlierPeer) {
               seatSettled = true
               if (occupiedByEarlierPeer && seatsNow.length > 0) {
                 const takenIds = new Set(
                   hydrated
-                    .filter((other) => other.userId !== localUserId)
-                    .map((other) => other.seatId ?? seatsNow[other.seatIndex]?.id)
+                    .filter(
+                      (other) =>
+                        other.userId !== localUserId &&
+                        other.seatId !== FREE_ROAM_SEAT_ID,
+                    )
+                    .map(
+                      (other) =>
+                        other.seatId ??
+                        (other.seatIndex >= 0 ? seatsNow[other.seatIndex]?.id : undefined),
+                    )
                     .filter(Boolean) as string[],
                 )
                 const freeSeat =
@@ -508,6 +528,14 @@ export function useRoomSession(
 
   const selectSeat = useCallback(
     (seatIdOrIndex: string | number) => {
+      if (seatIdOrIndex === FREE_ROAM_SEAT_ID) {
+        updateLocalProfile({
+          seatIndex: -1,
+          seatId: FREE_ROAM_SEAT_ID,
+        })
+        return
+      }
+
       const seatsNow = computedSeatsRef.current
       if (seatsNow.length === 0) return
 
@@ -518,12 +546,20 @@ export function useRoomSession(
 
       if (!targetSeat) return
 
-      const occupied = participants.some((p) => {
-        if (p.userId === localUserId) return false
-        if (p.seatId) return p.seatId === targetSeat.id
-        return p.seatIndex === targetSeat.index
-      })
-      if (occupied) return
+      const isExclusiveChair =
+        !targetSeat.stationKind ||
+        targetSeat.stationKind === 'seat' ||
+        targetSeat.stationKind === 'game-table'
+
+      if (isExclusiveChair) {
+        const occupied = participants.some((p) => {
+          if (p.userId === localUserId) return false
+          if (p.seatId === FREE_ROAM_SEAT_ID) return false
+          if (p.seatId) return p.seatId === targetSeat.id
+          return p.seatIndex >= 0 && p.seatIndex === targetSeat.index
+        })
+        if (occupied) return
+      }
 
       updateLocalProfile({
         seatIndex: targetSeat.index,

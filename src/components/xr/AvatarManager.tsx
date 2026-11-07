@@ -3,6 +3,8 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { useXR, useXRInputSourceState } from '@react-three/xr'
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
+import { FREE_ROAM_SEAT_ID } from '../../constants/hangout'
+import { readXRSpaceWorldPose } from '../../services/xrTracking'
 import type {
   AvatarPose6DoF,
   AvatarStyleId,
@@ -18,6 +20,10 @@ export interface AvatarManagerProps {
   computedSeats: ComputedSeat[]
   activePresenterId: string | null
   remotePosesRef: React.RefObject<Map<string, AvatarPose6DoF>>
+  localRoamPoseRef?: React.RefObject<{
+    position: [number, number, number]
+    yaw: number
+  }>
   remoteVoiceStreams: Record<string, MediaStream>
   voiceVolume: number
   broadcastPose: (pose: AvatarPose6DoF) => void
@@ -27,12 +33,15 @@ function resolveParticipantSeat(
   participant: Pick<ParticipantProfile, 'seatId' | 'seatIndex'>,
   computedSeats: ComputedSeat[],
 ): ComputedSeat {
-  const byId = participant.seatId
-    ? computedSeats.find((s) => s.id === participant.seatId)
-    : undefined
+  const byId =
+    participant.seatId && participant.seatId !== FREE_ROAM_SEAT_ID
+      ? computedSeats.find((s) => s.id === participant.seatId)
+      : undefined
+  const byIndex =
+    participant.seatIndex >= 0 ? computedSeats[participant.seatIndex] : undefined
   return (
     byId ??
-    computedSeats[participant.seatIndex] ??
+    byIndex ??
     computedSeats[0] ?? {
       id: 'fallback:0',
       index: 0,
@@ -332,6 +341,7 @@ function RemoteAvatar({
 
   const statusTag = [
     participant.inVR ? 'VR' : 'DESKTOP',
+    participant.seatId === FREE_ROAM_SEAT_ID ? 'WALKING' : null,
     isPresenter ? 'PRESENTING' : null,
     participant.isMuted ? 'MUTED' : null,
   ]
@@ -429,12 +439,15 @@ export function AvatarManager({
   computedSeats,
   activePresenterId,
   remotePosesRef,
+  localRoamPoseRef,
   remoteVoiceStreams,
   voiceVolume,
   broadcastPose,
 }: AvatarManagerProps) {
-  const { camera } = useThree()
+  const { camera, gl } = useThree()
   const xrSession = useXR((s) => s.session)
+  const xrOrigin = useXR((s) => s.origin)
+  const xrOriginRefSpace = useXR((s) => s.originReferenceSpace)
   const inXRSession = Boolean(xrSession)
 
   const leftController = useXRInputSourceState('controller', 'left')
@@ -468,13 +481,19 @@ export function AvatarManager({
     if (nowElapsed - lastBroadcastTimeRef.current < 0.05) return
     lastBroadcastTimeRef.current = nowElapsed
 
+    const isRoaming = localProfile.seatId === FREE_ROAM_SEAT_ID
     const seat = resolveParticipantSeat(localProfile, computedSeats)
 
     if (inXRSession) {
       camera.getWorldPosition(scratchHeadPos)
       camera.getWorldQuaternion(scratchHeadQuat)
+    } else if (isRoaming && localRoamPoseRef?.current) {
+      // Desktop Free-Roam: broadcast live standing world coordinates across the lounge
+      const roamPos = localRoamPoseRef.current.position
+      scratchHeadPos.set(roamPos[0], roamPos[1] + 1.54, roamPos[2])
+      camera.getWorldQuaternion(scratchHeadQuat)
     } else {
-      // Desktop mode: anchor avatar body at chosen lounge chair while mirroring camera look direction
+      // Desktop Seated: anchor avatar body at chosen lounge chair while mirroring camera look direction
       scratchHeadPos.set(
         seat.position[0],
         seat.position[1] + seat.seatHeightOffset + 1.16,
@@ -482,6 +501,11 @@ export function AvatarManager({
       )
       camera.getWorldQuaternion(scratchHeadQuat)
     }
+
+    const xrFrame = inXRSession ? gl.xr.getFrame?.() : null
+    const refSpace = inXRSession
+      ? (xrOriginRefSpace ?? gl.xr.getReferenceSpace?.())
+      : null
 
     let leftTransform: Transform6DoF | null = null
     const leftObj = leftController?.object ?? leftHand?.object
@@ -500,6 +524,33 @@ export function AvatarManager({
           Number(scratchLeftQuat.z.toFixed(4)),
           Number(scratchLeftQuat.w.toFixed(4)),
         ],
+      }
+    } else if (inXRSession && xrFrame && refSpace) {
+      const leftSrc = leftController?.inputSource ?? leftHand?.inputSource
+      const leftSpace = leftSrc?.gripSpace ?? leftSrc?.targetRaySpace
+      if (
+        readXRSpaceWorldPose(
+          xrFrame,
+          leftSpace,
+          refSpace,
+          xrOrigin,
+          scratchLeftPos,
+          scratchLeftQuat,
+        )
+      ) {
+        leftTransform = {
+          position: [
+            Number(scratchLeftPos.x.toFixed(4)),
+            Number(scratchLeftPos.y.toFixed(4)),
+            Number(scratchLeftPos.z.toFixed(4)),
+          ],
+          quaternion: [
+            Number(scratchLeftQuat.x.toFixed(4)),
+            Number(scratchLeftQuat.y.toFixed(4)),
+            Number(scratchLeftQuat.z.toFixed(4)),
+            Number(scratchLeftQuat.w.toFixed(4)),
+          ],
+        }
       }
     }
 
@@ -521,6 +572,33 @@ export function AvatarManager({
           Number(scratchRightQuat.w.toFixed(4)),
         ],
       }
+    } else if (inXRSession && xrFrame && refSpace) {
+      const rightSrc = rightController?.inputSource ?? rightHand?.inputSource
+      const rightSpace = rightSrc?.gripSpace ?? rightSrc?.targetRaySpace
+      if (
+        readXRSpaceWorldPose(
+          xrFrame,
+          rightSpace,
+          refSpace,
+          xrOrigin,
+          scratchRightPos,
+          scratchRightQuat,
+        )
+      ) {
+        rightTransform = {
+          position: [
+            Number(scratchRightPos.x.toFixed(4)),
+            Number(scratchRightPos.y.toFixed(4)),
+            Number(scratchRightPos.z.toFixed(4)),
+          ],
+          quaternion: [
+            Number(scratchRightQuat.x.toFixed(4)),
+            Number(scratchRightQuat.y.toFixed(4)),
+            Number(scratchRightQuat.z.toFixed(4)),
+            Number(scratchRightQuat.w.toFixed(4)),
+          ],
+        }
+      }
     }
 
     broadcastPose({
@@ -540,8 +618,8 @@ export function AvatarManager({
       },
       leftHand: leftTransform,
       rightHand: rightTransform,
-      seatIndex: seat.index,
-      seatId: seat.id,
+      seatIndex: isRoaming ? -1 : seat.index,
+      seatId: isRoaming ? FREE_ROAM_SEAT_ID : seat.id,
       inVR: inXRSession,
       timestamp: Date.now(),
     })

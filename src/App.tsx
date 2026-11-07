@@ -7,6 +7,7 @@ import {
   XROrigin,
   noEvents,
   useXR,
+  useXRInputSourceState,
 } from '@react-three/xr'
 import {
   Component,
@@ -32,9 +33,11 @@ import { SpatialControlDock } from './components/xr/SpatialControlDock'
 import type { VRKeyboardMode } from './components/xr/VRKeyboard3D'
 import { YouTubeBrowser3D } from './components/xr/YouTubeBrowser3D'
 import {
+  FREE_ROAM_SEAT_ID,
   LIGHTING_PRESETS,
   ROOM_SIZE_SPECS,
   getCatalogEntry,
+  resolveWalkablePosition,
 } from './constants/hangout'
 import { useBarGames } from './hooks/useBarGames'
 import { useMediaScreen } from './hooks/useMediaScreen'
@@ -45,6 +48,11 @@ import {
   isPasscodeGateEnabled,
   lockDevicePasscode,
 } from './services/passcode'
+import {
+  isControllerButtonPressed,
+  readControllerThumbstick,
+  readXRSpaceWorldPose,
+} from './services/xrTracking'
 import type { YouTubeVideoItem } from './services/youtube'
 import { exitVRSession, xrStore } from './store/xrStore'
 import type {
@@ -100,104 +108,695 @@ class SceneSectionBoundary extends Component<
   }
 }
 
+const UP_AXIS = new THREE.Vector3(0, 1, 0)
+
+const MOVEMENT_KEY_CODES = new Set([
+  'KeyW',
+  'KeyA',
+  'KeyS',
+  'KeyD',
+  'ArrowUp',
+  'ArrowDown',
+  'ArrowLeft',
+  'ArrowRight',
+])
+
+function isEditableDomElement(el: Element | null): boolean {
+  if (!el) return false
+  const tag = el.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
+  return (el as HTMLElement).isContentEditable === true
+}
+
+export interface TeleportFloorRequest {
+  id: number
+  position: [number, number, number]
+}
+
 interface SeatRigProps {
+  joined: boolean
   seat: ComputedSeat
+  isFreeRoaming: boolean
+  architecture: RoomArchitectureConfig
   screenCenter: [number, number, number]
   recenterVersion: number
+  keyboardOpen: boolean
+  buildMode: boolean
+  teleportRequest: TeleportFloorRequest | null
+  localRoamPoseRef: React.MutableRefObject<{
+    position: [number, number, number]
+    yaw: number
+  }>
+  onEnterFreeRoam: () => void
+  onSummonDockToggle: () => void
   onInVRChange: (inVR: boolean) => void
   children?: React.ReactNode
 }
 
 /**
- * Manages both:
- * 1. Smoothly damped `<XROrigin>` placement & physical headset recentering inside immersive VR
- * 2. Smoothly transitioning `<OrbitControls>` seated eye-level camera inside Desktop / Companion mode
+ * Unified Seated + Free-Roam Locomotion Rig for both Meta Quest 3 and Desktop:
+ * 1. Immersive VR:
+ *    - Left (or single) thumbstick smooth headset-relative walking clamped to room/alcove walls
+ *      with smooth `0.38m` Rear Balcony step-up.
+ *    - Right (or single) thumbstick `45°` comfort snap-turn pivoting around the user's exact
+ *      physical `headWorld` position so room-scale walkers are never swung sideways.
+ *    - `A` / `X` hold-to-aim & release comfort floor teleport ring.
+ *    - `B` / `Y` press summons or minimizes the floating `SpatialControlDock`.
+ * 2. Desktop / Companion:
+ *    - `WASD` / Arrow keys smooth walking (`Shift` faster) + floor double-click smooth glide,
+ *      preserving natural first-person `OrbitControls` mouse-look while roaming.
+ *    - 1-click snap-to-seat back onto any chair, sofa, barstool, or Bar Games station.
  */
 function SeatCameraAndOriginRig({
+  joined,
   seat,
+  isFreeRoaming,
+  architecture,
   screenCenter,
   recenterVersion,
+  keyboardOpen,
+  buildMode,
+  teleportRequest,
+  localRoamPoseRef,
+  onEnterFreeRoam,
+  onSummonDockToggle,
   onInVRChange,
   children,
 }: SeatRigProps) {
-  const { camera } = useThree()
+  const { camera, gl } = useThree()
   const xrSession = useXR((s) => s.session)
+  const xrOriginRefSpace = useXR((s) => s.originReferenceSpace)
   const inVR = Boolean(xrSession)
+
+  const leftController = useXRInputSourceState('controller', 'left')
+  const rightController = useXRInputSourceState('controller', 'right')
 
   const originRef = useRef<THREE.Group>(null)
   const dockGroupRef = useRef<THREE.Group>(null)
   const orbitRef = useRef<OrbitControlsImpl>(null)
-  const [vrLocalOffset, setVrLocalOffset] = useState<[number, number, number]>([0, 0, 0])
+  const vrLocalOffsetRef = useRef<[number, number, number]>([0, 0, 0])
+  const [vrTeleportRingPos, setVrTeleportRingPos] = useState<
+    [number, number, number] | null
+  >(null)
 
+  const pressedKeysRef = useRef<Set<string>>(new Set())
   const desktopTransitionRemainingRef = useRef(0)
+  const desktopGlideTargetRef = useRef<[number, number, number] | null>(null)
+  const desktopFloorYRef = useRef(0)
+  const handledTeleportIdRef = useRef(0)
+
+  const initialIsStanding = seat.id.startsWith('station:')
+  const initialErgonomicFloorY =
+    seat.position[1] + (initialIsStanding ? 0 : Math.max(0, seat.seatHeightOffset - 0.38))
+  const vrOriginTargetPosRef = useRef(
+    new THREE.Vector3(
+      seat.position[0],
+      initialErgonomicFloorY + (initialIsStanding ? 0 : 0.06),
+      seat.position[2],
+    ),
+  )
+  const vrOriginYawRef = useRef(seat.rotationY)
+  const vrDockYawRef = useRef(seat.rotationY)
+  const canSnapTurnRef = useRef(true)
+  const prevBOrYPressedRef = useRef(false)
+  const prevAOrXPressedRef = useRef(false)
+  const activeVrTeleportTargetRef = useRef<[number, number, number] | null>(null)
+
+  const prevIsFreeRoamingRef = useRef(isFreeRoaming)
+  const isFreeRoamingRef = useRef(isFreeRoaming)
+  isFreeRoamingRef.current = isFreeRoaming
+
   const desiredCamPos = useMemo(() => new THREE.Vector3(), [])
   const desiredLookTarget = useMemo(() => new THREE.Vector3(), [])
-  const desiredOriginPos = useMemo(() => new THREE.Vector3(), [])
   const desiredDockPos = useMemo(() => new THREE.Vector3(), [])
-  const desiredSeatQuat = useMemo(() => new THREE.Quaternion(), [])
-  const tmpEuler = useMemo(() => new THREE.Euler(), [])
+  const desiredQuat = useMemo(() => new THREE.Quaternion(), [])
+  const desiredDockQuat = useMemo(() => new THREE.Quaternion(), [])
+  const tmpEuler = useMemo(() => new THREE.Euler(0, 0, 0, 'YXZ'), [])
+  const scratchHeadWorld = useMemo(() => new THREE.Vector3(), [])
+  const scratchCamQuat = useMemo(() => new THREE.Quaternion(), [])
+  const scratchCamForward = useMemo(() => new THREE.Vector3(), [])
+  const scratchOffset = useMemo(() => new THREE.Vector3(), [])
+  const scratchRayPos = useMemo(() => new THREE.Vector3(), [])
+  const scratchRayQuat = useMemo(() => new THREE.Quaternion(), [])
+  const scratchRayDir = useMemo(() => new THREE.Vector3(), [])
 
   const onInVRChangeRef = useRef(onInVRChange)
   onInVRChangeRef.current = onInVRChange
+  const onEnterFreeRoamRef = useRef(onEnterFreeRoam)
+  onEnterFreeRoamRef.current = onEnterFreeRoam
+  const onSummonDockToggleRef = useRef(onSummonDockToggle)
+  onSummonDockToggleRef.current = onSummonDockToggle
+
+  // Initialize <XROrigin> & dockGroupRef once on mount so JSX re-renders never reset VR walk transforms
+  useEffect(() => {
+    if (originRef.current) {
+      originRef.current.position.copy(vrOriginTargetPosRef.current)
+      originRef.current.rotation.set(0, vrOriginYawRef.current, 0)
+    }
+    if (dockGroupRef.current) {
+      dockGroupRef.current.position.set(
+        vrOriginTargetPosRef.current.x,
+        Math.max(0, vrOriginTargetPosRef.current.y - 0.06),
+        vrOriginTargetPosRef.current.z,
+      )
+      dockGroupRef.current.rotation.set(0, vrDockYawRef.current, 0)
+    }
+  }, [])
 
   useEffect(() => {
     onInVRChangeRef.current(inVR)
   }, [inVR])
 
-  // Reset VR local drift offset when hopping to a different seat cushion
+  // Desktop WASD / Arrow-Key Walk Listener (safely ignores form inputs)
   useEffect(() => {
-    setVrLocalOffset([0, 0, 0])
-  }, [seat.id])
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!joined || isEditableDomElement(document.activeElement)) return
+      if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+        pressedKeysRef.current.add(e.code)
+        return
+      }
+      if (!MOVEMENT_KEY_CODES.has(e.code)) return
+      if (e.code.startsWith('Arrow')) {
+        e.preventDefault()
+      }
+      pressedKeysRef.current.add(e.code)
+      if (!inVR && !isFreeRoamingRef.current) {
+        onEnterFreeRoamRef.current()
+      }
+    }
 
-  // Trigger smooth ~0.45s desktop camera glide whenever seat or recenter changes
+    const onKeyUp = (e: KeyboardEvent) => {
+      pressedKeysRef.current.delete(e.code)
+    }
+
+    const clearKeys = () => {
+      pressedKeysRef.current.clear()
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('blur', clearKeys)
+    document.addEventListener('visibilitychange', clearKeys)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('blur', clearKeys)
+      document.removeEventListener('visibilitychange', clearKeys)
+    }
+  }, [inVR, joined])
+
+  // Update seated VR & Desktop targets whenever concrete seat changes
   useEffect(() => {
-    if (inVR) return
-    desktopTransitionRemainingRef.current = 0.45
+    if (isFreeRoaming) return
+    vrLocalOffsetRef.current = [0, 0, 0]
+    const isStandingStation = seat.id.startsWith('station:')
+    const seatDeltaY = isStandingStation ? 0 : Math.max(0, seat.seatHeightOffset - 0.38)
+    const ergonomicFloorY =
+      seat.position[1] + seatDeltaY + (isStandingStation ? 0 : 0.06)
+    vrOriginTargetPosRef.current.set(
+      seat.position[0],
+      ergonomicFloorY,
+      seat.position[2],
+    )
+    vrOriginYawRef.current = seat.rotationY
+    vrDockYawRef.current = seat.rotationY
+    desktopGlideTargetRef.current = null
+    if (!inVR) {
+      desktopTransitionRemainingRef.current = 0.45
+    }
   }, [
     inVR,
-    recenterVersion,
+    isFreeRoaming,
     seat.id,
     seat.position[0],
     seat.position[1],
     seat.position[2],
+    seat.rotationY,
     seat.seatHeightOffset,
   ])
 
-  // Calibrate physical headset horizontal drift relative to seat when Recenter is clicked in VR
+  // Smooth transition when entering or leaving Free-Roam mode
   useEffect(() => {
-    if (!inVR || recenterVersion === 0 || !originRef.current) return
-    const headWorld = new THREE.Vector3()
-    camera.getWorldPosition(headWorld)
-    const dx = seat.position[0] - headWorld.x
-    const dz = seat.position[2] - headWorld.z
-    setVrLocalOffset((prev) => [prev[0] + dx, 0, prev[2] + dz])
-  }, [camera, inVR, recenterVersion, seat.position])
+    if (isFreeRoaming && !prevIsFreeRoamingRef.current) {
+      if (inVR) {
+        if (originRef.current) {
+          vrOriginTargetPosRef.current.copy(originRef.current.position)
+        }
+        camera.getWorldPosition(scratchHeadWorld)
+        camera.getWorldQuaternion(scratchCamQuat)
+        tmpEuler.setFromQuaternion(scratchCamQuat, 'YXZ')
+        const walked = resolveWalkablePosition(
+          scratchHeadWorld.x,
+          scratchHeadWorld.z,
+          architecture,
+        )
+        localRoamPoseRef.current = {
+          position: walked,
+          yaw: tmpEuler.y,
+        }
+        vrDockYawRef.current = tmpEuler.y
+      } else {
+        // Desktop: step cleanly into first-person walk mode with a tight 0.85m look sphere
+        camera.getWorldDirection(scratchCamForward)
+        const horizLen = Math.hypot(scratchCamForward.x, scratchCamForward.z)
+        const fx = horizLen > 0.01 ? scratchCamForward.x / horizLen : 0
+        const fz = horizLen > 0.01 ? scratchCamForward.z / horizLen : -1
+
+        const hasKeyHeld = Array.from(pressedKeysRef.current).some((k) =>
+          MOVEMENT_KEY_CODES.has(k),
+        )
+        // If user clicked "Walk Free" while sitting in a chair (no teleport & no WASD yet),
+        // step 0.42m forward off the seat cushion so they aren't standing inside the sofa
+        const baseStartX = hasKeyHeld
+          ? camera.position.x
+          : seat.position[0] - Math.sin(seat.rotationY) * 0.42
+        const baseStartZ = hasKeyHeld
+          ? camera.position.z
+          : seat.position[2] - Math.cos(seat.rotationY) * 0.42
+        const startWalk = resolveWalkablePosition(baseStartX, baseStartZ, architecture)
+
+        const currentWalk = resolveWalkablePosition(
+          camera.position.x,
+          camera.position.z,
+          architecture,
+        )
+        localRoamPoseRef.current = {
+          position: currentWalk,
+          yaw: Math.atan2(-fx, -fz),
+        }
+        desktopFloorYRef.current = currentWalk[1]
+
+        // Pull OrbitControls target onto a 0.85m sphere around head so mouse drag turns head in place
+        camera.position.y = currentWalk[1] + 1.56
+        if (orbitRef.current) {
+          orbitRef.current.target.set(
+            camera.position.x + fx * 0.85,
+            camera.position.y + Math.max(-0.35, Math.min(0.35, scratchCamForward.y)) * 0.85,
+            camera.position.z + fz * 0.85,
+          )
+          orbitRef.current.update()
+        }
+
+        const hasPendingTeleport = Boolean(
+          teleportRequest && teleportRequest.id !== handledTeleportIdRef.current,
+        )
+        if (!hasKeyHeld && !hasPendingTeleport && !desktopGlideTargetRef.current) {
+          desktopGlideTargetRef.current = startWalk
+        }
+      }
+    } else if (!isFreeRoaming && prevIsFreeRoamingRef.current && !inVR) {
+      desktopGlideTargetRef.current = null
+      desktopTransitionRemainingRef.current = 0.45
+    }
+    prevIsFreeRoamingRef.current = isFreeRoaming
+  }, [
+    architecture,
+    camera,
+    inVR,
+    isFreeRoaming,
+    localRoamPoseRef,
+    scratchCamForward,
+    scratchCamQuat,
+    scratchHeadWorld,
+    seat.position,
+    seat.rotationY,
+    teleportRequest,
+    tmpEuler,
+  ])
+
+  // Handle explicit floor double-click / teleport requests on both VR and Desktop
+  useEffect(() => {
+    if (!teleportRequest || teleportRequest.id === handledTeleportIdRef.current) return
+    handledTeleportIdRef.current = teleportRequest.id
+    const target = resolveWalkablePosition(
+      teleportRequest.position[0],
+      teleportRequest.position[2],
+      architecture,
+    )
+
+    if (inVR) {
+      camera.getWorldPosition(scratchHeadWorld)
+      vrOriginTargetPosRef.current.x += target[0] - scratchHeadWorld.x
+      vrOriginTargetPosRef.current.z += target[2] - scratchHeadWorld.z
+      vrOriginTargetPosRef.current.y = target[1]
+      localRoamPoseRef.current.position = target
+    } else {
+      desktopGlideTargetRef.current = target
+    }
+  }, [architecture, camera, inVR, localRoamPoseRef, scratchHeadWorld, teleportRequest])
+
+  // Calibrate physical headset horizontal drift (or align floating dock) when Recenter is clicked
+  useEffect(() => {
+    if (recenterVersion === 0) return
+    if (inVR) {
+      camera.getWorldPosition(scratchHeadWorld)
+      camera.getWorldQuaternion(scratchCamQuat)
+      tmpEuler.setFromQuaternion(scratchCamQuat, 'YXZ')
+      if (isFreeRoaming) {
+        vrDockYawRef.current = tmpEuler.y
+      } else {
+        const dx = seat.position[0] - scratchHeadWorld.x
+        const dz = seat.position[2] - scratchHeadWorld.z
+        const prev = vrLocalOffsetRef.current
+        const next: [number, number, number] = [prev[0] + dx, 0, prev[2] + dz]
+        vrLocalOffsetRef.current = next
+        vrOriginTargetPosRef.current.x = seat.position[0] + next[0]
+        vrOriginTargetPosRef.current.z = seat.position[2] + next[2]
+        vrOriginYawRef.current = seat.rotationY
+      }
+    } else if (!isFreeRoaming) {
+      desktopTransitionRemainingRef.current = 0.45
+    }
+  }, [
+    camera,
+    inVR,
+    isFreeRoaming,
+    recenterVersion,
+    scratchCamQuat,
+    scratchHeadWorld,
+    seat.position,
+    seat.rotationY,
+    tmpEuler,
+  ])
 
   useFrame((_, delta) => {
     const dt = Math.min(delta, 0.1)
-    const rigAlpha = 1 - Math.exp(-11 * dt)
+    const rigAlpha = 1 - Math.exp(-12 * dt)
+
+    if (inVR) {
+      // 1. Quest B/Y button toggles the floating Lounge Controls dock
+      const bOrYPressed =
+        isControllerButtonPressed(rightController, ['b-button', 'y-button'], 5) ||
+        isControllerButtonPressed(leftController, ['y-button', 'b-button'], 5)
+      if (bOrYPressed && !prevBOrYPressedRef.current && joined) {
+        onSummonDockToggleRef.current()
+      }
+      prevBOrYPressedRef.current = bOrYPressed
+
+      // 2. Quest A/X hold-to-aim & release comfort floor teleport
+      const rightAX = isControllerButtonPressed(
+        rightController,
+        ['a-button', 'x-button'],
+        4,
+      )
+      const leftAX = isControllerButtonPressed(
+        leftController,
+        ['x-button', 'a-button'],
+        4,
+      )
+      const aOrXPressed = (rightAX || leftAX) && joined && !buildMode && !keyboardOpen
+      if (aOrXPressed) {
+        const xrFrame = gl.xr.getFrame?.()
+        const refSpace = xrOriginRefSpace ?? gl.xr.getReferenceSpace?.()
+        const teleportCtrl = rightAX ? rightController : leftController
+        const hasRay = readXRSpaceWorldPose(
+          xrFrame,
+          teleportCtrl?.inputSource?.targetRaySpace,
+          refSpace,
+          originRef.current,
+          scratchRayPos,
+          scratchRayQuat,
+        )
+        if (hasRay) {
+          scratchRayDir.set(0, 0, -1).applyQuaternion(scratchRayQuat).normalize()
+          if (scratchRayDir.y < -0.06) {
+            const tZero = -scratchRayPos.y / scratchRayDir.y
+            if (tZero > 0.25 && tZero < 13.5) {
+              const hitX = scratchRayPos.x + scratchRayDir.x * tZero
+              const hitZ = scratchRayPos.z + scratchRayDir.z * tZero
+              const clamped = resolveWalkablePosition(hitX, hitZ, architecture)
+              activeVrTeleportTargetRef.current = clamped
+              setVrTeleportRingPos([clamped[0], clamped[1] + 0.022, clamped[2]])
+            }
+          }
+        }
+      } else if (prevAOrXPressedRef.current) {
+        const dest = activeVrTeleportTargetRef.current
+        activeVrTeleportTargetRef.current = null
+        setVrTeleportRingPos(null)
+        if (dest) {
+          if (!isFreeRoamingRef.current) {
+            onEnterFreeRoamRef.current()
+          }
+          camera.getWorldPosition(scratchHeadWorld)
+          vrOriginTargetPosRef.current.x += dest[0] - scratchHeadWorld.x
+          vrOriginTargetPosRef.current.z += dest[2] - scratchHeadWorld.z
+          vrOriginTargetPosRef.current.y = dest[1]
+          localRoamPoseRef.current.position = dest
+        }
+      }
+      prevAOrXPressedRef.current = aOrXPressed
+
+      // 3. VR Thumbstick Smooth Walk + Head-Pivoted 45° Snap-Turn (supports 1 or 2 controllers!)
+      if (joined && !keyboardOpen) {
+        const hasBothControllers = Boolean(leftController && rightController)
+        let moveX = 0
+        let moveY = 0
+        let turnX = 0
+
+        if (hasBothControllers) {
+          const leftStick = readControllerThumbstick(leftController)
+          const rightStick = readControllerThumbstick(rightController)
+          moveX = Math.abs(leftStick.x) > 0.18 ? leftStick.x : 0
+          moveY =
+            Math.abs(leftStick.y) > 0.18
+              ? leftStick.y
+              : Math.abs(rightStick.y) > 0.36 && Math.abs(rightStick.x) < 0.42
+                ? rightStick.y
+                : 0
+          turnX = rightStick.x
+        } else {
+          const singleStick = readControllerThumbstick(rightController ?? leftController)
+          moveY = Math.abs(singleStick.y) > 0.22 ? singleStick.y : 0
+          turnX =
+            Math.abs(singleStick.x) > 0.58 && Math.abs(singleStick.y) < 0.48
+              ? singleStick.x
+              : 0
+        }
+
+        // Head-pivoted 45° comfort snap-turn
+        if (Math.abs(turnX) < 0.36) {
+          canSnapTurnRef.current = true
+        } else if (canSnapTurnRef.current && Math.abs(turnX) > 0.62) {
+          canSnapTurnRef.current = false
+          const deltaYaw = (turnX > 0 ? -1 : 1) * (Math.PI / 4)
+          camera.getWorldPosition(scratchHeadWorld)
+          scratchOffset
+            .set(
+              scratchHeadWorld.x - vrOriginTargetPosRef.current.x,
+              0,
+              scratchHeadWorld.z - vrOriginTargetPosRef.current.z,
+            )
+            .applyAxisAngle(UP_AXIS, deltaYaw)
+          vrOriginTargetPosRef.current.x = scratchHeadWorld.x - scratchOffset.x
+          vrOriginTargetPosRef.current.z = scratchHeadWorld.z - scratchOffset.z
+          vrOriginYawRef.current += deltaYaw
+          vrDockYawRef.current += deltaYaw
+          if (originRef.current) {
+            originRef.current.position.x = vrOriginTargetPosRef.current.x
+            originRef.current.position.z = vrOriginTargetPosRef.current.z
+            originRef.current.rotation.set(0, vrOriginYawRef.current, 0)
+          }
+        }
+
+        // Smooth headset-relative walk
+        if (moveX !== 0 || moveY !== 0) {
+          if (!isFreeRoamingRef.current) {
+            if (originRef.current) {
+              vrOriginTargetPosRef.current.copy(originRef.current.position)
+            }
+            onEnterFreeRoamRef.current()
+          }
+
+          camera.getWorldPosition(scratchHeadWorld)
+          camera.getWorldQuaternion(scratchCamQuat)
+          tmpEuler.setFromQuaternion(scratchCamQuat, 'YXZ')
+          const headYaw = tmpEuler.y
+
+          const fwdAmt = -moveY
+          const rightAmt = moveX
+          const walkSpeed = 2.65
+          const stepX =
+            (-Math.sin(headYaw) * fwdAmt + Math.cos(headYaw) * rightAmt) *
+            walkSpeed *
+            dt
+          const stepZ =
+            (-Math.cos(headYaw) * fwdAmt - Math.sin(headYaw) * rightAmt) *
+            walkSpeed *
+            dt
+
+          const [clampedHeadX, floorY, clampedHeadZ] = resolveWalkablePosition(
+            scratchHeadWorld.x + stepX,
+            scratchHeadWorld.z + stepZ,
+            architecture,
+          )
+          vrOriginTargetPosRef.current.x += clampedHeadX - scratchHeadWorld.x
+          vrOriginTargetPosRef.current.z += clampedHeadZ - scratchHeadWorld.z
+          vrOriginTargetPosRef.current.y = floorY
+          localRoamPoseRef.current = {
+            position: [clampedHeadX, floorY, clampedHeadZ],
+            yaw: headYaw,
+          }
+        }
+      }
+
+      // Apply VR <XROrigin> & floating SpatialControlDock transforms
+      desiredQuat.setFromEuler(tmpEuler.set(0, vrOriginYawRef.current, 0))
+      if (originRef.current) {
+        originRef.current.position.lerp(vrOriginTargetPosRef.current, rigAlpha)
+        originRef.current.quaternion.slerp(desiredQuat, rigAlpha)
+      }
+
+      if (dockGroupRef.current) {
+        if (isFreeRoaming) {
+          camera.getWorldPosition(scratchHeadWorld)
+          camera.getWorldQuaternion(scratchCamQuat)
+          tmpEuler.setFromQuaternion(scratchCamQuat, 'YXZ')
+          // Lazily follow horizontal gaze when user turns > ~32° so dock stays comfortably in front
+          let yawDiff = tmpEuler.y - vrDockYawRef.current
+          while (yawDiff > Math.PI) yawDiff -= Math.PI * 2
+          while (yawDiff < -Math.PI) yawDiff += Math.PI * 2
+          if (Math.abs(yawDiff) > 0.56) {
+            vrDockYawRef.current += (yawDiff - Math.sign(yawDiff) * 0.48) * 0.25
+          }
+          desiredDockPos.set(
+            scratchHeadWorld.x,
+            vrOriginTargetPosRef.current.y,
+            scratchHeadWorld.z,
+          )
+          desiredDockQuat.setFromEuler(tmpEuler.set(0, vrDockYawRef.current, 0))
+          dockGroupRef.current.position.lerp(desiredDockPos, rigAlpha)
+          dockGroupRef.current.quaternion.slerp(desiredDockQuat, rigAlpha)
+        } else {
+          const seatDeltaY = Math.max(0, seat.seatHeightOffset - 0.38)
+          const ergonomicFloorY = seat.position[1] + seatDeltaY
+          desiredDockPos.set(seat.position[0], ergonomicFloorY, seat.position[2])
+          dockGroupRef.current.position.lerp(desiredDockPos, rigAlpha)
+          dockGroupRef.current.quaternion.slerp(desiredQuat, rigAlpha)
+        }
+      }
+      return
+    }
+
+    // =========================================================================
+    // DESKTOP / COMPANION MODE: SEATED GLIDE + WASD / FLOOR-GLIDE FREE ROAM
+    // =========================================================================
+    if (isFreeRoaming) {
+      const keys = pressedKeysRef.current
+      const fwd =
+        (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) -
+        (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0)
+      const strafe =
+        (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) -
+        (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0)
+
+      const curRoam = localRoamPoseRef.current.position
+
+      if (fwd !== 0 || strafe !== 0) {
+        desktopGlideTargetRef.current = null
+        camera.getWorldDirection(scratchCamForward)
+        const hLen = Math.hypot(scratchCamForward.x, scratchCamForward.z)
+        const fx = hLen > 0.001 ? scratchCamForward.x / hLen : 0
+        const fz = hLen > 0.001 ? scratchCamForward.z / hLen : -1
+        const rx = -fz
+        const rz = fx
+
+        let moveX = fx * fwd + rx * strafe
+        let moveZ = fz * fwd + rz * strafe
+        const mLen = Math.hypot(moveX, moveZ)
+        if (mLen > 0.001) {
+          moveX /= mLen
+          moveZ /= mLen
+        }
+
+        const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 5.0 : 3.1
+        const nextWalk = resolveWalkablePosition(
+          curRoam[0] + moveX * speed * dt,
+          curRoam[2] + moveZ * speed * dt,
+          architecture,
+        )
+
+        const dx = nextWalk[0] - curRoam[0]
+        const dz = nextWalk[2] - curRoam[2]
+        const nextFloorY = THREE.MathUtils.lerp(
+          desktopFloorYRef.current,
+          nextWalk[1],
+          1 - Math.exp(-12 * dt),
+        )
+        const dyFloor = nextFloorY - desktopFloorYRef.current
+        desktopFloorYRef.current = nextFloorY
+
+        localRoamPoseRef.current = {
+          position: [nextWalk[0], nextWalk[1], nextWalk[2]],
+          yaw: Math.atan2(-fx, -fz),
+        }
+
+        camera.position.x += dx
+        camera.position.y += dyFloor
+        camera.position.z += dz
+        if (orbitRef.current) {
+          orbitRef.current.target.x += dx
+          orbitRef.current.target.y += dyFloor
+          orbitRef.current.target.z += dz
+          orbitRef.current.update()
+        }
+      } else if (desktopGlideTargetRef.current) {
+        const target = desktopGlideTargetRef.current
+        const glideAlpha = 1 - Math.exp(-9.5 * dt)
+        const nextX = THREE.MathUtils.lerp(curRoam[0], target[0], glideAlpha)
+        const nextZ = THREE.MathUtils.lerp(curRoam[2], target[2], glideAlpha)
+        const nextFloorY = THREE.MathUtils.lerp(
+          desktopFloorYRef.current,
+          target[1],
+          glideAlpha,
+        )
+
+        const dx = nextX - curRoam[0]
+        const dz = nextZ - curRoam[2]
+        const dyFloor = nextFloorY - desktopFloorYRef.current
+        desktopFloorYRef.current = nextFloorY
+
+        camera.getWorldDirection(scratchCamForward)
+        localRoamPoseRef.current = {
+          position: [
+            Number(nextX.toFixed(3)),
+            target[1],
+            Number(nextZ.toFixed(3)),
+          ],
+          yaw: Math.atan2(-scratchCamForward.x, -scratchCamForward.z),
+        }
+
+        camera.position.x += dx
+        camera.position.y += dyFloor
+        camera.position.z += dz
+        if (orbitRef.current) {
+          orbitRef.current.target.x += dx
+          orbitRef.current.target.y += dyFloor
+          orbitRef.current.target.z += dz
+          orbitRef.current.update()
+        }
+
+        if (
+          Math.hypot(target[0] - nextX, target[2] - nextZ) < 0.02 &&
+          Math.abs(target[1] - nextFloorY) < 0.01
+        ) {
+          desktopGlideTargetRef.current = null
+        }
+      }
+      return
+    }
+
+    // Desktop Seated Camera Glide
     const seatDeltaY = Math.max(0, seat.seatHeightOffset - 0.38)
     const ergonomicFloorY = seat.position[1] + seatDeltaY
-
-    desiredOriginPos.set(
-      seat.position[0] + vrLocalOffset[0],
-      ergonomicFloorY + 0.06,
-      seat.position[2] + vrLocalOffset[2],
-    )
     desiredDockPos.set(seat.position[0], ergonomicFloorY, seat.position[2])
-    desiredSeatQuat.setFromEuler(tmpEuler.set(0, seat.rotationY, 0))
-
-    if (originRef.current) {
-      originRef.current.position.lerp(desiredOriginPos, rigAlpha)
-      originRef.current.quaternion.slerp(desiredSeatQuat, rigAlpha)
-    }
-
+    desiredQuat.setFromEuler(tmpEuler.set(0, seat.rotationY, 0))
     if (dockGroupRef.current) {
       dockGroupRef.current.position.lerp(desiredDockPos, rigAlpha)
-      dockGroupRef.current.quaternion.slerp(desiredSeatQuat, rigAlpha)
+      dockGroupRef.current.quaternion.slerp(desiredQuat, rigAlpha)
     }
 
-    if (!inVR && desktopTransitionRemainingRef.current > 0) {
+    if (desktopTransitionRemainingRef.current > 0) {
       desktopTransitionRemainingRef.current = Math.max(
         0,
         desktopTransitionRemainingRef.current - dt,
@@ -235,43 +834,36 @@ function SeatCameraAndOriginRig({
     }
   })
 
-  const initialErgonomicFloorY =
-    seat.position[1] + Math.max(0, seat.seatHeightOffset - 0.38)
-
   return (
     <>
-      <XROrigin
-        ref={originRef}
-        position={[
-          seat.position[0] + vrLocalOffset[0],
-          initialErgonomicFloorY + 0.06,
-          seat.position[2] + vrLocalOffset[2],
-        ]}
-        rotation={[0, seat.rotationY, 0]}
-      />
+      <XROrigin ref={originRef} />
 
-      {/* Ergonomic Spatial Dock & VR Panels anchored directly at the user's dynamic seat */}
-      <group
-        ref={dockGroupRef}
-        position={[
-          seat.position[0],
-          initialErgonomicFloorY,
-          seat.position[2],
-        ]}
-        rotation={[0, seat.rotationY, 0]}
-      >
-        {children}
-      </group>
+      {/* VR A/X Hold-to-Aim Comfort Teleport Ring */}
+      {inVR && vrTeleportRingPos && (
+        <group position={vrTeleportRingPos}>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+            <ringGeometry args={[0.28, 0.36, 32]} />
+            <meshBasicMaterial color="#38BDF8" transparent opacity={0.92} />
+          </mesh>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+            <circleGeometry args={[0.16, 24]} />
+            <meshBasicMaterial color="#E5A93C" transparent opacity={0.5} />
+          </mesh>
+        </group>
+      )}
+
+      {/* Ergonomic Spatial Dock & VR Panels anchored at dynamic seat or floating in Walk Mode */}
+      <group ref={dockGroupRef}>{children}</group>
 
       {/* Desktop OrbitControls disabled automatically during immersive VR sessions */}
       <IfInSessionMode deny={['immersive-vr', 'immersive-ar']}>
         <OrbitControls
           ref={orbitRef}
           enablePan={false}
-          minDistance={0.95}
-          maxDistance={15.5}
-          minPolarAngle={Math.PI * 0.14}
-          maxPolarAngle={Math.PI * 0.78}
+          minDistance={isFreeRoaming ? 0.25 : 0.95}
+          maxDistance={isFreeRoaming ? 4.5 : 15.5}
+          minPolarAngle={Math.PI * 0.12}
+          maxPolarAngle={Math.PI * 0.84}
           rotateSpeed={0.62}
         />
       </IfInSessionMode>
@@ -305,6 +897,17 @@ export function App() {
   const [keyboardMode, setKeyboardMode] = useState<VRKeyboardMode | null>(null)
   const [statusBanner, setStatusBanner] = useState<string | null>(null)
   const [usingSimulator, setUsingSimulator] = useState(false)
+  const [dockSummonToggleVersion, setDockSummonToggleVersion] = useState(0)
+  const [teleportRequest, setTeleportRequest] = useState<TeleportFloorRequest | null>(
+    null,
+  )
+  const localRoamPoseRef = useRef<{
+    position: [number, number, number]
+    yaw: number
+  }>({
+    position: [0, 0, 0.8],
+    yaw: 0,
+  })
 
   const room = useRoomSession(signalHandlerRef)
   const barGames = useBarGames({
@@ -324,6 +927,7 @@ export function App() {
     localProfile: roomLocalProfile,
     roomCustomization,
     computedSeats,
+    selectSeat: roomSelectSeat,
     takeControl: roomTakeControl,
     updatePresenterMedia: roomUpdatePresenterMedia,
     updateLocalProfile: roomUpdateLocalProfile,
@@ -333,12 +937,35 @@ export function App() {
     joinRoom: roomJoinRoom,
   } = room
 
+  const isFreeRoaming = roomLocalProfile.seatId === FREE_ROAM_SEAT_ID
+
   const activeSeat = useMemo<ComputedSeat>(() => {
-    const byId = roomLocalProfile.seatId
-      ? computedSeats.find((s) => s.id === roomLocalProfile.seatId)
-      : undefined
-    return byId ?? computedSeats[roomLocalProfile.seatIndex] ?? computedSeats[0]
+    const byId =
+      roomLocalProfile.seatId && roomLocalProfile.seatId !== FREE_ROAM_SEAT_ID
+        ? computedSeats.find((s) => s.id === roomLocalProfile.seatId)
+        : undefined
+    const byIndex =
+      roomLocalProfile.seatIndex >= 0
+        ? computedSeats[roomLocalProfile.seatIndex]
+        : undefined
+    return byId ?? byIndex ?? computedSeats[0]
   }, [computedSeats, roomLocalProfile.seatId, roomLocalProfile.seatIndex])
+
+  const handleEnterFreeRoam = useCallback(() => {
+    roomSelectSeat(FREE_ROAM_SEAT_ID)
+  }, [roomSelectSeat])
+
+  const handleTeleportToFloor = useCallback(
+    (worldPoint: [number, number, number]) => {
+      if (!roomJoined) return
+      roomSelectSeat(FREE_ROAM_SEAT_ID)
+      setTeleportRequest((prev) => ({
+        id: (prev?.id ?? 0) + 1,
+        position: worldPoint,
+      }))
+    },
+    [roomJoined, roomSelectSeat],
+  )
 
   const skyBgColor =
     LIGHTING_PRESETS[roomCustomization.lighting.preset]?.skyBg ?? '#111724'
@@ -884,9 +1511,18 @@ export function App() {
 
             {/* Keep XROrigin & core CinemaRoom outside Suspense so VR renders on Frame 0 */}
             <SeatCameraAndOriginRig
+              joined={room.joined}
               seat={activeSeat}
+              isFreeRoaming={isFreeRoaming}
+              architecture={roomCustomization.architecture}
               screenCenter={roomCustomization.screen.position}
               recenterVersion={recenterVersion}
+              keyboardOpen={keyboardMode !== null}
+              buildMode={buildMode}
+              teleportRequest={teleportRequest}
+              localRoamPoseRef={localRoamPoseRef}
+              onEnterFreeRoam={handleEnterFreeRoam}
+              onSummonDockToggle={() => setDockSummonToggleVersion((v) => v + 1)}
               onInVRChange={handleInVRChange}
             >
               {room.joined && (
@@ -926,8 +1562,9 @@ export function App() {
                   </SceneSectionBoundary>
 
                   {(inVRSession ||
-                    !activeSeat?.stationKind ||
-                    activeSeat.stationKind === 'seat') && (
+                    (!isFreeRoaming &&
+                      (!activeSeat?.stationKind ||
+                        activeSeat.stationKind === 'seat'))) && (
                     <SceneSectionBoundary>
                       <SpatialControlDock
                         presenterState={room.presenterState}
@@ -969,8 +1606,12 @@ export function App() {
                         localSeatId={room.localProfile.seatId}
                         onSelectSeat={room.selectSeat}
                         atGameStation={Boolean(
-                          activeSeat?.stationKind && activeSeat.stationKind !== 'seat',
+                          !isFreeRoaming &&
+                            activeSeat?.stationKind &&
+                            activeSeat.stationKind !== 'seat',
                         )}
+                        isFreeRoaming={isFreeRoaming}
+                        dockSummonToggleVersion={dockSummonToggleVersion}
                       />
                     </SceneSectionBoundary>
                   )}
@@ -999,6 +1640,7 @@ export function App() {
               onOpenYouTubeBrowser={room.joined ? handleOpenYouTubeBrowser : undefined}
               onUnlockAudio={media.unlockAudio}
               onSelectSeat={room.selectSeat}
+              onTeleportToFloor={room.joined ? handleTeleportToFloor : undefined}
               onSelectFurniture={setSelectedFurnitureId}
               onUpdateFurnitureItem={handleUpdateFurnitureItem}
               onDuplicateFurnitureItem={handleDuplicateFurnitureItem}
@@ -1067,6 +1709,7 @@ export function App() {
                 computedSeats={computedSeats}
                 activePresenterId={room.presenterState.activePresenterId}
                 remotePosesRef={room.remotePosesRef}
+                localRoamPoseRef={localRoamPoseRef}
                 remoteVoiceStreams={webrtc.remoteVoiceStreams}
                 voiceVolume={voiceVolume}
                 broadcastPose={room.broadcastPose}

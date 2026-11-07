@@ -38,6 +38,7 @@ export interface CinemaRoomProps {
   onOpenYouTubeBrowser?: () => void
   onUnlockAudio: () => void
   onSelectSeat: (seatId: string) => void
+  onTeleportToFloor?: (worldPoint: [number, number, number]) => void
   onSelectFurniture: (id: string | null) => void
   onUpdateFurnitureItem: (id: string, patch: Partial<PlacedFurnitureItem>) => void
   onDuplicateFurnitureItem: (id: string) => void
@@ -100,6 +101,7 @@ export function CinemaRoom({
   onOpenYouTubeBrowser,
   onUnlockAudio,
   onSelectSeat,
+  onTeleportToFloor,
   onSelectFurniture,
   onUpdateFurnitureItem,
   onDuplicateFurnitureItem,
@@ -117,6 +119,8 @@ export function CinemaRoom({
   const [ytBtnHovered, setYtBtnHovered] = useState(false)
   const [draggingPlacement, setDraggingPlacement] = useState(false)
   const [hoverReticle, setHoverReticle] = useState<[number, number, number] | null>(null)
+  const [walkTargetRing, setWalkTargetRing] = useState<[number, number, number] | null>(null)
+  const walkRingTimerRef = useRef<number | null>(null)
 
   const { architecture, lighting, screen, furniture } = roomCustomization
   const sizeSpec = ROOM_SIZE_SPECS[architecture.sizePreset] ?? ROOM_SIZE_SPECS.classic
@@ -307,6 +311,20 @@ export function CinemaRoom({
     })
   }
 
+  const handleFloorDoubleClick = (e: ThreeEvent<MouseEvent>) => {
+    if (buildMode || !onTeleportToFloor) return
+    e.stopPropagation()
+    const ringPos: [number, number, number] = [e.point.x, e.point.y + 0.02, e.point.z]
+    setWalkTargetRing(ringPos)
+    if (walkRingTimerRef.current !== null) {
+      window.clearTimeout(walkRingTimerRef.current)
+    }
+    walkRingTimerRef.current = window.setTimeout(() => {
+      setWalkTargetRing(null)
+    }, 600)
+    onTeleportToFloor([e.point.x, e.point.y, e.point.z])
+  }
+
   const screenScale = Math.max(0.65, Math.min(1.55, screen.scale || 1))
 
   return (
@@ -360,12 +378,14 @@ export function CinemaRoom({
       {/* EXPANDABLE & THEMED ROOM ARCHITECTURE                             */}
       {/* ================================================================= */}
 
-      {/* Main Acoustic / Hardwood / Slate Floor */}
+      {/* Main Acoustic / Hardwood / Slate Floor (Double-Click to Walk / Glide) */}
       <mesh
+        name="lounge-main-floor"
         rotation={[-Math.PI / 2, 0, 0]}
         position={[0, 0, centerZ]}
         onPointerMove={handleFloorPointerMove}
         onPointerOut={() => setHoverReticle(null)}
+        onDoubleClick={handleFloorDoubleClick}
         onPointerDown={(e) => {
           if (!buildMode || selectedEntry?.placementSurface !== 'floor') return
           e.stopPropagation()
@@ -388,21 +408,37 @@ export function CinemaRoom({
 
       {/* Ghost Placement Reticle in Build Mode */}
       {buildMode && selectedItem && hoverReticle && (
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={hoverReticle}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={hoverReticle} raycast={() => null}>
           <ringGeometry args={[0.38, 0.46, 28]} />
           <meshBasicMaterial color="#22D3EE" transparent opacity={0.85} />
         </mesh>
+      )}
+
+      {/* Transient Free-Roam Walk / Teleport Destination Ring */}
+      {!buildMode && walkTargetRing && (
+        <group position={walkTargetRing}>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+            <ringGeometry args={[0.26, 0.34, 28]} />
+            <meshBasicMaterial color="#38BDF8" transparent opacity={0.88} />
+          </mesh>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+            <circleGeometry args={[0.14, 20]} />
+            <meshBasicMaterial color="#E5A93C" transparent opacity={0.45} />
+          </mesh>
+        </group>
       )}
 
       {/* Optional Elevated Rear Balcony Riser */}
       {architecture.rearBalcony && (
         <group>
           <RoundedBox
+            name="lounge-rear-balcony"
             args={[Math.min(10.6, sizeSpec.width - 2.4), 0.38, 3.3]}
             radius={0.04}
             smoothness={2}
             position={[0, 0.19, sizeSpec.balconyZ]}
             onPointerMove={handleFloorPointerMove}
+            onDoubleClick={handleFloorDoubleClick}
             onClick={(e) => {
               if (!buildMode || selectedEntry?.placementSurface !== 'floor') return
               e.stopPropagation()
@@ -512,11 +548,13 @@ export function CinemaRoom({
             <boxGeometry args={[0.06, 0.04, 6.4]} />
             <meshBasicMaterial color={lighting.accentColor} />
           </mesh>
-          {/* Alcove Floor (placeable!) */}
+          {/* Alcove Floor (placeable & walkable!) */}
           <mesh
+            name="lounge-left-alcove-floor"
             rotation={[-Math.PI / 2, 0, 0]}
             position={[-halfW - 1.9, 0.002, centerZ]}
             onPointerMove={handleFloorPointerMove}
+            onDoubleClick={handleFloorDoubleClick}
             onClick={(e) => {
               if (!buildMode || selectedEntry?.placementSurface !== 'floor') return
               e.stopPropagation()
@@ -621,9 +659,11 @@ export function CinemaRoom({
             <meshBasicMaterial color={lighting.accentColor} />
           </mesh>
           <mesh
+            name="lounge-right-alcove-floor"
             rotation={[-Math.PI / 2, 0, 0]}
             position={[halfW + 1.9, 0.002, centerZ]}
             onPointerMove={handleFloorPointerMove}
+            onDoubleClick={handleFloorDoubleClick}
             onClick={(e) => {
               if (!buildMode || selectedEntry?.placementSurface !== 'floor') return
               e.stopPropagation()

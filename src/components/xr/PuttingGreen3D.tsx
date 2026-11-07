@@ -9,6 +9,7 @@ import {
   stepPuttingBallCCD,
   type ActivePuttSim,
 } from '../../services/barGamesPhysics'
+import { readXRSpaceWorldPose } from '../../services/xrTracking'
 import type {
   LivePuttShotPacket,
   PuttShotSettlePacket,
@@ -91,6 +92,47 @@ function PutterClubMesh({ highlighted = false }: { highlighted?: boolean }) {
   )
 }
 
+/**
+ * Local blade-center offset in `grip-space` for `HeldVRPutterClubMesh`.
+ * Origin `(0, 0, 0)` sits directly inside the player's Quest controller palm,
+ * while the `0.81m` shaft angles slightly forward (`~20°`) so the mallet head
+ * rests naturally on the turf when holding the controller at waist height.
+ */
+const LOCAL_VR_BLADE_OFFSET = new THREE.Vector3(0.035, -0.76, -0.28)
+
+function HeldVRPutterClubMesh() {
+  return (
+    <group rotation={[-0.35, 0, 0]} position={[0, -0.46, -0.16]}>
+      {/* Rubber grip aligned right inside Quest controller hand */}
+      <mesh position={[0, 0.44, 0]} raycast={() => null}>
+        <cylinderGeometry args={[0.015, 0.013, 0.24, 10]} />
+        <meshStandardMaterial color="#1E293B" roughness={0.82} />
+      </mesh>
+      {/* Full-length 0.78m brushed steel putter shaft */}
+      <mesh position={[0, -0.02, 0]} raycast={() => null}>
+        <cylinderGeometry args={[0.007, 0.006, 0.76, 10]} />
+        <meshStandardMaterial color="#CBD5E1" metalness={0.85} roughness={0.2} />
+      </mesh>
+      {/* Glowing mallet putter blade */}
+      <RoundedBox
+        args={[0.13, 0.034, 0.038]}
+        radius={0.006}
+        smoothness={2}
+        position={[0.035, -0.39, 0]}
+        raycast={() => null}
+      >
+        <meshStandardMaterial
+          color="#22D3EE"
+          emissive="#22D3EE"
+          emissiveIntensity={0.32}
+          metalness={0.75}
+          roughness={0.25}
+        />
+      </RoundedBox>
+    </group>
+  )
+}
+
 interface MiniSignButtonProps {
   label: string
   position: [number, number, number]
@@ -160,13 +202,16 @@ export function PuttingGreen3D({
   onResetBallToTee,
   onResetPutting,
 }: PuttingGreen3DProps) {
-  const { gl } = useThree()
+  const { gl, camera } = useThree()
   const xrSession = useXR((s) => s.session)
+  const xrOrigin = useXR((s) => s.origin)
+  const xrOriginRefSpace = useXR((s) => s.originReferenceSpace)
   const inVR = Boolean(xrSession)
 
   const rampGeometry = useMemo(() => createRampGeometry(), [])
 
-  const [vrPutterEquipped, setVrPutterEquipped] = useState(false)
+  const [vrPutterHolstered, setVrPutterHolstered] = useState(false)
+  const [isHoldingVrPutterUi, setIsHoldingVrPutterUi] = useState(false)
   const [putterRackHovered, setPutterRackHovered] = useState(false)
   const [teeSpotHovered, setTeeSpotHovered] = useState(false)
   const [dragAimLocal, setDragAimLocal] = useState<[number, number] | null>(null)
@@ -175,11 +220,18 @@ export function PuttingGreen3D({
   const dragStartLocalRef = useRef<[number, number] | null>(null)
   const ballMeshRef = useRef<THREE.Mesh>(null)
   const vrPutterGroupRef = useRef<THREE.Group>(null)
+  const isHoldingVrPutterRef = useRef(false)
   const simRef = useRef<ActivePuttSim | null>(null)
   const activeShotIdRef = useRef<string | null>(null)
   const settledShotIdRef = useRef<string | null>(null)
   const prevBladeLocalRef = useRef<{ x: number; z: number; t: number } | null>(null)
   const lastVrStrikeAtRef = useRef<number>(0)
+
+  // Pre-allocated scratch math vectors/quaternions (zero per-frame heap allocations)
+  const scratchHeadWorld = useMemo(() => new THREE.Vector3(), [])
+  const scratchHandWorld = useMemo(() => new THREE.Vector3(), [])
+  const scratchHandQuat = useMemo(() => new THREE.Quaternion(), [])
+  const scratchBladeOffset = useMemo(() => new THREE.Vector3(), [])
 
   // Sync resting ball position whenever no shot is active
   useEffect(() => {
@@ -217,7 +269,7 @@ export function PuttingGreen3D({
     }
   }, [activePuttShot])
 
-  // Step golf ball CCD physics + VR physical putter blade collision in useFrame
+  // Step golf ball CCD physics + world-space VR physical putter blade collision in useFrame
   useFrame((_, delta) => {
     const sim = simRef.current
     if (sim && activePuttShot && !sim.settled) {
@@ -252,17 +304,46 @@ export function PuttingGreen3D({
       }
     }
 
-    // Equippable VR Putter controller tracking & swept ball strike
-    const autoEquipAtTee = inVR && (vrPutterEquipped || localSeatId === 'station:putting-tee')
-    if (!autoEquipAtTee || !xrSession || buildMode) {
+    // Check whether the VR player is physically standing near the Putting Strip
+    const setHoldingUi = (next: boolean) => {
+      if (isHoldingVrPutterRef.current !== next) {
+        isHoldingVrPutterRef.current = next
+        setIsHoldingVrPutterUi(next)
+      }
+    }
+
+    if (!inVR || !xrSession || buildMode) {
       if (vrPutterGroupRef.current) vrPutterGroupRef.current.visible = false
       prevBladeLocalRef.current = null
+      setHoldingUi(false)
+      return
+    }
+
+    camera.getWorldPosition(scratchHeadWorld)
+    const dxStrip = scratchHeadWorld.x - stripOrigin[0]
+    const dzStrip = scratchHeadWorld.z - stripOrigin[2]
+    const nearPuttingZone = Math.abs(dxStrip) < 1.95 && Math.abs(dzStrip) < 2.65
+
+    // Auto-reset manual rack holster once player walks > 2.9m away so returning auto-equips
+    if (vrPutterHolstered && Math.hypot(dxStrip, dzStrip) > 2.95) {
+      setVrPutterHolstered(false)
+    }
+
+    if (!nearPuttingZone || vrPutterHolstered) {
+      if (vrPutterGroupRef.current) vrPutterGroupRef.current.visible = false
+      prevBladeLocalRef.current = null
+      setHoldingUi(false)
       return
     }
 
     const xrFrame = gl.xr.getFrame?.()
-    const refSpace = gl.xr.getReferenceSpace?.()
-    if (!xrFrame || !refSpace) return
+    const refSpace = xrOriginRefSpace ?? gl.xr.getReferenceSpace?.()
+    if (!xrFrame || !refSpace) {
+      if (vrPutterGroupRef.current) vrPutterGroupRef.current.visible = false
+      prevBladeLocalRef.current = null
+      setHoldingUi(false)
+      return
+    }
 
     let rightSource: XRInputSource | null = null
     for (const src of xrSession.inputSources) {
@@ -273,37 +354,37 @@ export function PuttingGreen3D({
       }
     }
     const space = rightSource?.gripSpace ?? rightSource?.targetRaySpace
-    if (!space) return
-    const pose = xrFrame.getPose(space, refSpace)
-    if (!pose) return
-
-    const handWorld = new THREE.Vector3(
-      pose.transform.position.x,
-      pose.transform.position.y,
-      pose.transform.position.z,
+    const hasPose = readXRSpaceWorldPose(
+      xrFrame,
+      space,
+      refSpace,
+      xrOrigin,
+      scratchHandWorld,
+      scratchHandQuat,
     )
-    const handQuat = new THREE.Quaternion(
-      pose.transform.orientation.x,
-      pose.transform.orientation.y,
-      pose.transform.orientation.z,
-      pose.transform.orientation.w,
-    )
+    if (!hasPose) {
+      if (vrPutterGroupRef.current) vrPutterGroupRef.current.visible = false
+      prevBladeLocalRef.current = null
+      setHoldingUi(false)
+      return
+    }
 
+    setHoldingUi(true)
     if (vrPutterGroupRef.current) {
       vrPutterGroupRef.current.visible = true
       vrPutterGroupRef.current.position.set(
-        handWorld.x - stripOrigin[0],
-        handWorld.y - stripOrigin[1],
-        handWorld.z - stripOrigin[2],
+        scratchHandWorld.x - stripOrigin[0],
+        scratchHandWorld.y - stripOrigin[1],
+        scratchHandWorld.z - stripOrigin[2],
       )
-      vrPutterGroupRef.current.quaternion.copy(handQuat)
+      vrPutterGroupRef.current.quaternion.copy(scratchHandQuat)
     }
 
-    // Compute blade head world -> strip local coordinates
-    const bladeOffset = new THREE.Vector3(0.035, -0.29, 0).applyQuaternion(handQuat)
-    const bladeLocalX = handWorld.x + bladeOffset.x - stripOrigin[0]
-    const bladeLocalY = handWorld.y + bladeOffset.y - stripOrigin[1]
-    const bladeLocalZ = handWorld.z + bladeOffset.z - stripOrigin[2]
+    // Compute world-space blade head -> Putting Strip local coordinates
+    scratchBladeOffset.copy(LOCAL_VR_BLADE_OFFSET).applyQuaternion(scratchHandQuat)
+    const bladeLocalX = scratchHandWorld.x + scratchBladeOffset.x - stripOrigin[0]
+    const bladeLocalY = scratchHandWorld.y + scratchBladeOffset.y - stripOrigin[1]
+    const bladeLocalZ = scratchHandWorld.z + scratchBladeOffset.z - stripOrigin[2]
 
     const nowMs = performance.now()
     const prev = prevBladeLocalRef.current
@@ -313,12 +394,12 @@ export function PuttingGreen3D({
       prev &&
       !activePuttShot &&
       nowMs - lastVrStrikeAtRef.current > 900 &&
-      bladeLocalY < 0.22
+      bladeLocalY < 0.26
     ) {
       const ballX = puttingState.ballRestLocal[0]
       const ballZ = puttingState.ballRestLocal[2]
       const distToBall = Math.hypot(bladeLocalX - ballX, bladeLocalZ - ballZ)
-      if (distToBall < 0.085) {
+      if (distToBall < 0.095) {
         const dtSec = Math.max(0.012, (nowMs - prev.t) / 1000)
         const vx = Math.max(-2.2, Math.min(2.2, ((bladeLocalX - prev.x) / dtSec) * 1.25))
         const vz = Math.max(-4.2, Math.min(4.2, ((bladeLocalZ - prev.z) / dtSec) * 1.25))
@@ -400,9 +481,9 @@ export function PuttingGreen3D({
   return (
     <group name="bar-games-putting-green">
       <group position={stripOrigin}>
-        {/* Equippable Live VR Putter attached to VR Controller */}
+        {/* Equippable Live VR Putter attached to VR Controller in World Space */}
         <group ref={vrPutterGroupRef} visible={false}>
-          <PutterClubMesh highlighted />
+          <HeldVRPutterClubMesh />
         </group>
 
         {/* Rubber Base Underlay */}
@@ -566,7 +647,7 @@ export function PuttingGreen3D({
           <meshStandardMaterial color="#FFFFFF" roughness={0.28} metalness={0.05} />
         </mesh>
 
-        {/* Resting VR Putter Stand beside Tee */}
+        {/* Resting VR Putter Stand beside Tee (hides club mesh while held in VR hand) */}
         <group
           position={[PUTTING_STRIP_SPECS.width / 2 + 0.16, 0.34, 1.25]}
           rotation={[0, 0, -0.14]}
@@ -579,20 +660,34 @@ export function PuttingGreen3D({
           onClick={(e) => {
             if (buildMode) return
             e.stopPropagation()
-            setVrPutterEquipped((v) => !v)
-            onSelectSeat('station:putting-tee')
+            if (inVR) {
+              setVrPutterHolstered((v) => !v)
+            } else {
+              onSelectSeat('station:putting-tee')
+            }
           }}
         >
-          <PutterClubMesh highlighted={vrPutterEquipped || putterRackHovered} />
+          {/* Stand base post so rack remains clickable when putter is in hand */}
+          <mesh position={[0, -0.22, 0]}>
+            <cylinderGeometry args={[0.045, 0.055, 0.22, 12]} />
+            <meshStandardMaterial color="#1E293B" roughness={0.55} metalness={0.35} />
+          </mesh>
+          <group visible={!isHoldingVrPutterUi}>
+            <PutterClubMesh highlighted={putterRackHovered} />
+          </group>
           <Suspense fallback={null}>
             <Text
               position={[0, 0.56, 0]}
-              fontSize={0.032}
-              color={vrPutterEquipped ? '#22D3EE' : '#E5A93C'}
+              fontSize={0.03}
+              color={isHoldingVrPutterUi ? '#22D3EE' : '#E5A93C'}
               anchorX="center"
               anchorY="middle"
             >
-              {vrPutterEquipped ? '🏌️ PUTTER EQUIPPED' : '🏌️ GRAB PUTTER'}
+              {isHoldingVrPutterUi
+                ? '🏌️ IN HAND (TAP TO RACK)'
+                : inVR
+                  ? '🏌️ GRAB PUTTER'
+                  : '⛳ STEP TO TEE'}
             </Text>
           </Suspense>
         </group>

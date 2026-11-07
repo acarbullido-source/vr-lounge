@@ -309,42 +309,54 @@ export function BarGamesDrawer({
         {activeTab === 'play' && (
           <>
             {/* Quick Station Teleport Bar */}
-            <div className="grid grid-cols-3 gap-1.5">
+            <div className="grid grid-cols-4 gap-1.5">
+              <button
+                id="btn-goto-free-roam"
+                type="button"
+                onClick={() => onSelectSeat('roam:free')}
+                className={`rounded-xl border px-2 py-2 text-[11px] font-semibold transition ${
+                  localSeatId === 'roam:free'
+                    ? 'border-sky-400 bg-sky-500/20 text-sky-200'
+                    : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+                }`}
+              >
+                🚶 Walk Free
+              </button>
               <button
                 id="btn-goto-oche"
                 type="button"
                 onClick={() => onSelectSeat('station:darts-oche')}
-                className={`rounded-xl border px-2.5 py-2 text-[11px] font-semibold transition ${
+                className={`rounded-xl border px-2 py-2 text-[11px] font-semibold transition ${
                   localSeatId === 'station:darts-oche'
                     ? 'border-cyan-400 bg-cyan-500/20 text-cyan-200'
                     : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
                 }`}
               >
-                🎯 Stand Oche
+                🎯 Oche
               </button>
               <button
                 id="btn-goto-putting"
                 type="button"
                 onClick={() => onSelectSeat('station:putting-tee')}
-                className={`rounded-xl border px-2.5 py-2 text-[11px] font-semibold transition ${
+                className={`rounded-xl border px-2 py-2 text-[11px] font-semibold transition ${
                   localSeatId === 'station:putting-tee'
                     ? 'border-emerald-400 bg-emerald-500/20 text-emerald-200'
                     : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
                 }`}
               >
-                ⛳ Putting Tee
+                ⛳ Putting
               </button>
               <button
                 id="btn-goto-gametable"
                 type="button"
                 onClick={() => onSelectSeat('game-table:seat-0')}
-                className={`rounded-xl border px-2.5 py-2 text-[11px] font-semibold transition ${
+                className={`rounded-xl border px-2 py-2 text-[11px] font-semibold transition ${
                   localSeatId?.startsWith('game-table:')
                     ? 'border-amber-400 bg-amber-500/20 text-amber-200'
                     : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
                 }`}
               >
-                🎲 Game Table
+                🎲 Table
               </button>
             </div>
 
