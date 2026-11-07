@@ -36,6 +36,12 @@ import {
   generateRoomCode,
 } from '../../constants/cinema'
 import type { JoinRoomOptions } from '../../hooks/useRoomSession'
+import {
+  getVRSupportKind,
+  subscribeVRSupport,
+  triggerEnterVRFromGesture,
+  type VRSupportKind,
+} from '../../store/xrStore'
 import type {
   AvatarStyleId,
   ChatMessage,
@@ -81,8 +87,13 @@ export interface CompanionOverlayProps {
   onDismissBanner: () => void
   onSelectMic: (id: string) => void
   onSelectSpeaker: (id: string) => void
-  onJoinRoom: (opts: JoinRoomOptions, enterVRImmediately: boolean) => Promise<void>
-  onEnterVR: () => Promise<void>
+  onJoinRoom: (
+    opts: JoinRoomOptions,
+    vrAttemptPromise: Promise<{ ok: boolean; usedEmulator: boolean; error?: string }> | null,
+  ) => Promise<void>
+  onEnterVR: (
+    vrAttemptPromise: Promise<{ ok: boolean; usedEmulator: boolean; error?: string }>,
+  ) => Promise<void>
   onLeaveRoom: () => Promise<void>
   onToggleMute: () => void
   onSelectSeat: (seatIndex: number) => void
@@ -197,12 +208,27 @@ export function CompanionOverlay({
     }
   }, [chatDrawerOpen, messages.length])
 
-  // Hide 2D DOM UI while immersed in headset VR
+  const [vrSupportKind, setVrSupportKind] = useState<VRSupportKind>(() =>
+    getVRSupportKind(),
+  )
+
+  useEffect(() => {
+    return subscribeVRSupport(setVrSupportKind)
+  }, [])
+
+  // Hide 2D DOM UI while immersed in native headset VR (keep accessible exit hint handled in App)
   if (inVRSession) {
     return null
   }
 
-  const handleLobbySubmit = async (enterVRImmediately: boolean) => {
+  const handleLobbySubmit = async (
+    enterVRImmediately: boolean,
+    prestartedVRPromise: Promise<{
+      ok: boolean
+      usedEmulator: boolean
+      error?: string
+    }> | null = null,
+  ) => {
     if (joining) return
     setJoining(true)
     try {
@@ -224,7 +250,7 @@ export function CompanionOverlay({
           inVR: enterVRImmediately,
           isMuted: startMuted,
         },
-        enterVRImmediately,
+        prestartedVRPromise,
       )
     } finally {
       setJoining(false)
@@ -515,11 +541,19 @@ export function CompanionOverlay({
                   id="btn-enter-vr"
                   type="button"
                   disabled={joining}
-                  onClick={() => void handleLobbySubmit(true)}
+                  onClick={() => {
+                    if (joining) return
+                    const vrPromise = triggerEnterVRFromGesture()
+                    void handleLobbySubmit(true, vrPromise)
+                  }}
                   className="flex w-full items-center justify-center gap-2.5 rounded-xl bg-[#e5a93c] px-4 py-3 text-sm font-semibold text-[#080a0d] shadow-lg transition hover:bg-[#f2be5c] active:scale-[0.99] disabled:opacity-60"
                 >
                   <Glasses className="h-4 w-4" />
-                  <span>Enter VR (Quest 3 / WebXR)</span>
+                  <span>
+                    {vrSupportKind === 'native'
+                      ? 'Enter VR (Quest 3 / WebXR)'
+                      : 'Enter VR (Quest 3 / Simulator)'}
+                  </span>
                 </button>
 
                 <button
@@ -672,11 +706,14 @@ export function CompanionOverlay({
           <button
             id="btn-hud-enter-vr"
             type="button"
-            onClick={() => void onEnterVR()}
+            onClick={() => {
+              const vrPromise = triggerEnterVRFromGesture()
+              void onEnterVR(vrPromise)
+            }}
             className="inline-flex items-center gap-1.5 rounded-lg bg-[#e5a93c] px-3 py-1.5 text-xs font-semibold text-[#080a0d] transition hover:bg-[#f2be5c]"
           >
             <Glasses className="h-3.5 w-3.5" />
-            <span>Enter VR</span>
+            <span>{vrSupportKind === 'native' ? 'Enter VR' : 'VR Simulator'}</span>
           </button>
 
           <button

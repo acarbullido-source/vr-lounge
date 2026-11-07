@@ -21,7 +21,7 @@ import { LOUNGE_SEATS, SCREEN_CONFIG } from './constants/cinema'
 import { useMediaScreen } from './hooks/useMediaScreen'
 import { useRoomSession, type JoinRoomOptions } from './hooks/useRoomSession'
 import { useWebRTC } from './hooks/useWebRTC'
-import { enterVRWithFallback, xrStore } from './store/xrStore'
+import { exitVRSession, xrStore } from './store/xrStore'
 import type { WebRTCSignalMessage } from './types/lounge'
 
 interface SeatRigProps {
@@ -140,6 +140,7 @@ export function App() {
   const [spatialChatOpen, setSpatialChatOpen] = useState(true)
   const [keyboardMode, setKeyboardMode] = useState<VRKeyboardMode | null>(null)
   const [statusBanner, setStatusBanner] = useState<string | null>(null)
+  const [usingSimulator, setUsingSimulator] = useState(false)
 
   const room = useRoomSession(signalHandlerRef)
 
@@ -154,6 +155,7 @@ export function App() {
 
   const webrtc = useWebRTC({
     joined: room.joined,
+    inVRSession,
     localUserId: room.localUserId,
     participants: room.participants,
     activePresenterId: room.presenterState.activePresenterId,
@@ -193,6 +195,9 @@ export function App() {
   const handleInVRChange = useCallback(
     (activeVR: boolean) => {
       setInVRSession(activeVR)
+      if (!activeVR) {
+        setUsingSimulator(false)
+      }
       if (room.joined) {
         room.updateLocalProfile({ inVR: activeVR })
       }
@@ -200,33 +205,48 @@ export function App() {
     [room],
   )
 
-  const handleEnterVR = useCallback(async () => {
-    media.unlockAudio()
-    const res = await enterVRWithFallback()
-    if (!res.ok && res.error) {
-      setStatusBanner(res.error)
-    } else if (res.usedEmulator) {
-      setStatusBanner(
-        'Meta Quest 3 Emulator activated on desktop — press Esc or exit session to return to 2D controls.',
-      )
-    }
-  }, [media])
+  const handleEnterVR = useCallback(
+    async (
+      vrAttemptPromise: Promise<{ ok: boolean; usedEmulator: boolean; error?: string }>,
+    ) => {
+      media.unlockAudio()
+      const res = await vrAttemptPromise
+      if (res.ok) {
+        setUsingSimulator(res.usedEmulator)
+      } else if (res.error) {
+        setStatusBanner(res.error)
+      }
+    },
+    [media],
+  )
 
   const handleJoinRoom = useCallback(
-    async (opts: JoinRoomOptions, enterVRImmediately: boolean) => {
-      if (enterVRImmediately) {
-        // Trigger enterVR synchronously inside the user's button click gesture
-        const vrPromise = enterVRWithFallback()
-        await room.joinRoom(opts)
-        const vrResult = await vrPromise
-        if (!vrResult.ok && vrResult.error) {
-          setStatusBanner(`Joined room in Desktop Mode (${vrResult.error}).`)
+    async (
+      opts: JoinRoomOptions,
+      vrAttemptPromise: Promise<{
+        ok: boolean
+        usedEmulator: boolean
+        error?: string
+      }> | null,
+    ) => {
+      media.unlockAudio()
+      if (vrAttemptPromise) {
+        const [, vrResult] = await Promise.all([room.joinRoom(opts), vrAttemptPromise])
+        if (vrResult.ok) {
+          setUsingSimulator(vrResult.usedEmulator)
+        } else {
+          room.updateLocalProfile({ inVR: false })
+          setStatusBanner(
+            vrResult.error
+              ? `Could not enter VR (${vrResult.error}) — joined room in 3D Desktop Mode.`
+              : 'Could not start VR session — joined room in 3D Desktop Mode.',
+          )
         }
       } else {
         await room.joinRoom(opts)
       }
     },
-    [room],
+    [media, room],
   )
 
   const handleStartTabShare = useCallback(async () => {
@@ -475,6 +495,19 @@ export function App() {
         onSendChat={room.sendChatMessage}
         onSendReaction={(emoji) => room.sendReaction(emoji)}
       />
+
+      {inVRSession && usingSimulator && (
+        <button
+          id="btn-exit-vr-simulator"
+          type="button"
+          onClick={() => exitVRSession()}
+          style={{ zIndex: 1100 }}
+          className="pointer-events-auto fixed bottom-4 left-4 flex items-center gap-2 rounded-xl border border-[#e5a93c]/50 bg-[#080a0d]/90 px-4 py-2.5 text-xs font-semibold text-[#f4f1ea] shadow-xl backdrop-blur-md transition hover:border-[#e5a93c] hover:bg-[#141922]"
+        >
+          <span className="h-2 w-2 rounded-full bg-[#e5a93c]" />
+          <span>Exit Quest 3 Simulator (Return to 2D Controls)</span>
+        </button>
+      )}
     </div>
   )
 }

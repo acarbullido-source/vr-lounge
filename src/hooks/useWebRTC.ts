@@ -37,6 +37,7 @@ function buildIceServers(): RTCIceServer[] {
 
 export interface UseWebRTCOptions {
   joined: boolean
+  inVRSession: boolean
   localUserId: string
   participants: ParticipantProfile[]
   activePresenterId: string | null
@@ -48,6 +49,7 @@ export interface UseWebRTCOptions {
 
 export function useWebRTC({
   joined,
+  inVRSession,
   localUserId,
   participants,
   activePresenterId,
@@ -167,11 +169,16 @@ export function useWebRTC({
     }
   }, [isMuted])
 
-  // Acquire mic when joining or switching selectedMicId
+  // Acquire mic when joining or switching selectedMicId (defer slightly during VR entry
+  // so a 2D browser mic permission modal never interrupts Meta Quest Browser's XR transition)
   useEffect(() => {
-    if (!joined) return
-    void acquireMicrophone(selectedMicId || undefined)
-  }, [acquireMicrophone, joined, selectedMicId])
+    if (!joined || isMuted) return
+    const delayMs = inVRSession ? 1800 : 80
+    const timer = window.setTimeout(() => {
+      void acquireMicrophone(selectedMicId || undefined)
+    }, delayMs)
+    return () => window.clearTimeout(timer)
+  }, [acquireMicrophone, inVRSession, isMuted, joined, selectedMicId])
 
   // Local microphone VU / speaking ring analyser
   useEffect(() => {
