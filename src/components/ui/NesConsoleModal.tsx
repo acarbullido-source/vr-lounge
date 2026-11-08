@@ -67,6 +67,9 @@ export function NesConsoleModal({
   const [localPlayerNum, setLocalPlayerNum] = useState<1 | 2>(() =>
     nes.getLocalInputPlayer(),
   )
+  const [engagedSlot, setEngagedSlot] = useState<1 | 2 | null>(() =>
+    nes.getEngagedPlayerSlot(),
+  )
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null)
   const [, setVaultTick] = useState(0)
 
@@ -75,6 +78,7 @@ export function NesConsoleModal({
       setSelectedCartridge(nes.getActiveCartridge())
       setCustomRomTitle(nes.getCustomRomName())
       setLocalPlayerNum(nes.getLocalInputPlayer())
+      setEngagedSlot(nes.getEngagedPlayerSlot())
       setVaultTick((t) => t + 1)
     })
     const unsubVault = subscribeVaultStatus(() => {
@@ -188,6 +192,21 @@ export function NesConsoleModal({
   const activeCartId = customRomTitle ? 'custom-rom' : selectedCartridge.id
   const saveSlots = nes.getSaveSlotsForCartridge(activeCartId)
 
+  const isP1LockedByOther = Boolean(
+    nesMultiplayerState?.player1Id &&
+      nesMultiplayerState.player1Id !== localUserId,
+  )
+  const isP2LockedByOther = Boolean(
+    nesMultiplayerState?.player2Id &&
+      nesMultiplayerState.player2Id !== localUserId,
+  )
+  const isLocalP1 =
+    engagedSlot === 1 ||
+    (Boolean(localUserId) && nesMultiplayerState?.player1Id === localUserId)
+  const isLocalP2 =
+    engagedSlot === 2 ||
+    (Boolean(localUserId) && nesMultiplayerState?.player2Id === localUserId)
+
   const showNotice = (msg: string) => {
     setSaveFeedback(msg)
     window.setTimeout(() => {
@@ -199,6 +218,9 @@ export function NesConsoleModal({
     setSelectedCartridge(cart)
     setCustomRomTitle(null)
     nes.loadLibraryCartridge(cart.id)
+    if (engagedSlot === null && !isP1LockedByOther) {
+      onClaimNesPlayerSlot?.(1)
+    }
     onLaunchNesToMainScreen(`nes://${cart.id}`, `🕹 NES: ${cart.title}`)
   }
 
@@ -438,8 +460,8 @@ export function NesConsoleModal({
             >
               <canvas
                 ref={previewCanvasRef}
-                width={512}
-                height={480}
+                width={256}
+                height={240}
                 style={{
                   width: '100%',
                   height: 'auto',
@@ -485,12 +507,15 @@ export function NesConsoleModal({
                 padding: '10px 14px',
                 fontWeight: 700,
               }}
-              onClick={() =>
+              onClick={() => {
+                if (engagedSlot === null && !isP1LockedByOther) {
+                  onClaimNesPlayerSlot?.(1)
+                }
                 onLaunchNesToMainScreen(
                   `nes://${customRomTitle ? 'custom-rom' : selectedCartridge.id}`,
                   `🕹 NES: ${customRomTitle || selectedCartridge.title}`,
                 )
-              }
+              }}
             >
               {isNesCurrentlyOnScreen
                 ? '📺 Live on Main Screen & All Mirrored Lounge Screens (Click to Re-Sync)'
@@ -614,7 +639,7 @@ export function NesConsoleModal({
               </div>
             </div>
 
-            {/* 1P / 2P Multiplayer Co-Op Controller Selector */}
+            {/* 1P / 2P Multiplayer Co-Op Controller Engagement & Exclusive Lock Selector */}
             <div
               style={{
                 background: 'rgba(15, 23, 42, 0.92)',
@@ -630,41 +655,82 @@ export function NesConsoleModal({
               }}
             >
               <span style={{ color: '#7DD3FC', fontWeight: 700 }}>
-                🎮 Active Controller Port:
+                🎮 Controller Lock:
               </span>
-              <div style={{ display: 'flex', gap: '6px' }}>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                 <button
                   id="btn-nes-claim-p1"
                   type="button"
-                  className={localPlayerNum === 1 ? 'primary-btn' : 'secondary-btn'}
-                  style={{ fontSize: '0.72rem', padding: '4px 10px' }}
+                  disabled={isP1LockedByOther}
+                  className={isLocalP1 ? 'primary-btn' : 'secondary-btn'}
+                  style={{
+                    fontSize: '0.72rem',
+                    padding: '4px 10px',
+                    opacity: isP1LockedByOther ? 0.5 : 1,
+                  }}
                   onClick={() => {
-                    nes.setLocalInputPlayer(1)
-                    setLocalPlayerNum(1)
-                    onClaimNesPlayerSlot?.(1)
+                    if (isLocalP1) {
+                      onClaimNesPlayerSlot?.(null)
+                      setEngagedSlot(null)
+                    } else {
+                      nes.setLocalInputPlayer(1)
+                      setLocalPlayerNum(1)
+                      onClaimNesPlayerSlot?.(1)
+                    }
                   }}
                 >
-                  🕹 Player 1
-                  {nesMultiplayerState?.player1Name
-                    ? ` (${nesMultiplayerState.player1Id === localUserId ? 'You' : nesMultiplayerState.player1Name.slice(0, 8)})`
-                    : ''}
+                  {isLocalP1
+                    ? '🟢 P1 Engaged (You)'
+                    : isP1LockedByOther
+                      ? `🔒 P1: ${(nesMultiplayerState?.player1Name ?? 'In Use').slice(0, 8)}`
+                      : '🎮 Engage Player 1'}
                 </button>
                 <button
                   id="btn-nes-claim-p2"
                   type="button"
-                  className={localPlayerNum === 2 ? 'primary-btn' : 'secondary-btn'}
-                  style={{ fontSize: '0.72rem', padding: '4px 10px' }}
+                  disabled={isP2LockedByOther}
+                  className={isLocalP2 ? 'primary-btn' : 'secondary-btn'}
+                  style={{
+                    fontSize: '0.72rem',
+                    padding: '4px 10px',
+                    opacity: isP2LockedByOther ? 0.5 : 1,
+                  }}
                   onClick={() => {
-                    nes.setLocalInputPlayer(2)
-                    setLocalPlayerNum(2)
-                    onClaimNesPlayerSlot?.(2)
+                    if (isLocalP2) {
+                      onClaimNesPlayerSlot?.(null)
+                      setEngagedSlot(null)
+                    } else {
+                      nes.setLocalInputPlayer(2)
+                      setLocalPlayerNum(2)
+                      onClaimNesPlayerSlot?.(2)
+                    }
                   }}
                 >
-                  🕹 Player 2 (Co-Op)
-                  {nesMultiplayerState?.player2Name
-                    ? ` (${nesMultiplayerState.player2Id === localUserId ? 'You' : nesMultiplayerState.player2Name.slice(0, 8)})`
-                    : ''}
+                  {isLocalP2
+                    ? '🟢 P2 Engaged (You)'
+                    : isP2LockedByOther
+                      ? `🔒 P2: ${(nesMultiplayerState?.player2Name ?? 'In Use').slice(0, 8)}`
+                      : '🎮 Engage Player 2'}
                 </button>
+                {(isLocalP1 || isLocalP2) && (
+                  <button
+                    id="btn-nes-disengage-controller"
+                    type="button"
+                    className="secondary-btn"
+                    style={{
+                      fontSize: '0.72rem',
+                      padding: '4px 8px',
+                      borderColor: 'rgba(239, 68, 68, 0.5)',
+                      color: '#FCA5A5',
+                    }}
+                    onClick={() => {
+                      onClaimNesPlayerSlot?.(null)
+                      setEngagedSlot(null)
+                    }}
+                  >
+                    🔓 Disengage
+                  </button>
+                )}
                 {onShareNesCheckpoint && (
                   <button
                     id="btn-nes-sync-room"
@@ -829,7 +895,7 @@ export function NesConsoleModal({
               }}
             >
               <div style={{ color: '#38BDF8', fontWeight: 700, marginBottom: '4px' }}>
-                🥽 Meta Quest VR Controller &amp; Keyboard Mapping:
+                🥽 Meta Quest VR Controller &amp; Keyboard Mapping (When Engaged):
               </div>
               <div>
                 • <strong>Quest Left Stick:</strong> NES D-Pad (Up / Down / Left / Right)
@@ -839,8 +905,11 @@ export function NesConsoleModal({
                 <strong>B / X / Left Trigger:</strong> NES <strong>B</strong> (Fire / Run)
               </div>
               <div>
-                • <strong>Quest Y / Right Grip:</strong> NES <strong>START</strong> ·{' '}
-                <strong>Left Grip:</strong> NES <strong>SELECT</strong>
+                • <strong>Quest Y / Right Stick Click:</strong> NES <strong>START</strong> ·{' '}
+                <strong>Left Grip / Left Stick Click:</strong> NES <strong>SELECT</strong>
+              </div>
+              <div>
+                • <strong>Disengage in VR:</strong> Hold <strong>Right Grip</strong> for ~1 second (or click Disengage) to restore VR walk/teleport
               </div>
               <div>
                 • <strong>Keyboard:</strong> Arrow Keys / IJKL = D-Pad · Space/X = A · Z = B · Enter = START · R-Shift = SELECT

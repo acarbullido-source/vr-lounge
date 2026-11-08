@@ -8,7 +8,11 @@ import {
   isNesMediaUrl,
   parseNesCartridgeIdFromUrl,
 } from '../../services/nesEmulator'
-import type { PresenterState } from '../../types/lounge'
+import type {
+  NesMultiplayerState,
+  ParticipantProfile,
+  PresenterState,
+} from '../../types/lounge'
 import { VRKeyboard3D, type VRKeyboardMode } from './VRKeyboard3D'
 
 function formatClock(sec: number): string {
@@ -137,6 +141,7 @@ export interface SpatialControlDockProps {
   localDuration: number
   chatPanelOpen: boolean
   youtubeBrowserOpen: boolean
+  nesLibraryOpen?: boolean
   buildModeOpen: boolean
   wardrobeOpen?: boolean
   youtubeSearchQuery: string
@@ -144,6 +149,7 @@ export interface SpatialControlDockProps {
   keyboardMode: VRKeyboardMode | null
   onSetKeyboardMode: (mode: VRKeyboardMode | null) => void
   onToggleYouTubeBrowser: () => void
+  onToggleNesLibrary?: () => void
   onToggleBuildMode: () => void
   onToggleWardrobe?: () => void
   onSubmitYouTubeSearch: (query: string) => void
@@ -170,6 +176,11 @@ export interface SpatialControlDockProps {
   onToggleFlyMode?: () => void
   onDropToFloor?: () => void
   dockSummonToggleVersion?: number
+  localUserId?: string
+  participants?: ParticipantProfile[]
+  nesMultiplayerState?: NesMultiplayerState
+  engagedNesSlot?: 1 | 2 | null
+  onClaimNesPlayerSlot?: (slot: 1 | 2 | null) => boolean | void
 }
 
 export function SpatialControlDock({
@@ -183,6 +194,7 @@ export function SpatialControlDock({
   localDuration,
   chatPanelOpen,
   youtubeBrowserOpen,
+  nesLibraryOpen = false,
   buildModeOpen,
   wardrobeOpen = false,
   youtubeSearchQuery,
@@ -190,6 +202,7 @@ export function SpatialControlDock({
   keyboardMode,
   onSetKeyboardMode,
   onToggleYouTubeBrowser,
+  onToggleNesLibrary,
   onToggleBuildMode,
   onToggleWardrobe,
   onSubmitYouTubeSearch,
@@ -216,6 +229,11 @@ export function SpatialControlDock({
   onToggleFlyMode,
   onDropToFloor,
   dockSummonToggleVersion = 0,
+  localUserId,
+  participants = [],
+  nesMultiplayerState,
+  engagedNesSlot = null,
+  onClaimNesPlayerSlot,
 }: SpatialControlDockProps) {
   const [minimized, setMinimized] = useState(() => Boolean(isFreeRoaming))
   const prevRoamingRef = useRef(isFreeRoaming)
@@ -419,138 +437,161 @@ export function SpatialControlDock({
         onClick={() => setMinimized(true)}
       />
 
-      {/* Second Row: Dedicated 3D NES Controller & Save Deck when NES is Active, or Video Playback Transport */}
+      {/* Second Row: Dedicated 3D NES Controller Engagement, Library & Save Deck when NES is Active, or Video Playback Transport */}
       {isNesMediaUrl(presenterState.mediaUrl) ? (
-        <group position={[0, 0.035, 0.016]}>
-          {/* NES D-Pad 3D Buttons */}
-          <DockButton
-            label="◀"
-            sublabel="Left"
-            position={[-0.555, 0, 0]}
-            width={0.084}
-            height={0.092}
-            variant="active"
-            onPointerDown={() => getNesEmulator().setButtonState('left', true)}
-            onPointerUp={() => getNesEmulator().setButtonState('left', false)}
-            onClick={() => getNesEmulator().tapButton('left')}
-          />
-          <DockButton
-            label="▲"
-            sublabel="Up"
-            position={[-0.463, 0, 0]}
-            width={0.084}
-            height={0.092}
-            variant="active"
-            onPointerDown={() => getNesEmulator().setButtonState('up', true)}
-            onPointerUp={() => getNesEmulator().setButtonState('up', false)}
-            onClick={() => getNesEmulator().tapButton('up')}
-          />
-          <DockButton
-            label="▼"
-            sublabel="Down"
-            position={[-0.371, 0, 0]}
-            width={0.084}
-            height={0.092}
-            variant="active"
-            onPointerDown={() => getNesEmulator().setButtonState('down', true)}
-            onPointerUp={() => getNesEmulator().setButtonState('down', false)}
-            onClick={() => getNesEmulator().tapButton('down')}
-          />
-          <DockButton
-            label="▶"
-            sublabel="Right"
-            position={[-0.279, 0, 0]}
-            width={0.084}
-            height={0.092}
-            variant="active"
-            onPointerDown={() => getNesEmulator().setButtonState('right', true)}
-            onPointerUp={() => getNesEmulator().setButtonState('right', false)}
-            onClick={() => getNesEmulator().tapButton('right')}
-          />
+        (() => {
+          const activeIds = new Set(participants.map((p) => p.userId))
+          const p1Id =
+            nesMultiplayerState?.player1Id &&
+            (nesMultiplayerState.player1Id === localUserId ||
+              activeIds.size === 0 ||
+              activeIds.has(nesMultiplayerState.player1Id))
+              ? nesMultiplayerState.player1Id
+              : null
+          const p2Id =
+            nesMultiplayerState?.player2Id &&
+            (nesMultiplayerState.player2Id === localUserId ||
+              activeIds.size === 0 ||
+              activeIds.has(nesMultiplayerState.player2Id))
+              ? nesMultiplayerState.player2Id
+              : null
+          const isLocalP1 =
+            engagedNesSlot === 1 || (Boolean(localUserId) && p1Id === localUserId)
+          const isLocalP2 =
+            engagedNesSlot === 2 || (Boolean(localUserId) && p2Id === localUserId)
+          const isP1Locked = Boolean(p1Id && p1Id !== localUserId)
+          const isP2Locked = Boolean(p2Id && p2Id !== localUserId)
 
-          {/* SELECT & START */}
-          <DockButton
-            label="SEL"
-            sublabel="Mode"
-            position={[-0.175, 0, 0]}
-            width={0.1}
-            height={0.092}
-            variant="default"
-            onPointerDown={() => getNesEmulator().setButtonState('select', true)}
-            onPointerUp={() => getNesEmulator().setButtonState('select', false)}
-            onClick={() => getNesEmulator().tapButton('select')}
-          />
-          <DockButton
-            label="START"
-            sublabel="Play"
-            position={[-0.055, 0, 0]}
-            width={0.118}
-            height={0.092}
-            variant="primary"
-            onPointerDown={() => getNesEmulator().setButtonState('start', true)}
-            onPointerUp={() => getNesEmulator().setButtonState('start', false)}
-            onClick={() => getNesEmulator().tapButton('start')}
-          />
+          return (
+            <group position={[0, 0.035, 0.016]}>
+              {/* Engage / Disengage Player 1 Controllers */}
+              <DockButton
+                label={
+                  isLocalP1
+                    ? '🟢 P1 Active'
+                    : isP1Locked
+                      ? '🔒 P1 Locked'
+                      : '🎮 Engage P1'
+                }
+                sublabel={
+                  isLocalP1
+                    ? 'Hold R-Grip=Exit'
+                    : isP1Locked
+                      ? (nesMultiplayerState?.player1Name ?? 'In Use').slice(0, 10)
+                      : 'Quest Pad → P1'
+                }
+                position={[-0.495, 0, 0]}
+                width={0.195}
+                height={0.092}
+                variant={isLocalP1 ? 'primary' : isP1Locked ? 'default' : 'active'}
+                disabled={isP1Locked}
+                onClick={() => {
+                  onClaimNesPlayerSlot?.(isLocalP1 ? null : 1)
+                }}
+              />
 
-          {/* B & A Action Buttons */}
-          <DockButton
-            label="B"
-            sublabel="Fire/Run"
-            position={[0.068, 0, 0]}
-            width={0.104}
-            height={0.092}
-            variant="danger"
-            onPointerDown={() => getNesEmulator().setButtonState('b', true)}
-            onPointerUp={() => getNesEmulator().setButtonState('b', false)}
-            onClick={() => getNesEmulator().tapButton('b')}
-          />
-          <DockButton
-            label="A"
-            sublabel="Jump"
-            position={[0.182, 0, 0]}
-            width={0.104}
-            height={0.092}
-            variant="danger"
-            onPointerDown={() => getNesEmulator().setButtonState('a', true)}
-            onPointerUp={() => getNesEmulator().setButtonState('a', false)}
-            onClick={() => getNesEmulator().tapButton('a')}
-          />
+              {/* Engage / Disengage Player 2 Controllers */}
+              <DockButton
+                label={
+                  isLocalP2
+                    ? '🟢 P2 Active'
+                    : isP2Locked
+                      ? '🔒 P2 Locked'
+                      : '🎮 Engage P2'
+                }
+                sublabel={
+                  isLocalP2
+                    ? 'Hold R-Grip=Exit'
+                    : isP2Locked
+                      ? (nesMultiplayerState?.player2Name ?? 'In Use').slice(0, 10)
+                      : 'Quest Pad → P2'
+                }
+                position={[-0.285, 0, 0]}
+                width={0.195}
+                height={0.092}
+                variant={isLocalP2 ? 'primary' : isP2Locked ? 'default' : 'active'}
+                disabled={isP2Locked}
+                onClick={() => {
+                  onClaimNesPlayerSlot?.(isLocalP2 ? null : 2)
+                }}
+              />
 
-          {/* Save State, Load State & Reset Cartridge */}
-          <DockButton
-            label="💾 Save"
-            sublabel="Slot 1"
-            position={[0.302, 0, 0]}
-            width={0.114}
-            height={0.092}
-            variant="active"
-            onClick={() => {
-              void getNesEmulator().saveSlot('slot-1')
-            }}
-          />
-          <DockButton
-            label="📂 Load"
-            sublabel="Resume"
-            position={[0.424, 0, 0]}
-            width={0.114}
-            height={0.092}
-            variant="default"
-            onClick={() => {
-              void getNesEmulator().resumeMostRecentSave()
-            }}
-          />
-          <DockButton
-            label="↺ ROM"
-            sublabel="Reset"
-            position={[0.542, 0, 0]}
-            width={0.098}
-            height={0.092}
-            variant="default"
-            onClick={() => {
-              getNesEmulator().resetCartridge()
-            }}
-          />
-        </group>
+              {/* Open 3D VR NES ROM Library (36 Games) */}
+              <DockButton
+                label={nesLibraryOpen ? '🕹 Hide ROMs' : '🕹 36 ROMs'}
+                sublabel="VR Library"
+                position={[-0.088, 0, 0]}
+                width={0.165}
+                height={0.092}
+                variant={nesLibraryOpen ? 'primary' : 'danger'}
+                onClick={() => {
+                  onToggleNesLibrary?.()
+                }}
+              />
+
+              {/* START */}
+              <DockButton
+                label="START"
+                sublabel="Play/Pause"
+                position={[0.072, 0, 0]}
+                width={0.118}
+                height={0.092}
+                variant="primary"
+                onPointerDown={() => getNesEmulator().setButtonState('start', true)}
+                onPointerUp={() => getNesEmulator().setButtonState('start', false)}
+                onClick={() => getNesEmulator().tapButton('start')}
+              />
+
+              {/* B & A Action Buttons */}
+              <DockButton
+                label="B"
+                sublabel="Fire/Run"
+                position={[0.19, 0, 0]}
+                width={0.095}
+                height={0.092}
+                variant="danger"
+                onPointerDown={() => getNesEmulator().setButtonState('b', true)}
+                onPointerUp={() => getNesEmulator().setButtonState('b', false)}
+                onClick={() => getNesEmulator().tapButton('b')}
+              />
+              <DockButton
+                label="A"
+                sublabel="Jump"
+                position={[0.295, 0, 0]}
+                width={0.095}
+                height={0.092}
+                variant="danger"
+                onPointerDown={() => getNesEmulator().setButtonState('a', true)}
+                onPointerUp={() => getNesEmulator().setButtonState('a', false)}
+                onClick={() => getNesEmulator().tapButton('a')}
+              />
+
+              {/* Save State & Load State */}
+              <DockButton
+                label="💾 Save"
+                sublabel="Slot 1"
+                position={[0.41, 0, 0]}
+                width={0.112}
+                height={0.092}
+                variant="active"
+                onClick={() => {
+                  void getNesEmulator().saveSlot('slot-1')
+                }}
+              />
+              <DockButton
+                label="📂 Load"
+                sublabel="Resume"
+                position={[0.532, 0, 0]}
+                width={0.112}
+                height={0.092}
+                variant="default"
+                onClick={() => {
+                  void getNesEmulator().resumeMostRecentSave()
+                }}
+              />
+            </group>
+          )
+        })()
       ) : (
         <>
           <DockButton
@@ -814,12 +855,20 @@ export function SpatialControlDock({
             onClick={() => onSelectSeat('wing:deck-chair-1')}
           />
           <DockButton
-            label={isNesMediaUrl(presenterState.mediaUrl) ? '🕹 Next ROM' : '🕹 Play NES'}
+            label={nesLibraryOpen ? '🕹 Hide NES' : '🕹 NES ROMs'}
             position={[0.495, -0.096, 0.008]}
             width={0.185}
             height={0.064}
-            variant={isNesMediaUrl(presenterState.mediaUrl) ? 'primary' : 'danger'}
+            variant={
+              nesLibraryOpen || isNesMediaUrl(presenterState.mediaUrl)
+                ? 'primary'
+                : 'danger'
+            }
             onClick={() => {
+              if (onToggleNesLibrary) {
+                onToggleNesLibrary()
+                return
+              }
               if (!isLocalPresenter && canTakeControl) {
                 onTakeControl()
               }

@@ -533,19 +533,30 @@ function createSafeCanvas(width: number, height: number): {
 
 export type NesConsumerId = 'screen' | 'modal' | 'vr-console'
 
+const MAX_AUDIO_LEAD_SAMPLES = 1800
+const BUTTON_BIT_BY_ID: Record<NesButtonId, number> = {
+  a: 1 << 0,
+  b: 1 << 1,
+  select: 1 << 2,
+  start: 1 << 3,
+  up: 1 << 4,
+  down: 1 << 5,
+  left: 1 << 6,
+  right: 1 << 7,
+}
+
 class NesEmulatorSingleton {
   public readonly canvas: HTMLCanvasElement
   public readonly texture: THREE.CanvasTexture
   private readonly ctx: CanvasRenderingContext2D
   private readonly romImageData: ImageData
   private readonly romBuf32: Uint32Array
-  private readonly offscreenRomCanvas: HTMLCanvasElement
-  private readonly offscreenRomCtx: CanvasRenderingContext2D
   private readonly thumbCanvas: HTMLCanvasElement
   private readonly thumbCtx: CanvasRenderingContext2D
 
   private nesCore: NES | null = null
   private romLoaded = false
+  private frameDirty = false
   private loadingRomId: string | null = null
   private activeCartridge: NesCartridgeMeta = NES_LIBRARY_CARTRIDGES[0]
   private customRomName: string | null = null
@@ -558,8 +569,9 @@ class NesEmulatorSingleton {
   private paused = false
   private soundEnabled = true
   private masterVolume = 0.75
+  private targetSampleRate = 44100
 
-  // Real NES PAPU WebAudio ring buffer
+  // Real NES PAPU WebAudio low-latency ring buffer
   private audioCtx: AudioContext | null = null
   private scriptNode: ScriptProcessorNode | null = null
   private gainNode: GainNode | null = null
@@ -568,26 +580,25 @@ class NesEmulatorSingleton {
   private audioSamplesR = new Float32Array(AUDIO_BUFFER_SIZE)
   private audioWriteIdx = 0
   private audioReadIdx = 0
+  private lastSampleL = 0
+  private lastSampleR = 0
 
-  // Two-Player & Local Input Routing
-  // localInputPlayer = 1 when solo or P1 host; 2 when playing as Player 2 from a second headset
+  // Explicit Controller Engagement & Two-Player Input Routing
+  // engagedPlayerSlot = null when Quest controllers / keyboard are in normal VR locomotion mode;
+  // 1 or 2 when the user has explicitly engaged Player 1 or Player 2 Nintendo controllers!
+  private engagedPlayerSlot: 1 | 2 | null = null
   private localInputPlayer: 1 | 2 = 1
   private localInputSeq = 0
   private lastBroadcastLocalMask = 0
 
-  // Local input sources (merged and routed to `this.localInputPlayer`)
-  private uiHeldButtons = new Set<NesButtonId>()
-  private gamepadHeldButtons = new Set<NesButtonId>()
-  // Optional second local keyboard/gamepad on same device (always routed to Player 2)
-  private localSecondaryP2Buttons = new Set<NesButtonId>()
-
-  // Remote peer input masks (from WebRTC / MQTT room channel)
-  private remoteP1Buttons = new Set<NesButtonId>()
-  private remoteP2Buttons = new Set<NesButtonId>()
-
-  // Currently applied button states inside jsnes Controller 1 & Controller 2
-  private appliedP1Buttons = new Set<NesButtonId>()
-  private appliedP2Buttons = new Set<NesButtonId>()
+  // Zero-allocation 8-bit button bitmasks
+  private uiHeldMask = 0
+  private gamepadHeldMask = 0
+  private localSecondaryP2Mask = 0
+  private remoteP1Mask = 0
+  private remoteP2Mask = 0
+  private appliedP1Mask = 0
+  private appliedP2Mask = 0
 
   private activeConsumers = new Set<NesConsumerId>()
   private inputMaskListeners = new Set<
@@ -596,15 +607,12 @@ class NesEmulatorSingleton {
   private saveStateListeners = new Set<(cartridgeId: string) => void>()
 
   constructor() {
-    const main = createSafeCanvas(512, 480)
+    // Native 256x240 canvas: eliminates offscreen canvas + CPU drawImage upscale and cuts GPU texture upload bandwidth by 75%
+    const main = createSafeCanvas(256, 240)
     this.canvas = main.canvas
     this.ctx = main.ctx
     this.ctx.imageSmoothingEnabled = false
-
-    const offscreen = createSafeCanvas(256, 240)
-    this.offscreenRomCanvas = offscreen.canvas
-    this.offscreenRomCtx = offscreen.ctx
-    this.romImageData = offscreen.imageData
+    this.romImageData = main.imageData
     this.romBuf32 = new Uint32Array(this.romImageData.data.buffer)
 
     const thumb = createSafeCanvas(96, 90)
@@ -627,28 +635,39 @@ class NesEmulatorSingleton {
     }
   }
 
+  private flushPendingFrameToTexture() {
+    if (!this.frameDirty) return
+    this.frameDirty = false
+    this.ctx.putImageData(this.romImageData, 0, 0)
+    this.texture.needsUpdate = true
+  }
+
   private createNesCore(): NES {
+    const sampleRate = this.audioCtx?.sampleRate || this.targetSampleRate || 44100
+    this.targetSampleRate = sampleRate
+    const buf32 = this.romBuf32
     return new NES({
+      sampleRate,
       onFrame: (frameBuffer: ArrayLike<number>) => {
-        for (let i = 0; i < 256 * 240; i++) {
-          this.romBuf32[i] = 0xff000000 | frameBuffer[i]
+        for (let i = 0; i < 61440; i++) {
+          buf32[i] = 0xff000000 | frameBuffer[i]
         }
-        this.offscreenRomCtx.putImageData(this.romImageData, 0, 0)
-        this.ctx.imageSmoothingEnabled = false
-        this.ctx.drawImage(this.offscreenRomCanvas, 0, 0, 512, 480)
-        this.texture.needsUpdate = true
+        this.frameDirty = true
       },
       onAudioSample: (left: number, right: number) => {
         if (!this.soundEnabled || this.masterVolume <= 0.001) return
-        const nextWrite = (this.audioWriteIdx + 1) & AUDIO_BUFFER_MASK
-        if (nextWrite === this.audioReadIdx) {
+        const writeIdx = this.audioWriteIdx
+        const nextWrite = (writeIdx + 1) & AUDIO_BUFFER_MASK
+        // Prevent ring-buffer lead from exceeding ~38ms so audio never lags behind video
+        const buffered = (writeIdx - this.audioReadIdx) & AUDIO_BUFFER_MASK
+        if (buffered >= MAX_AUDIO_LEAD_SAMPLES || nextWrite === this.audioReadIdx) {
           this.audioReadIdx = (this.audioReadIdx + 1) & AUDIO_BUFFER_MASK
         }
-        this.audioSamplesL[this.audioWriteIdx] = left
-        this.audioSamplesR[this.audioWriteIdx] = right
+        this.audioSamplesL[writeIdx] = left
+        this.audioSamplesR[writeIdx] = right
         this.audioWriteIdx = nextWrite
       },
-    })
+    } as never)
   }
 
   private ensureAudioOutput() {
@@ -660,30 +679,54 @@ class NesEmulatorSingleton {
           (window as unknown as { webkitAudioContext?: typeof AudioContext })
             .webkitAudioContext
         if (!Ctor) return
-        this.audioCtx = new Ctor({ sampleRate: 44100 })
+        this.audioCtx = new Ctor({ latencyHint: 'interactive' })
+        this.targetSampleRate = this.audioCtx.sampleRate || 44100
+        // Synchronize JSNES PAPU sample rate to exact hardware AudioContext rate so buffer never starves or drifts
+        const papu = (
+          this.nesCore as unknown as {
+            papu?: { sampleRate?: number; setSampleRate?: (rate: number, reset: boolean) => void }
+          }
+        )?.papu
+        if (
+          papu &&
+          typeof papu.setSampleRate === 'function' &&
+          papu.sampleRate !== this.targetSampleRate
+        ) {
+          papu.setSampleRate(this.targetSampleRate, false)
+        }
+
         this.gainNode = this.audioCtx.createGain()
         this.gainNode.gain.value = this.soundEnabled ? this.masterVolume * 0.35 : 0
-        this.scriptNode = this.audioCtx.createScriptProcessor(1024, 0, 2)
+        // 512-sample buffer (~10.6ms at 48kHz) for crisp, zero-lag retro audio
+        this.scriptNode = this.audioCtx.createScriptProcessor(512, 0, 2)
         this.scriptNode.onaudioprocess = (e) => {
           const outL = e.outputBuffer.getChannelData(0)
           const outR = e.outputBuffer.getChannelData(1)
+          let rIdx = this.audioReadIdx
+          const wIdx = this.audioWriteIdx
+          let sL = this.lastSampleL
+          let sR = this.lastSampleR
+          const active = !this.paused && this.soundEnabled
+
           for (let i = 0; i < outL.length; i++) {
-            if (this.audioReadIdx !== this.audioWriteIdx && !this.paused) {
-              outL[i] = this.audioSamplesL[this.audioReadIdx]
-              outR[i] = this.audioSamplesR[this.audioReadIdx]
-              this.audioReadIdx = (this.audioReadIdx + 1) & AUDIO_BUFFER_MASK
+            if (active && rIdx !== wIdx) {
+              sL = this.audioSamplesL[rIdx]
+              sR = this.audioSamplesR[rIdx]
+              rIdx = (rIdx + 1) & AUDIO_BUFFER_MASK
             } else {
-              outL[i] = 0
-              outR[i] = 0
+              // Smooth exponential decay on underrun eliminates audible clicks/pops
+              sL *= 0.96
+              sR *= 0.96
             }
+            outL[i] = sL
+            outR[i] = sR
           }
+          this.audioReadIdx = rIdx
+          this.lastSampleL = sL
+          this.lastSampleR = sR
         }
         this.scriptNode.connect(this.gainNode)
         this.gainNode.connect(this.audioCtx.destination)
-        if (typeof this.audioCtx.createMediaStreamDestination === 'function') {
-          this.streamDestNode = this.audioCtx.createMediaStreamDestination()
-          this.gainNode.connect(this.streamDestNode)
-        }
       }
       if (this.audioCtx.state === 'suspended') {
         void this.audioCtx.resume().catch(() => undefined)
@@ -699,27 +742,27 @@ class NesEmulatorSingleton {
   private renderBootSplash(statusLine: string) {
     const ctx = this.ctx
     ctx.fillStyle = '#070B14'
-    ctx.fillRect(0, 0, 512, 480)
+    ctx.fillRect(0, 0, 256, 240)
     ctx.strokeStyle = this.activeCartridge.accentColor
-    ctx.lineWidth = 4
-    ctx.strokeRect(18, 18, 476, 444)
+    ctx.lineWidth = 2
+    ctx.strokeRect(8, 8, 240, 224)
 
     ctx.fillStyle = this.activeCartridge.accentColor
-    ctx.font = 'bold 24px monospace'
+    ctx.font = 'bold 12px monospace'
     ctx.textAlign = 'center'
-    ctx.fillText(this.activeCartridge.title.toUpperCase(), 256, 190)
+    ctx.fillText(this.activeCartridge.title.toUpperCase(), 128, 95)
 
     ctx.fillStyle = '#E2E8F0'
-    ctx.font = 'bold 14px monospace'
+    ctx.font = 'bold 9px monospace'
     ctx.fillText(
       `${this.activeCartridge.publisher} · ${this.activeCartridge.year}`,
-      256,
-      225,
+      128,
+      115,
     )
 
     ctx.fillStyle = '#38BDF8'
-    ctx.font = '13px monospace'
-    ctx.fillText(statusLine, 256, 275)
+    ctx.font = '9px monospace'
+    ctx.fillText(statusLine, 128, 142)
     ctx.textAlign = 'left'
     this.texture.needsUpdate = true
   }
@@ -829,8 +872,9 @@ class NesEmulatorSingleton {
       this.loadingRomId = null
       this.framesSteppedOnCurrentCartridge = 0
       this.lastAutoSaveAt = Date.now()
-      this.appliedP1Buttons.clear()
-      this.appliedP2Buttons.clear()
+      this.appliedP1Mask = 0
+      this.appliedP2Mask = 0
+      this.audioReadIdx = this.audioWriteIdx
 
       if (!options?.skipAutoBatteryRestore) {
         this.restoreBatterySram(found.id)
@@ -840,11 +884,12 @@ class NesEmulatorSingleton {
       for (let i = 0; i < 60; i++) {
         nes.frame()
       }
-      this.texture.needsUpdate = true
+      this.flushPendingFrameToTexture()
 
       if (options?.autoResumeSave) {
         await this.resumeMostRecentSave(found.id)
       }
+      this.notifySaveStateListeners(found.id)
     } catch (err) {
       console.error('Failed to load bundled NES ROM:', err)
       this.loadingRomId = null
@@ -875,14 +920,16 @@ class NesEmulatorSingleton {
       }
       this.paused = false
       this.framesSteppedOnCurrentCartridge = 0
-      this.appliedP1Buttons.clear()
-      this.appliedP2Buttons.clear()
+      this.appliedP1Mask = 0
+      this.appliedP2Mask = 0
+      this.audioReadIdx = this.audioWriteIdx
       this.ensureAudioOutput()
       this.ensureLoopRunning()
       for (let i = 0; i < 60; i++) {
         nes.frame()
       }
-      this.texture.needsUpdate = true
+      this.flushPendingFrameToTexture()
+      this.notifySaveStateListeners(this.activeCartridge.id)
       return true
     } catch (err) {
       console.warn('Failed to parse binary .nes ROM:', err)
@@ -970,10 +1017,10 @@ class NesEmulatorSingleton {
         livePpu.setMirroring(snap.ppu.currentMirroring)
       }
 
-      this.appliedP1Buttons.clear()
-      this.appliedP2Buttons.clear()
+      this.appliedP1Mask = 0
+      this.appliedP2Mask = 0
       this.nesCore.frame()
-      this.texture.needsUpdate = true
+      this.flushPendingFrameToTexture()
       return true
     } catch (err) {
       console.warn('Failed to import NES save state:', err)
@@ -984,7 +1031,7 @@ class NesEmulatorSingleton {
   private captureThumbnailDataUrl(): string | undefined {
     try {
       this.thumbCtx.imageSmoothingEnabled = false
-      this.thumbCtx.drawImage(this.offscreenRomCanvas, 0, 0, 96, 90)
+      this.thumbCtx.drawImage(this.canvas, 0, 0, 96, 90)
       return this.thumbCanvas.toDataURL('image/jpeg', 0.68)
     } catch {
       return undefined
@@ -1073,13 +1120,39 @@ class NesEmulatorSingleton {
   }
 
   /**
+   * Explicitly engages (`1` or `2`) or disengages (`null`) the local user's Quest controllers & keyboard
+   * as the active Nintendo controller for Player 1 or Player 2.
+   */
+  public setEngagedPlayerSlot(slot: 1 | 2 | null) {
+    if (this.engagedPlayerSlot === slot) return
+    this.engagedPlayerSlot = slot
+    if (slot === 1 || slot === 2) {
+      this.localInputPlayer = slot
+      this.ensureAudioOutput()
+    } else {
+      // Clear held gamepad/keyboard inputs when disengaging so no button stays stuck
+      this.uiHeldMask = 0
+      this.gamepadHeldMask = 0
+      this.localSecondaryP2Mask = 0
+    }
+    this.lastBroadcastLocalMask = -1
+    this.syncControllerStateToCore()
+    this.notifySaveStateListeners(this.activeCartridge.id)
+  }
+
+  public getEngagedPlayerSlot(): 1 | 2 | null {
+    return this.engagedPlayerSlot
+  }
+
+  /**
    * Sets which NES Controller port (`1` or `2`) the local user's keyboard, UI pad, and Quest VR controllers drive.
    */
   public setLocalInputPlayer(player: 1 | 2) {
     if (this.localInputPlayer === player) return
     this.localInputPlayer = player
-    this.lastBroadcastLocalMask = 0
+    this.lastBroadcastLocalMask = -1
     this.syncControllerStateToCore()
+    this.notifySaveStateListeners(this.activeCartridge.id)
   }
 
   public getLocalInputPlayer(): 1 | 2 {
@@ -1090,18 +1163,17 @@ class NesEmulatorSingleton {
    * Sets remote peer button bitmask for Controller 1 or Controller 2 (used in 2-player cross-headset mode).
    */
   public setRemotePlayerMask(player: 1 | 2, mask: number) {
-    const decoded = decodeNesButtonsMask(mask)
     if (player === 1) {
-      this.remoteP1Buttons = decoded
+      this.remoteP1Mask = mask & 0xff
     } else {
-      this.remoteP2Buttons = decoded
+      this.remoteP2Mask = mask & 0xff
     }
     this.syncControllerStateToCore()
   }
 
   public clearRemotePlayerInputs() {
-    this.remoteP1Buttons.clear()
-    this.remoteP2Buttons.clear()
+    this.remoteP1Mask = 0
+    this.remoteP2Mask = 0
     this.syncControllerStateToCore()
   }
 
@@ -1115,18 +1187,11 @@ class NesEmulatorSingleton {
   }
 
   public getPlayerButtonsMask(player: 1 | 2): number {
-    return encodeNesButtonsMask(
-      player === 1 ? this.appliedP1Buttons : this.appliedP2Buttons,
-    )
+    return player === 1 ? this.appliedP1Mask : this.appliedP2Mask
   }
 
   private syncControllerStateToCore() {
-    // Compute combined local primary buttons
-    const localPrimary = new Set<NesButtonId>()
-    for (const b of this.uiHeldButtons) localPrimary.add(b)
-    for (const b of this.gamepadHeldButtons) localPrimary.add(b)
-
-    const localMask = encodeNesButtonsMask(localPrimary)
+    const localMask = (this.uiHeldMask | this.gamepadHeldMask) & 0xff
     if (localMask !== this.lastBroadcastLocalMask) {
       this.lastBroadcastLocalMask = localMask
       this.localInputSeq++
@@ -1137,40 +1202,42 @@ class NesEmulatorSingleton {
 
     if (!this.romLoaded || !this.nesCore) return
 
-    for (const btn of NES_BUTTON_ORDER) {
-      // Controller 1: Local primary (when localInputPlayer === 1) OR remote P1
-      const p1Pressed =
-        (this.localInputPlayer === 1 && localPrimary.has(btn)) ||
-        this.remoteP1Buttons.has(btn)
-      const p1WasPressed = this.appliedP1Buttons.has(btn)
-      if (p1Pressed !== p1WasPressed) {
-        const code = JSNES_BUTTON_MAP[btn]
-        if (p1Pressed) {
+    const targetP1Mask =
+      ((this.localInputPlayer === 1 ? localMask : 0) | this.remoteP1Mask) & 0xff
+    const targetP2Mask =
+      ((this.localInputPlayer === 2 ? localMask : 0) |
+        this.remoteP2Mask |
+        this.localSecondaryP2Mask) &
+      0xff
+
+    const diffP1 = targetP1Mask ^ this.appliedP1Mask
+    const diffP2 = targetP2Mask ^ this.appliedP2Mask
+    if (diffP1 === 0 && diffP2 === 0) return
+
+    for (let i = 0; i < NES_BUTTON_ORDER.length; i++) {
+      const btn = NES_BUTTON_ORDER[i]
+      const bit = 1 << i
+      const code = JSNES_BUTTON_MAP[btn]
+
+      if (diffP1 & bit) {
+        if (targetP1Mask & bit) {
           this.nesCore.buttonDown(1, code as never)
-          this.appliedP1Buttons.add(btn)
         } else {
           this.nesCore.buttonUp(1, code as never)
-          this.appliedP1Buttons.delete(btn)
         }
       }
 
-      // Controller 2: Local primary (when localInputPlayer === 2) OR remote P2 OR local secondary P2
-      const p2Pressed =
-        (this.localInputPlayer === 2 && localPrimary.has(btn)) ||
-        this.remoteP2Buttons.has(btn) ||
-        this.localSecondaryP2Buttons.has(btn)
-      const p2WasPressed = this.appliedP2Buttons.has(btn)
-      if (p2Pressed !== p2WasPressed) {
-        const code = JSNES_BUTTON_MAP[btn]
-        if (p2Pressed) {
+      if (diffP2 & bit) {
+        if (targetP2Mask & bit) {
           this.nesCore.buttonDown(2, code as never)
-          this.appliedP2Buttons.add(btn)
         } else {
           this.nesCore.buttonUp(2, code as never)
-          this.appliedP2Buttons.delete(btn)
         }
       }
     }
+
+    this.appliedP1Mask = targetP1Mask
+    this.appliedP2Mask = targetP2Mask
   }
 
   public setButtonState(
@@ -1179,17 +1246,18 @@ class NesEmulatorSingleton {
     explicitPlayer?: 1 | 2,
   ) {
     this.ensureAudioOutput()
+    const bit = BUTTON_BIT_BY_ID[btn] ?? 0
     if (explicitPlayer === 2 && this.localInputPlayer === 1) {
       if (pressed) {
-        this.localSecondaryP2Buttons.add(btn)
+        this.localSecondaryP2Mask |= bit
       } else {
-        this.localSecondaryP2Buttons.delete(btn)
+        this.localSecondaryP2Mask &= ~bit
       }
     } else {
       if (pressed) {
-        this.uiHeldButtons.add(btn)
+        this.uiHeldMask |= bit
       } else {
-        this.uiHeldButtons.delete(btn)
+        this.uiHeldMask &= ~bit
       }
     }
     this.syncControllerStateToCore()
@@ -1207,23 +1275,24 @@ class NesEmulatorSingleton {
 
   /**
    * Maps Meta Quest Touch Plus Controllers AND standard HTML5 Gamepads (`navigator.getGamepads()`)
-   * directly to the local user's active NES Controller slot (`Controller 1` or `Controller 2` in 2-Player mode)!
+   * to the local user's engaged NES Controller slot (`Controller 1` or `Controller 2`) with zero heap allocations.
+   * Note: Right Grip (`xr-standard-squeeze` on right controller) is reserved for holding to disengage the NES controller!
    */
   public pollQuestAndStandardGamepads(
     leftController?: XRControllerState,
     rightController?: XRControllerState,
-    questNesInputEnabled = true,
+    questNesInputEnabled = false,
   ) {
-    const nextPad = new Set<NesButtonId>()
-    const nextPadP2 = new Set<NesButtonId>()
+    let nextPadMask = 0
+    let nextPadP2Mask = 0
 
-    // 1. Meta Quest WebXR Controllers
+    // 1. Meta Quest WebXR Controllers (ONLY active when local user has engaged Player 1 or Player 2!)
     if (questNesInputEnabled && (leftController || rightController)) {
       const stick = readControllerThumbstick(leftController ?? rightController)
-      if (stick.y < -0.35) nextPad.add('up')
-      if (stick.y > 0.35) nextPad.add('down')
-      if (stick.x < -0.35) nextPad.add('left')
-      if (stick.x > 0.35) nextPad.add('right')
+      if (stick.y < -0.35) nextPadMask |= BUTTON_BIT_BY_ID.up
+      if (stick.y > 0.35) nextPadMask |= BUTTON_BIT_BY_ID.down
+      if (stick.x < -0.35) nextPadMask |= BUTTON_BIT_BY_ID.left
+      if (stick.x > 0.35) nextPadMask |= BUTTON_BIT_BY_ID.right
 
       // NES A: Right A button or Right Trigger (index 0)
       if (
@@ -1234,7 +1303,7 @@ class NesEmulatorSingleton {
           0,
         )
       ) {
-        nextPad.add('a')
+        nextPadMask |= BUTTON_BIT_BY_ID.a
       }
 
       // NES B: Right B button, Left X button, or Left Trigger (index 0)
@@ -1243,19 +1312,20 @@ class NesEmulatorSingleton {
         isControllerButtonPressed(leftController, ['x-button'], 4) ||
         isControllerButtonPressed(leftController, ['xr-standard-trigger'], 0)
       ) {
-        nextPad.add('b')
+        nextPadMask |= BUTTON_BIT_BY_ID.b
       }
 
-      // NES START: Left Y button or Right Squeeze (index 1)
+      // NES START: Left Y button or Right Thumbstick Click (index 3)
+      // (Right Grip is reserved for Hold-to-Disengage NES Controller!)
       if (
         isControllerButtonPressed(leftController, ['y-button'], 5) ||
         isControllerButtonPressed(
           rightController,
-          ['xr-standard-squeeze'],
-          1,
+          ['xr-standard-thumbstick'],
+          3,
         )
       ) {
-        nextPad.add('start')
+        nextPadMask |= BUTTON_BIT_BY_ID.start
       }
 
       // NES SELECT: Left Squeeze (index 1) or Left Thumbstick Click (index 3)
@@ -1271,12 +1341,13 @@ class NesEmulatorSingleton {
           3,
         )
       ) {
-        nextPad.add('select')
+        nextPadMask |= BUTTON_BIT_BY_ID.select
       }
     }
 
-    // 2. Standard Browser Gamepad API (Bluetooth Xbox / DualSense / 8BitDo / Quest WebXR Gamepads)
+    // 2. Standard Browser Gamepad API (Bluetooth Xbox / DualSense / 8BitDo) when engaged or modal open
     if (
+      (questNesInputEnabled || this.activeConsumers.has('modal')) &&
       typeof navigator !== 'undefined' &&
       typeof navigator.getGamepads === 'function'
     ) {
@@ -1285,42 +1356,53 @@ class NesEmulatorSingleton {
         let activeGamepadIdx = 0
         for (const pad of pads) {
           if (!pad || !pad.connected) continue
-          const targetSet = activeGamepadIdx === 0 ? nextPad : nextPadP2
-          activeGamepadIdx++
+          let padMask = 0
 
           const axX = pad.axes[0] ?? 0
           const axY = pad.axes[1] ?? 0
-          if (axY < -0.4 || pad.buttons[12]?.pressed) targetSet.add('up')
-          if (axY > 0.4 || pad.buttons[13]?.pressed) targetSet.add('down')
-          if (axX < -0.4 || pad.buttons[14]?.pressed) targetSet.add('left')
-          if (axX > 0.4 || pad.buttons[15]?.pressed) targetSet.add('right')
+          if (axY < -0.4 || pad.buttons[12]?.pressed) padMask |= BUTTON_BIT_BY_ID.up
+          if (axY > 0.4 || pad.buttons[13]?.pressed) padMask |= BUTTON_BIT_BY_ID.down
+          if (axX < -0.4 || pad.buttons[14]?.pressed) padMask |= BUTTON_BIT_BY_ID.left
+          if (axX > 0.4 || pad.buttons[15]?.pressed) padMask |= BUTTON_BIT_BY_ID.right
 
-          if (pad.buttons[0]?.pressed) targetSet.add('a')
+          if (pad.buttons[0]?.pressed) padMask |= BUTTON_BIT_BY_ID.a
           if (
             pad.buttons[1]?.pressed ||
             pad.buttons[2]?.pressed ||
             pad.buttons[3]?.pressed
           ) {
-            targetSet.add('b')
+            padMask |= BUTTON_BIT_BY_ID.b
           }
-          if (pad.buttons[8]?.pressed) targetSet.add('select')
-          if (pad.buttons[9]?.pressed) targetSet.add('start')
+          if (pad.buttons[8]?.pressed) padMask |= BUTTON_BIT_BY_ID.select
+          if (pad.buttons[9]?.pressed) padMask |= BUTTON_BIT_BY_ID.start
+
+          if (activeGamepadIdx === 0) {
+            nextPadMask |= padMask
+          } else {
+            nextPadP2Mask |= padMask
+          }
+          activeGamepadIdx++
         }
       } catch {
         // Ignore gamepad permission errors
       }
     }
 
-    this.gamepadHeldButtons = nextPad
-    for (const btn of nextPadP2) {
-      this.localSecondaryP2Buttons.add(btn)
+    if (
+      this.gamepadHeldMask !== nextPadMask ||
+      this.localSecondaryP2Mask !== nextPadP2Mask
+    ) {
+      this.gamepadHeldMask = nextPadMask
+      this.localSecondaryP2Mask = nextPadP2Mask
+      this.syncControllerStateToCore()
     }
-    this.syncControllerStateToCore()
   }
 
   public resetCartridge() {
     if (this.customRomName && this.nesCore) {
       this.nesCore.reset()
+      this.nesCore.frame()
+      this.flushPendingFrameToTexture()
       return
     }
     void this.loadLibraryCartridgeAsync(this.activeCartridge.id)
@@ -1389,6 +1471,15 @@ class NesEmulatorSingleton {
   public getStream(): MediaStream {
     this.ensureLoopRunning()
     this.ensureAudioOutput()
+    if (
+      !this.streamDestNode &&
+      this.audioCtx &&
+      this.gainNode &&
+      typeof this.audioCtx.createMediaStreamDestination === 'function'
+    ) {
+      this.streamDestNode = this.audioCtx.createMediaStreamDestination()
+      this.gainNode.connect(this.streamDestNode)
+    }
     if (!this.mediaStream) {
       const cap = (
         this.canvas as HTMLCanvasElement & {
@@ -1427,7 +1518,7 @@ class NesEmulatorSingleton {
         this.rafId = null
         return
       }
-      const dt = Math.min(0.05, Math.max(0.001, (now - this.lastTick) / 1000))
+      const dt = Math.min(0.032, Math.max(0.001, (now - this.lastTick) / 1000))
       this.lastTick = now
       // Only step from window.requestAnimationFrame if R3F useFrame (WebXR / 3D Canvas) hasn't stepped in the last 40ms
       if (now - this.lastRenderLoopStepAt > 40) {
@@ -1450,7 +1541,7 @@ class NesEmulatorSingleton {
     if (this.activeConsumers.size > 0 && this.paused) {
       this.paused = false
     }
-    this.stepFrame(Math.min(0.05, Math.max(0.001, dt)))
+    this.stepFrame(Math.min(0.032, Math.max(0.001, dt)))
   }
 
   public stepFrame(dt: number) {
@@ -1459,14 +1550,18 @@ class NesEmulatorSingleton {
     }
     if (!this.romLoaded || !this.nesCore || this.paused) return
 
-    this.frameAccumulator += dt
     const targetFrameTime = 1 / 60.0988
-    let steps = 0
-    while (this.frameAccumulator >= targetFrameTime && steps < 3) {
-      this.frameAccumulator -= targetFrameTime
+    // Clamp accumulator to prevent multi-frame catch-up spirals on mobile VR CPUs
+    this.frameAccumulator = Math.min(
+      targetFrameTime * 1.45,
+      this.frameAccumulator + dt,
+    )
+
+    if (this.frameAccumulator >= targetFrameTime * 0.92) {
+      this.frameAccumulator = Math.max(0, this.frameAccumulator - targetFrameTime)
       this.nesCore.frame()
       this.framesSteppedOnCurrentCartridge++
-      steps++
+      this.flushPendingFrameToTexture()
     }
 
     // Periodic battery SRAM flush every 25 seconds while playing

@@ -210,6 +210,7 @@ export function useRoomSession(
   const roomCustomizationRef = useRef<RoomCustomizationState>(roomCustomization)
   const computedSeatsRef = useRef<ComputedSeat[]>(computedSeats)
   const localProfileRef = useRef<ParticipantProfile>(localProfile)
+  const participantsRef = useRef<ParticipantProfile[]>(participants)
   const roomCodeRef = useRef<string>(roomCode)
 
   useEffect(() => {
@@ -233,10 +234,14 @@ export function useRoomSession(
   }, [localProfile])
 
   useEffect(() => {
+    participantsRef.current = participants
+  }, [participants])
+
+  useEffect(() => {
     roomCodeRef.current = roomCode
   }, [roomCode])
 
-  // Stream local NES controller inputs to peers when participating in a 2-player session
+  // Stream local NES controller inputs to peers when engaged as Player 1 or Player 2
   useEffect(() => {
     const emu = getNesEmulator()
     const unsubscribeInput = emu.onLocalInputMaskChange((player, buttonsMask, seq) => {
@@ -245,7 +250,7 @@ export function useRoomSession(
       const mp = nesMultiplayerStateRef.current
       const isParticipant =
         mp.player1Id === localUserId || mp.player2Id === localUserId
-      if (!isParticipant && !mp.player2Id) return
+      if (!isParticipant && emu.getEngagedPlayerSlot() === null) return
       svc.broadcastNesEvent({
         kind: 'nes-input',
         player,
@@ -616,6 +621,28 @@ export function useRoomSession(
               revision: prev.revision + 1,
             }))
           }
+
+          // If an NES Player 1 or Player 2 controller holder disconnected, release their lock
+          const curNes = nesMultiplayerStateRef.current
+          const p1Gone = Boolean(curNes.player1Id && !activeIds.has(curNes.player1Id))
+          const p2Gone = Boolean(curNes.player2Id && !activeIds.has(curNes.player2Id))
+          if (p1Gone || p2Gone) {
+            if (p1Gone) getNesEmulator().setRemotePlayerMask(1, 0)
+            if (p2Gone) getNesEmulator().setRemotePlayerMask(2, 0)
+            setNesMultiplayerState((prev) => {
+              const next: NesMultiplayerState = {
+                ...prev,
+                player1Id: p1Gone ? null : prev.player1Id,
+                player1Name: p1Gone ? null : prev.player1Name,
+                player2Id: p2Gone ? null : prev.player2Id,
+                player2Name: p2Gone ? null : prev.player2Name,
+                revision: prev.revision + 1,
+                updatedAt: Date.now(),
+              }
+              nesMultiplayerStateRef.current = next
+              return next
+            })
+          }
         },
         onPoseUpdate: (pose) => {
           if (pose.userId !== activeLocalId) {
@@ -653,10 +680,13 @@ export function useRoomSession(
             setNesMultiplayerState((prev) => {
               if (event.state.revision < prev.revision) return prev
               const next = event.state
+              nesMultiplayerStateRef.current = next
               if (next.player2Id === activeLocalId) {
-                emu.setLocalInputPlayer(2)
+                emu.setEngagedPlayerSlot(2)
               } else if (next.player1Id === activeLocalId) {
-                emu.setLocalInputPlayer(1)
+                emu.setEngagedPlayerSlot(1)
+              } else if (emu.getEngagedPlayerSlot() !== null) {
+                emu.setEngagedPlayerSlot(null)
               }
               return next
             })
@@ -778,6 +808,25 @@ export function useRoomSession(
   )
 
   const leaveRoom = useCallback(async () => {
+    const curNes = nesMultiplayerStateRef.current
+    if (curNes.player1Id === localUserId || curNes.player2Id === localUserId) {
+      const nextState: NesMultiplayerState = {
+        ...curNes,
+        player1Id: curNes.player1Id === localUserId ? null : curNes.player1Id,
+        player1Name: curNes.player1Id === localUserId ? null : curNes.player1Name,
+        player2Id: curNes.player2Id === localUserId ? null : curNes.player2Id,
+        player2Name: curNes.player2Id === localUserId ? null : curNes.player2Name,
+        revision: curNes.revision + 1,
+        updatedAt: Date.now(),
+      }
+      nesMultiplayerStateRef.current = nextState
+      setNesMultiplayerState(nextState)
+      serviceRef.current?.broadcastNesEvent({
+        kind: 'nes-multiplayer-state',
+        state: nextState,
+      })
+    }
+    getNesEmulator().setEngagedPlayerSlot(null)
     if (serviceRef.current) {
       await serviceRef.current.disconnect()
       serviceRef.current = null
@@ -788,7 +837,7 @@ export function useRoomSession(
     setConnected(false)
     setParticipants([])
     setPresenterState(createInitialPresenterState())
-  }, [])
+  }, [localUserId])
 
   useEffect(() => {
     return () => {
@@ -1110,11 +1159,36 @@ export function useRoomSession(
   )
 
   const claimNesPlayerSlot = useCallback(
-    (slot: 1 | 2 | null) => {
+    (slot: 1 | 2 | null): boolean => {
       const emu = getNesEmulator()
       const me = localProfileRef.current
       const cur = nesMultiplayerStateRef.current
       const activeCart = emu.getActiveCartridge()
+
+      // Exclusive lock check: while another active player in the room is controlling Player 1 or Player 2,
+      // prevent stealing their controller until they disengage (or leave the room).
+      if (
+        slot === 1 &&
+        cur.player1Id &&
+        cur.player1Id !== localUserId &&
+        participantsRef.current.some((p) => p.userId === cur.player1Id)
+      ) {
+        appendSystemMessage(
+          `🔒 NES Player 1 controllers are currently engaged by ${cur.player1Name || 'another player'}.`,
+        )
+        return false
+      }
+      if (
+        slot === 2 &&
+        cur.player2Id &&
+        cur.player2Id !== localUserId &&
+        participantsRef.current.some((p) => p.userId === cur.player2Id)
+      ) {
+        appendSystemMessage(
+          `🔒 NES Player 2 controllers are currently engaged by ${cur.player2Name || 'another player'}.`,
+        )
+        return false
+      }
 
       let nextP1Id = cur.player1Id
       let nextP1Name = cur.player1Name
@@ -1133,13 +1207,25 @@ export function useRoomSession(
       if (slot === 1) {
         nextP1Id = localUserId
         nextP1Name = me.displayName
-        emu.setLocalInputPlayer(1)
+        emu.setEngagedPlayerSlot(1)
+        appendSystemMessage(
+          '🎮 Engaged NES Player 1 Controllers! (In VR, hold Right Grip for 1s to disengage)',
+        )
       } else if (slot === 2) {
         nextP2Id = localUserId
         nextP2Name = me.displayName
-        emu.setLocalInputPlayer(2)
+        emu.setEngagedPlayerSlot(2)
+        appendSystemMessage(
+          '🎮 Engaged NES Player 2 Controllers! (In VR, hold Right Grip for 1s to disengage)',
+        )
       } else {
-        emu.setLocalInputPlayer(1)
+        const prevSlot = emu.getEngagedPlayerSlot()
+        emu.setEngagedPlayerSlot(null)
+        if (prevSlot !== null) {
+          appendSystemMessage(
+            `🔓 Disengaged NES Player ${prevSlot} Controllers — normal VR locomotion restored.`,
+          )
+        }
       }
 
       const nextState: NesMultiplayerState = {
@@ -1158,8 +1244,9 @@ export function useRoomSession(
         kind: 'nes-multiplayer-state',
         state: nextState,
       })
+      return true
     },
-    [localUserId],
+    [appendSystemMessage, localUserId],
   )
 
   const shareNesCheckpointWithRoom = useCallback(async () => {

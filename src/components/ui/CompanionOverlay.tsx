@@ -2022,39 +2022,118 @@ export function CompanionOverlay({
 
         {/* Center: Live NES Controller & Cartridge Bar when NES is Active, or Synchronized Video Transport */}
         {isNesMediaUrl(presenterState.mediaUrl) ? (
-          <div
-            data-testid="companion-nes-live-controller-bar"
-            className="flex flex-1 flex-wrap items-center justify-center gap-1.5 rounded-xl border border-red-500/40 bg-[#0c111d] px-2.5 py-1.5 min-w-[280px]"
-          >
-            {/* Cartridge Switcher Dropdown */}
-            <select
-              aria-label="Active NES Cartridge"
-              value={
-                parseNesCartridgeIdFromUrl(presenterState.mediaUrl) ??
-                getNesEmulator().getActiveCartridge().id
-              }
-              onChange={(e) => {
-                const nextId = e.target.value
-                const nextCart = NES_LIBRARY_CARTRIDGES.find((c) => c.id === nextId)
-                if (!nextCart) return
-                if (!isLocalPresenter && canTakeControl) {
-                  onTakeControl()
-                }
-                getNesEmulator().loadLibraryCartridge(nextCart.id)
-                onLoadStreamUrl(
-                  `nes://${nextCart.id}`,
-                  `🕹 NES: ${nextCart.title}`,
-                  false,
-                )
-              }}
-              className="max-w-[165px] rounded-lg border border-red-500/40 bg-[#141c2e] px-2 py-1 text-[11px] font-semibold text-amber-300 focus:outline-none"
-            >
-              {NES_LIBRARY_CARTRIDGES.map((c) => (
-                <option key={c.id} value={c.id}>
-                  🕹 {c.title}
-                </option>
-              ))}
-            </select>
+          (() => {
+            const engagedSlot = getNesEmulator().getEngagedPlayerSlot()
+            const isLocalP1 =
+              engagedSlot === 1 ||
+              nesMultiplayerState?.player1Id === localProfile.userId
+            const isLocalP2 =
+              engagedSlot === 2 ||
+              nesMultiplayerState?.player2Id === localProfile.userId
+            const isP1Locked = Boolean(
+              nesMultiplayerState?.player1Id &&
+                nesMultiplayerState.player1Id !== localProfile.userId &&
+                participants.some((p) => p.userId === nesMultiplayerState.player1Id),
+            )
+            const isP2Locked = Boolean(
+              nesMultiplayerState?.player2Id &&
+                nesMultiplayerState.player2Id !== localProfile.userId &&
+                participants.some((p) => p.userId === nesMultiplayerState.player2Id),
+            )
+
+            return (
+              <div
+                data-testid="companion-nes-live-controller-bar"
+                className="flex flex-1 flex-wrap items-center justify-center gap-1.5 rounded-xl border border-red-500/40 bg-[#0c111d] px-2.5 py-1.5 min-w-[280px]"
+              >
+                {/* Engage P1 / P2 Exclusive Lock Buttons */}
+                <button
+                  id="btn-bar-engage-nes-p1"
+                  type="button"
+                  disabled={isP1Locked}
+                  title={
+                    isLocalP1
+                      ? 'Click to Disengage Player 1 Controllers'
+                      : isP1Locked
+                        ? `Player 1 locked by ${nesMultiplayerState?.player1Name ?? 'another player'}`
+                        : 'Engage Player 1 Controllers'
+                  }
+                  onClick={() => {
+                    onClaimNesPlayerSlot?.(isLocalP1 ? null : 1)
+                  }}
+                  className={`rounded-md border px-2 py-1 text-[10px] font-bold transition ${
+                    isLocalP1
+                      ? 'border-emerald-400 bg-emerald-500/25 text-emerald-200'
+                      : isP1Locked
+                        ? 'border-slate-700 bg-slate-900 text-slate-500 cursor-not-allowed'
+                        : 'border-amber-400/50 bg-amber-500/15 text-amber-200 hover:bg-amber-500/30'
+                  }`}
+                >
+                  {isLocalP1
+                    ? '🟢 P1 (Exit)'
+                    : isP1Locked
+                      ? `🔒 P1: ${(nesMultiplayerState?.player1Name ?? 'In Use').slice(0, 6)}`
+                      : '🎮 Engage P1'}
+                </button>
+
+                <button
+                  id="btn-bar-engage-nes-p2"
+                  type="button"
+                  disabled={isP2Locked}
+                  title={
+                    isLocalP2
+                      ? 'Click to Disengage Player 2 Controllers'
+                      : isP2Locked
+                        ? `Player 2 locked by ${nesMultiplayerState?.player2Name ?? 'another player'}`
+                        : 'Engage Player 2 Controllers'
+                  }
+                  onClick={() => {
+                    onClaimNesPlayerSlot?.(isLocalP2 ? null : 2)
+                  }}
+                  className={`rounded-md border px-2 py-1 text-[10px] font-bold transition ${
+                    isLocalP2
+                      ? 'border-emerald-400 bg-emerald-500/25 text-emerald-200'
+                      : isP2Locked
+                        ? 'border-slate-700 bg-slate-900 text-slate-500 cursor-not-allowed'
+                        : 'border-sky-400/50 bg-sky-500/15 text-sky-200 hover:bg-sky-500/30'
+                  }`}
+                >
+                  {isLocalP2
+                    ? '🟢 P2 (Exit)'
+                    : isP2Locked
+                      ? `🔒 P2: ${(nesMultiplayerState?.player2Name ?? 'In Use').slice(0, 6)}`
+                      : '🎮 Engage P2'}
+                </button>
+
+                {/* Cartridge Switcher Dropdown */}
+                <select
+                  aria-label="Active NES Cartridge"
+                  value={
+                    parseNesCartridgeIdFromUrl(presenterState.mediaUrl) ??
+                    getNesEmulator().getActiveCartridge().id
+                  }
+                  onChange={(e) => {
+                    const nextId = e.target.value
+                    const nextCart = NES_LIBRARY_CARTRIDGES.find((c) => c.id === nextId)
+                    if (!nextCart) return
+                    if (!isLocalPresenter && canTakeControl) {
+                      onTakeControl()
+                    }
+                    getNesEmulator().loadLibraryCartridge(nextCart.id)
+                    onLoadStreamUrl(
+                      `nes://${nextCart.id}`,
+                      `🕹 NES: ${nextCart.title}`,
+                      false,
+                    )
+                  }}
+                  className="max-w-[150px] rounded-lg border border-red-500/40 bg-[#141c2e] px-2 py-1 text-[11px] font-semibold text-amber-300 focus:outline-none"
+                >
+                  {NES_LIBRARY_CARTRIDGES.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      🕹 {c.title}
+                    </option>
+                  ))}
+                </select>
 
             {/* Live D-Pad Buttons */}
             {(
@@ -2152,6 +2231,8 @@ export function CompanionOverlay({
               📂 Load
             </button>
           </div>
+            )
+          })()
         ) : (
           presenterState.screenMode === 'url-sync' &&
           presenterState.activePresenterId && (

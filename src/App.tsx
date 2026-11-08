@@ -39,6 +39,7 @@ import { BarGamesCorner3D } from './components/xr/BarGamesCorner3D'
 import { BuildModePanel3D } from './components/xr/BuildModePanel3D'
 import { CinemaRoom } from './components/xr/CinemaRoom'
 import { ExpansionWing3D } from './components/xr/ExpansionWing3D'
+import { NesLibraryBrowser3D } from './components/xr/NesLibraryBrowser3D'
 import { SpatialChatPanel } from './components/xr/SpatialChatPanel'
 import { SpatialControlDock } from './components/xr/SpatialControlDock'
 import type { VRKeyboardMode } from './components/xr/VRKeyboard3D'
@@ -76,6 +77,7 @@ import {
 import {
   getNesEmulator,
   isNesMediaUrl,
+  type NesCartridgeMeta,
 } from './services/nesEmulator'
 import {
   isControllerButtonPressed,
@@ -186,6 +188,8 @@ interface SeatRigProps {
   keyboardOpen: boolean
   buildMode: boolean
   nesActiveOnScreen?: boolean
+  nesControllerEngaged?: boolean
+  onDisengageNesController?: () => void
   teleportRequest: TeleportFloorRequest | null
   localRoamPoseRef: React.MutableRefObject<{
     position: [number, number, number]
@@ -212,8 +216,9 @@ interface SeatRigProps {
  *      with smooth `0.38m` Rear Balcony step-up (or 3D free flight when `flyMode` is active).
  *    - Right thumbstick vertical axis (`rightStick.y`) smoothly ascends/descends in `flyMode`,
  *      while horizontal axis (`rightStick.x`) performs `45°` comfort snap-turn around `headWorld`.
- *    - `A` / `X` hold-to-aim & release comfort floor teleport ring (mapped to NES `A` / `B` when playing NES).
+ *    - `A` / `X` hold-to-aim & release comfort floor teleport ring (mapped to NES `A` / `B` when NES controller is engaged).
  *    - `B` / `Y` press summons or minimizes the floating `SpatialControlDock`.
+ *    - Hold Right Grip (`xr-standard-squeeze`) for ~0.75s to disengage Quest controllers from the NES.
  * 2. Desktop / Mobile 3D Companion:
  *    - `WASD` / Arrow keys smooth walking (`Shift` faster) + `F` to toggle Fly Mode (`Space`/`E` ascend, `C`/`Q` descend),
  *      plus virtual mobile touch thumbstick & altitude buttons via `mobileTouchInputRef`.
@@ -235,6 +240,8 @@ function SeatCameraAndOriginRig({
   keyboardOpen,
   buildMode,
   nesActiveOnScreen = false,
+  nesControllerEngaged = false,
+  onDisengageNesController,
   teleportRequest,
   localRoamPoseRef,
   mobileTouchInputRef,
@@ -287,6 +294,7 @@ function SeatCameraAndOriginRig({
   const canSnapTurnRef = useRef(true)
   const prevBOrYPressedRef = useRef(false)
   const prevAOrXPressedRef = useRef(false)
+  const rightGripHoldSecRef = useRef(0)
   const activeVrTeleportTargetRef = useRef<[number, number, number] | null>(null)
 
   const prevIsFreeRoamingRef = useRef(isFreeRoaming)
@@ -297,6 +305,10 @@ function SeatCameraAndOriginRig({
   flyModeRef.current = flyMode
   const nesActiveOnScreenRef = useRef(nesActiveOnScreen)
   nesActiveOnScreenRef.current = nesActiveOnScreen
+  const nesControllerEngagedRef = useRef(nesControllerEngaged)
+  nesControllerEngagedRef.current = nesControllerEngaged
+  const onDisengageNesControllerRef = useRef(onDisengageNesController)
+  onDisengageNesControllerRef.current = onDisengageNesController
 
   const desiredCamPos = useMemo(() => new THREE.Vector3(), [])
   const desiredLookTarget = useMemo(() => new THREE.Vector3(), [])
@@ -394,7 +406,7 @@ function SeatCameraAndOriginRig({
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (!joined || isEditableDomElement(document.activeElement)) return
-      if (nesActiveOnScreenRef.current) {
+      if (nesActiveOnScreenRef.current && nesControllerEngagedRef.current) {
         const nesBtn = mapNesKeyCode(e.code)
         if (nesBtn) {
           e.preventDefault()
@@ -428,7 +440,7 @@ function SeatCameraAndOriginRig({
     }
 
     const onKeyUp = (e: KeyboardEvent) => {
-      if (nesActiveOnScreenRef.current) {
+      if (nesActiveOnScreenRef.current && nesControllerEngagedRef.current) {
         const nesBtn = mapNesKeyCode(e.code)
         if (nesBtn) {
           getNesEmulator().setButtonState(nesBtn, false)
@@ -672,12 +684,13 @@ function SeatCameraAndOriginRig({
   useFrame((_, delta) => {
     const dt = Math.min(delta, 0.1)
     const rigAlpha = 1 - Math.exp(-12 * dt)
+    const controllingNes = Boolean(nesActiveOnScreen && nesControllerEngaged)
 
-    // Poll Meta Quest WebXR controllers & HTML5 Gamepads for the NES Emulator
+    // Poll Meta Quest WebXR controllers & HTML5 Gamepads for the NES Emulator ONLY when engaged
     getNesEmulator().pollQuestAndStandardGamepads(
       leftController,
       rightController,
-      Boolean(nesActiveOnScreen && joined && !keyboardOpen),
+      Boolean(controllingNes && joined && !keyboardOpen),
     )
     // Step the NES 6502/PPU hardware emulator directly from R3F/WebXR useFrame
     // so Meta Quest immersive XR sessions (where window.requestAnimationFrame pauses) run at 60fps
@@ -686,17 +699,37 @@ function SeatCameraAndOriginRig({
     }
 
     if (inVR) {
+      // 0. Hold Right Grip (`xr-standard-squeeze`) for ~0.75s to disengage Quest controllers from the NES
+      if (controllingNes) {
+        const rightGripPressed = isControllerButtonPressed(
+          rightController,
+          ['xr-standard-squeeze'],
+          1,
+        )
+        if (rightGripPressed) {
+          rightGripHoldSecRef.current += dt
+          if (rightGripHoldSecRef.current >= 0.75) {
+            rightGripHoldSecRef.current = 0
+            onDisengageNesControllerRef.current?.()
+          }
+        } else {
+          rightGripHoldSecRef.current = 0
+        }
+      } else {
+        rightGripHoldSecRef.current = 0
+      }
+
       // 1. Quest B/Y button toggles the floating Lounge Controls dock
-      //    (When NES is active on screen, hold both B+Y together to toggle the dock so B & Y work as NES B / START)
+      //    (When NES controller is engaged, hold both B+Y together to toggle the dock so B & Y work as NES B / START)
       const rightBY = isControllerButtonPressed(rightController, ['b-button', 'y-button'], 5)
       const leftYB = isControllerButtonPressed(leftController, ['y-button', 'b-button'], 5)
-      const bOrYPressed = nesActiveOnScreen ? rightBY && leftYB : rightBY || leftYB
+      const bOrYPressed = controllingNes ? rightBY && leftYB : rightBY || leftYB
       if (bOrYPressed && !prevBOrYPressedRef.current && joined) {
         onSummonDockToggleRef.current()
       }
       prevBOrYPressedRef.current = bOrYPressed
 
-      // 2. Quest A/X hold-to-aim & release comfort floor teleport (disabled while playing NES on screen so A/X = NES A/B)
+      // 2. Quest A/X hold-to-aim & release comfort floor teleport (disabled while NES controller is engaged so A/X = NES A/B)
       const rightAX = isControllerButtonPressed(
         rightController,
         ['a-button', 'x-button'],
@@ -708,7 +741,7 @@ function SeatCameraAndOriginRig({
         4,
       )
       const aOrXPressed =
-        !nesActiveOnScreen && (rightAX || leftAX) && joined && !buildMode && !keyboardOpen
+        !controllingNes && (rightAX || leftAX) && joined && !buildMode && !keyboardOpen
       if (aOrXPressed) {
         const xrFrame = gl.xr.getFrame?.()
         const refSpace = xrOriginRefSpace ?? gl.xr.getReferenceSpace?.()
@@ -752,7 +785,7 @@ function SeatCameraAndOriginRig({
       prevAOrXPressedRef.current = aOrXPressed
 
       // 3. VR Thumbstick Smooth Walk / 3D Free-Flight + Head-Pivoted 45° Snap-Turn (supports 1 or 2 controllers!)
-      //    When an NES game is active on screen, Left Stick drives the NES 8-way D-Pad while Right Stick walks & snap-turns.
+      //    When NES controller is engaged, Left Stick drives the NES 8-way D-Pad while Right Stick walks & snap-turns.
       if (joined && !keyboardOpen) {
         const hasBothControllers = Boolean(leftController && rightController)
         let moveX = 0
@@ -763,7 +796,7 @@ function SeatCameraAndOriginRig({
         if (hasBothControllers) {
           const leftStick = readControllerThumbstick(leftController)
           const rightStick = readControllerThumbstick(rightController)
-          if (nesActiveOnScreen) {
+          if (controllingNes) {
             moveX = 0
             moveY =
               Math.abs(rightStick.y) > 0.36 && Math.abs(rightStick.x) < 0.42
@@ -790,7 +823,7 @@ function SeatCameraAndOriginRig({
           }
         } else {
           const singleStick = readControllerThumbstick(rightController ?? leftController)
-          if (!nesActiveOnScreen) {
+          if (!controllingNes) {
             moveY = Math.abs(singleStick.y) > 0.22 ? singleStick.y : 0
             turnX =
               Math.abs(singleStick.x) > 0.58 && Math.abs(singleStick.y) < 0.48
@@ -1254,6 +1287,10 @@ export function App() {
   const [recenterVersion, setRecenterVersion] = useState(0)
   const [spatialChatOpen, setSpatialChatOpen] = useState(true)
   const [youtubeBrowserOpen, setYoutubeBrowserOpen] = useState(false)
+  const [nesLibraryOpen, setNesLibraryOpen] = useState(false)
+  const [engagedNesSlot, setEngagedNesSlot] = useState<1 | 2 | null>(() =>
+    getNesEmulator().getEngagedPlayerSlot(),
+  )
   const [youtubeSearchQuery, setYoutubeSearchQuery] = useState('')
   const [youtubeSearchTrigger, setYoutubeSearchTrigger] = useState(0)
   const [openYouTubeAccountNonce, setOpenYouTubeAccountNonce] = useState(0)
@@ -1284,6 +1321,13 @@ export function App() {
     moveY: 0,
     vertY: 0,
   })
+
+  useEffect(() => {
+    const emu = getNesEmulator()
+    return emu.onSaveSlotsChanged(() => {
+      setEngagedNesSlot(emu.getEngagedPlayerSlot())
+    })
+  }, [])
 
   const room = useRoomSession(signalHandlerRef)
   const barGames = useBarGames({
@@ -1650,6 +1694,7 @@ export function App() {
     setYoutubeBrowserOpen((open) => {
       const next = !open
       if (next) {
+        setNesLibraryOpen(false)
         setBuildMode(false)
         setWardrobeOpen(false)
       } else {
@@ -1659,7 +1704,31 @@ export function App() {
     })
   }, [])
 
+  const handleToggleNesLibrary = useCallback(() => {
+    setNesLibraryOpen((open) => {
+      const next = !open
+      if (next) {
+        setYoutubeBrowserOpen(false)
+        setBuildMode(false)
+        setWardrobeOpen(false)
+        setKeyboardMode(null)
+      }
+      return next
+    })
+  }, [])
+
+  const handleSelectNesCartridgeInVR = useCallback(
+    (cart: NesCartridgeMeta, keepOpen: boolean) => {
+      handleLoadStreamUrl(`nes://${cart.id}`, `🕹 NES: ${cart.title}`, false)
+      if (!keepOpen) {
+        setNesLibraryOpen(false)
+      }
+    },
+    [handleLoadStreamUrl],
+  )
+
   const handleOpenYouTubeBrowser = useCallback(() => {
+    setNesLibraryOpen(false)
     setBuildMode(false)
     setWardrobeOpen(false)
     setYoutubeBrowserOpen(true)
@@ -1671,6 +1740,7 @@ export function App() {
   }, [])
 
   const handleOpenYouTubeSearchKeyboard = useCallback(() => {
+    setNesLibraryOpen(false)
     setYoutubeBrowserOpen(true)
     setKeyboardMode((m) => (m === 'youtube' ? null : 'youtube'))
   }, [])
@@ -1678,6 +1748,7 @@ export function App() {
   const handleSubmitYouTubeSearch = useCallback((query: string) => {
     setYoutubeSearchQuery(query.trim())
     setYoutubeSearchTrigger((n) => n + 1)
+    setNesLibraryOpen(false)
     setYoutubeBrowserOpen(true)
   }, [])
 
@@ -1708,6 +1779,7 @@ export function App() {
       setBarGamesOpen(false)
       setClubhouseOpen(false)
       setYoutubeBrowserOpen(false)
+      setNesLibraryOpen(false)
     }
   }, [])
 
@@ -1719,6 +1791,7 @@ export function App() {
       setKeyboardMode((m) => (m === 'poster' ? null : m))
     } else {
       setYoutubeBrowserOpen(false)
+      setNesLibraryOpen(false)
       setBarGamesOpen(false)
       setWardrobeOpen(false)
       setClubhouseOpen(false)
@@ -1734,6 +1807,7 @@ export function App() {
         setBarGamesOpen(false)
         setWardrobeOpen(false)
         setYoutubeBrowserOpen(false)
+        setNesLibraryOpen(false)
       }
     },
     [],
@@ -2085,6 +2159,10 @@ export function App() {
                 room.presenterState.screenMode === 'url-sync' &&
                 isNesMediaUrl(room.presenterState.mediaUrl)
               }
+              nesControllerEngaged={engagedNesSlot !== null}
+              onDisengageNesController={() => {
+                room.claimNesPlayerSlot(null)
+              }}
               teleportRequest={teleportRequest}
               localRoamPoseRef={localRoamPoseRef}
               mobileTouchInputRef={mobileTouchInputRef}
@@ -2118,6 +2196,22 @@ export function App() {
                         setOpenYouTubeAccountNonce((n) => n + 1)
                       }}
                       onClose={handleCloseYouTubeBrowser}
+                    />
+                  </SceneSectionBoundary>
+
+                  <SceneSectionBoundary>
+                    <NesLibraryBrowser3D
+                      visible={nesLibraryOpen}
+                      activeMediaUrl={room.presenterState.mediaUrl}
+                      localUserId={room.localUserId}
+                      participants={room.participants}
+                      nesMultiplayerState={room.nesMultiplayerState}
+                      engagedPlayerSlot={engagedNesSlot}
+                      onSelectCartridge={handleSelectNesCartridgeInVR}
+                      onClaimNesPlayerSlot={room.claimNesPlayerSlot}
+                      onShareNesCheckpoint={room.shareNesCheckpointWithRoom}
+                      onShareNesSaveSlot={room.shareNesSaveSlotWithRoom}
+                      onClose={() => setNesLibraryOpen(false)}
                     />
                   </SceneSectionBoundary>
 
@@ -2169,6 +2263,7 @@ export function App() {
                         localDuration={media.localDuration}
                         chatPanelOpen={spatialChatOpen}
                         youtubeBrowserOpen={youtubeBrowserOpen}
+                        nesLibraryOpen={nesLibraryOpen}
                         buildModeOpen={buildMode}
                         wardrobeOpen={wardrobeOpen}
                         youtubeSearchQuery={youtubeSearchQuery}
@@ -2176,6 +2271,7 @@ export function App() {
                         keyboardMode={keyboardMode}
                         onSetKeyboardMode={setKeyboardMode}
                         onToggleYouTubeBrowser={handleToggleYouTubeBrowser}
+                        onToggleNesLibrary={handleToggleNesLibrary}
                         onToggleBuildMode={() => handleToggleBuildMode()}
                         onToggleWardrobe={() => handleToggleWardrobe()}
                         onSubmitYouTubeSearch={handleSubmitYouTubeSearch}
@@ -2209,6 +2305,11 @@ export function App() {
                         onToggleFlyMode={handleToggleFlyMode}
                         onDropToFloor={handleDropToFloor}
                         dockSummonToggleVersion={dockSummonToggleVersion}
+                        localUserId={room.localUserId}
+                        participants={room.participants}
+                        nesMultiplayerState={room.nesMultiplayerState}
+                        engagedNesSlot={engagedNesSlot}
+                        onClaimNesPlayerSlot={room.claimNesPlayerSlot}
                       />
                     </SceneSectionBoundary>
                   )}
