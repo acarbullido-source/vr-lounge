@@ -74,6 +74,34 @@ export function stepDartFlightCCD(
 ): void {
   if (sim.settled) return
 
+  // Guard against NaN / Infinity or extreme VR controller spike velocities
+  if (
+    !sim.pos.every(Number.isFinite) ||
+    !sim.vel.every(Number.isFinite) ||
+    !Number.isFinite(dt)
+  ) {
+    sim.pos = [boardCenter[0], 1.2, boardCenter[2] - 0.1]
+    sim.vel = [0, 0, 0]
+    sim.settled = true
+    sim.hitBoard = false
+    sim.hit = {
+      points: 0,
+      sector: 0,
+      multiplier: 0,
+      ring: 'miss',
+      label: 'MISS',
+      localX: 0,
+      localY: -0.5,
+    }
+    return
+  }
+
+  const speedMag = Math.hypot(sim.vel[0], sim.vel[1], sim.vel[2])
+  if (speedMag > 18) {
+    const scale = 18 / speedMag
+    sim.vel = [sim.vel[0] * scale, sim.vel[1] * scale, sim.vel[2] * scale]
+  }
+
   let remaining = Math.max(0, Math.min(dt, 1.25))
   const FIXED_STEP = 1 / 240
   // Bristle face sits 0.028m out from board group center toward -Z (into room)
@@ -232,6 +260,24 @@ export function stepPuttingBallCCD(
   courseHole: PuttingCourseHoleId = 'straight',
 ): void {
   if (sim.settled) return
+
+  // Guard against NaN / Infinity or extreme VR controller spike velocities
+  if (
+    !sim.localPos.every(Number.isFinite) ||
+    !sim.localVel.every(Number.isFinite) ||
+    !Number.isFinite(dt)
+  ) {
+    sim.localPos = [0, PUTTING_STRIP_SPECS.ballRadius, PUTTING_STRIP_SPECS.teeLocalZ]
+    sim.localVel = [0, 0]
+    sim.settled = true
+    return
+  }
+
+  const puttSpeedMag = Math.hypot(sim.localVel[0], sim.localVel[1])
+  if (puttSpeedMag > 6.5) {
+    const scale = 6.5 / puttSpeedMag
+    sim.localVel = [sim.localVel[0] * scale, sim.localVel[1] * scale]
+  }
 
   let remaining = Math.max(0, Math.min(dt, 1.25))
   const FIXED_STEP = 1 / 180

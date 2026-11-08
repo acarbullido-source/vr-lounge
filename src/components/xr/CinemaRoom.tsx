@@ -1,6 +1,6 @@
 import { RoundedBox, Text } from '@react-three/drei'
 import { useFrame, type ThreeEvent } from '@react-three/fiber'
-import { Suspense, useMemo, useRef, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { SCREEN_CONFIG } from '../../constants/cinema'
 import {
@@ -174,6 +174,12 @@ export function CinemaRoom({
     geo.setAttribute('position', new THREE.BufferAttribute(STARFIELD_POSITIONS, 3))
     return geo
   }, [])
+
+  useEffect(() => {
+    return () => {
+      starGeometry.dispose()
+    }
+  }, [starGeometry])
 
   const isShowingVideo =
     presenterState.screenMode !== 'idle' &&

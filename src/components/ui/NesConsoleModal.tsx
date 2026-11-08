@@ -65,8 +65,8 @@ export function NesConsoleModal({
 
   // Mirror the real JSNES PPU canvas into the modal's preview monitor while open
   useEffect(() => {
+    nes.setConsumerActive('modal', open)
     if (!open) return
-    nes.getStream()
     let raf = 0
     const copyFrame = () => {
       const dst = previewCanvasRef.current
@@ -80,7 +80,10 @@ export function NesConsoleModal({
       raf = window.requestAnimationFrame(copyFrame)
     }
     raf = window.requestAnimationFrame(copyFrame)
-    return () => window.cancelAnimationFrame(raf)
+    return () => {
+      window.cancelAnimationFrame(raf)
+      nes.setConsumerActive('modal', false)
+    }
   }, [nes, open])
 
   // Global keyboard controls whenever NES is playing on Main Screen or Modal is open

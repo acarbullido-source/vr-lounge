@@ -212,10 +212,17 @@ export function PuttingGreen3D({
 
   const rampGeometry = useMemo(() => createRampGeometry(), [])
 
+  useEffect(() => {
+    return () => {
+      rampGeometry.dispose()
+    }
+  }, [rampGeometry])
+
   const [courseHole, setCourseHole] = useState<PuttingCourseHoleId>('straight')
   const [aimAngleDeg, setAimAngleDeg] = useState<number>(0)
   const [puttPowerPct, setPuttPowerPct] = useState<number>(58)
   const [swingMeterActive, setSwingMeterActive] = useState<boolean>(false)
+  const lastSwingTickRef = useRef(0)
 
   const [vrPutterHolstered, setVrPutterHolstered] = useState(false)
   const [isHoldingVrPutterUi, setIsHoldingVrPutterUi] = useState(false)
@@ -285,8 +292,11 @@ export function PuttingGreen3D({
   useFrame(({ clock }, delta) => {
     if (swingMeterActive && !activePuttShot) {
       const t = clock.getElapsedTime()
-      const osc = Math.round(25 + ((Math.sin(t * 3.8) + 1) * 0.5) * 75)
-      setPuttPowerPct(osc)
+      if (t - lastSwingTickRef.current >= 0.065) {
+        lastSwingTickRef.current = t
+        const osc = Math.round(25 + ((Math.sin(t * 3.8) + 1) * 0.5) * 75)
+        setPuttPowerPct((prev) => (prev === osc ? prev : osc))
+      }
     }
 
     const sim = simRef.current

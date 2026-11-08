@@ -55,6 +55,7 @@ import { useBarGames } from './hooks/useBarGames'
 import { useMediaScreen } from './hooks/useMediaScreen'
 import { useRoomSession, type JoinRoomOptions } from './hooks/useRoomSession'
 import { useWebRTC, type ScreenShareQualityMode } from './hooks/useWebRTC'
+import { fireplaceAudio } from './services/fireplaceAudio'
 import {
   isDeviceUnlocked,
   isPasscodeGateEnabled,
@@ -1713,6 +1714,39 @@ export function App() {
     return item.type === 'neon-sign' ? (item.label ?? '') : (item.imageUrl ?? '')
   }, [editingPosterItemId, roomCustomization.furniture, selectedFurnitureId])
 
+  // Priority 4.1: Resume suspended Web Audio engines and refresh GPU textures when waking from headset sleep
+  useEffect(() => {
+    const handleWake = () => {
+      if (document.visibilityState !== 'visible') return
+      fireplaceAudio.resumeIfNeeded()
+      getNesEmulator().wakeAudioAndTexture()
+    }
+    document.addEventListener('visibilitychange', handleWake)
+    return () => {
+      document.removeEventListener('visibilitychange', handleWake)
+    }
+  }, [])
+
+  const handleCanvasCreated = useCallback(
+    ({ gl }: { gl: THREE.WebGLRenderer }) => {
+      const dom = gl.domElement
+      const onContextLost = (e: Event) => {
+        e.preventDefault()
+        console.warn('[VR Lounge] WebGL context lost — awaiting browser restore...')
+      }
+      const onContextRestored = () => {
+        console.info('[VR Lounge] WebGL context restored — refreshing dynamic GPU textures.')
+        if (media.videoTexture) {
+          media.videoTexture.needsUpdate = true
+        }
+        getNesEmulator().wakeAudioAndTexture()
+      }
+      dom.addEventListener('webglcontextlost', onContextLost, false)
+      dom.addEventListener('webglcontextrestored', onContextRestored, false)
+    },
+    [media.videoTexture],
+  )
+
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#080a0d]">
       {/* Persistent WebGL / WebXR Canvas (mounted behind Gate & Lobby so store.enterVR() works on click 0) */}
@@ -1723,6 +1757,7 @@ export function App() {
           antialias: true,
           powerPreference: 'high-performance',
         }}
+        onCreated={handleCanvasCreated}
         camera={{ fov: 62, near: 0.08, far: 185, position: [0, 1.35, 1.2] }}
       >
         <color attach="background" args={[skyBgColor]} />
@@ -1905,6 +1940,7 @@ export function App() {
                 computedSeats={computedSeats}
                 localSeatId={room.localProfile.seatId}
                 localDisplayName={room.localProfile.displayName}
+                activeLoungeWing={activeLoungeWing}
                 participants={room.participants}
                 cinemaVolume={effectiveCinemaVolume}
                 cornholeState={barGames.cornholeState}

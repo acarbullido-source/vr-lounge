@@ -337,6 +337,7 @@ export function useMediaScreen({
       const activePresenterId = presenterState.activePresenterId
 
       if (mode === 'idle' || !activePresenterId) {
+        getNesEmulator().setConsumerActive('screen', false)
         destroyHls()
         clearCompanionAudio()
         candidatesRef.current = []
@@ -353,6 +354,7 @@ export function useMediaScreen({
       }
 
       if (mode === 'tab-stream') {
+        getNesEmulator().setConsumerActive('screen', false)
         destroyHls()
         clearCompanionAudio()
         candidatesRef.current = []
@@ -398,6 +400,7 @@ export function useMediaScreen({
       // Mode 2: Synchronized URL / Native YouTube / PeerTube Player
       const rawUrl = presenterState.mediaUrl.trim()
       if (!rawUrl) {
+        getNesEmulator().setConsumerActive('screen', false)
         setHasVideoFrames(false)
         setIsResolvingMedia(false)
         return
@@ -419,27 +422,23 @@ export function useMediaScreen({
 
       if (isNesMediaUrl(rawUrl)) {
         const nes = getNesEmulator()
+        nes.setConsumerActive('screen', true)
         const cartId = parseNesCartridgeIdFromUrl(rawUrl)
         if (cartId !== 'custom-rom') {
           nes.loadLibraryCartridge(cartId)
         }
-        const nesStream = nes.getStream()
         sourceAttached = true
         setIsResolvingMedia(false)
-        setActiveStreamQuality('60fps NES Console')
+        setActiveStreamQuality('60fps JSNES Hardware')
+        videoElement.pause()
         videoElement.removeAttribute('src')
-        videoElement.srcObject = nesStream
-        videoElement.muted = true
-        try {
-          await videoElement.play()
-        } catch {
-          // Stream autoplay fallback
-        }
+        videoElement.srcObject = null
         if (!cancelled) {
           setHasVideoFrames(true)
         }
         return
       }
+      getNesEmulator().setConsumerActive('screen', false)
 
       const ytVideoId = isYouTubeWatchUrl(rawUrl)
         ? extractYouTubeVideoId(rawUrl)
@@ -831,6 +830,38 @@ export function useMediaScreen({
     presenterState.screenMode === 'url-sync' &&
     Boolean(presenterState.activePresenterId) &&
     isNesMediaUrl(presenterState.mediaUrl)
+
+  // Automatically resume active video/audio or NES PAPU audio when a VR headset wakes up
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return
+      videoTexture.needsUpdate = true
+      if (isNesStreamActive) {
+        getNesEmulator().wakeAudioAndTexture()
+        return
+      }
+      const { isPlaying } = latestPlaybackRef.current
+      if (
+        presenterState.activePresenterId &&
+        (presenterState.screenMode === 'tab-stream' || isPlaying) &&
+        videoElement.paused
+      ) {
+        void videoElement.play().catch(() => undefined)
+        if (hasCompanionAudioRef.current && companionAudioElement.paused) {
+          void companionAudioElement.play().catch(() => undefined)
+        }
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+  }, [
+    companionAudioElement,
+    isNesStreamActive,
+    presenterState.activePresenterId,
+    presenterState.screenMode,
+    videoElement,
+    videoTexture,
+  ])
 
   return {
     videoElement,

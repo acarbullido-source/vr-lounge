@@ -129,6 +129,8 @@ export class RoomRealtimeService {
   private presenceMap = new Map<string, PresenceRecord>()
   private seenPacketIds = new Set<string>()
   private lastAnnounceReplyAt = 0
+  private supabaseReconnectTimer: number | null = null
+  private supabaseFailCount = 0
   private destroyed = false
 
   constructor(
@@ -252,12 +254,21 @@ export class RoomRealtimeService {
       if (this.destroyed) return
       if (status === 'SUBSCRIBED') {
         subscribedOnce = true
+        this.supabaseFailCount = 0
+        if (this.supabaseReconnectTimer !== null) {
+          window.clearTimeout(this.supabaseReconnectTimer)
+          this.supabaseReconnectTimer = null
+        }
         this.callbacks.onConnectionStatus?.(true)
         await channel.track(this.currentProfile)
         this.requestRoomState()
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-        if (!subscribedOnce && this.supabaseChannel === channel) {
-          // Automatic failover to Cloud Relay if Supabase project is paused or unreachable
+        this.supabaseFailCount += 1
+        if (
+          (!subscribedOnce || this.supabaseFailCount >= 2) &&
+          this.supabaseChannel === channel
+        ) {
+          // Automatic failover to Cloud Relay if Supabase is unreachable or drops repeatedly
           this.supabaseChannel = null
           this.mode = 'cloud-relay'
           void client.removeChannel(channel).catch(() => undefined)
@@ -265,6 +276,17 @@ export class RoomRealtimeService {
           return
         }
         this.callbacks.onConnectionStatus?.(false)
+        if (this.supabaseReconnectTimer === null && !this.destroyed) {
+          this.supabaseReconnectTimer = window.setTimeout(() => {
+            this.supabaseReconnectTimer = null
+            if (this.destroyed || this.mode !== 'supabase') return
+            if (this.supabaseChannel) {
+              void client.removeChannel(this.supabaseChannel).catch(() => undefined)
+              this.supabaseChannel = null
+            }
+            void this.connectSupabase()
+          }, 2500)
+        }
       } else if (status === 'CLOSED') {
         this.callbacks.onConnectionStatus?.(false)
       }
@@ -681,6 +703,10 @@ export class RoomRealtimeService {
     if (this.heartbeatTimer !== null) {
       window.clearInterval(this.heartbeatTimer)
       this.heartbeatTimer = null
+    }
+    if (this.supabaseReconnectTimer !== null) {
+      window.clearTimeout(this.supabaseReconnectTimer)
+      this.supabaseReconnectTimer = null
     }
     window.removeEventListener('beforeunload', this.handleWindowUnload)
 

@@ -328,32 +328,51 @@ export function useBarGames({
         case 'tabletop-state': {
           setTabletopState((prev) => {
             if (!isNewerState(event.payload, prev)) return prev
-            tabletopRef.current = event.payload
-            return event.payload
+            const bounded: TabletopState = {
+              ...event.payload,
+              dice: (event.payload.dice ?? []).slice(-16),
+              tokens: (event.payload.tokens ?? []).slice(-24),
+              tableCards: (event.payload.tableCards ?? []).slice(-20),
+            }
+            tabletopRef.current = bounded
+            return bounded
           })
           break
         }
         case 'shuffleboard-state': {
           setShuffleboardState((prev) => {
             if (!isNewerState(event.payload, prev)) return prev
-            shuffleboardRef.current = event.payload
-            return event.payload
+            const bounded: ShuffleboardState = {
+              ...event.payload,
+              pucks: (event.payload.pucks ?? []).slice(-16),
+            }
+            shuffleboardRef.current = bounded
+            return bounded
           })
           break
         }
         case 'cornhole-state': {
           setCornholeState((prev) => {
             if (!isNewerState(event.payload, prev)) return prev
-            cornholeRef.current = event.payload
-            return event.payload
+            const bounded: CornholeState = {
+              ...event.payload,
+              bags: (event.payload.bags ?? []).slice(-16),
+            }
+            cornholeRef.current = bounded
+            return bounded
           })
           break
         }
         case 'holotable-state': {
           setHolotableState((prev) => {
             if (!isNewerState(event.payload, prev)) return prev
-            holotableRef.current = event.payload
-            return event.payload
+            const bounded: HolotableState = {
+              ...event.payload,
+              miniatures: (event.payload.miniatures ?? []).slice(-24),
+              revealedFogCells: (event.payload.revealedFogCells ?? []).slice(0, 36),
+            }
+            holotableRef.current = bounded
+            return bounded
           })
           break
         }
@@ -383,11 +402,20 @@ export function useBarGames({
           })
           setTabletopState((prev) => {
             if (!isNewerState(event.tabletop, prev)) return prev
-            tabletopRef.current = event.tabletop
-            return event.tabletop
+            const bounded: TabletopState = {
+              ...event.tabletop,
+              dice: (event.tabletop.dice ?? []).slice(-16),
+              tokens: (event.tabletop.tokens ?? []).slice(-24),
+              tableCards: (event.tabletop.tableCards ?? []).slice(-20),
+            }
+            tabletopRef.current = bounded
+            return bounded
           })
           if (event.shuffleboard) {
-            const incomingShuffle = event.shuffleboard
+            const incomingShuffle: ShuffleboardState = {
+              ...event.shuffleboard,
+              pucks: (event.shuffleboard.pucks ?? []).slice(-16),
+            }
             setShuffleboardState((prev) => {
               if (!isNewerState(incomingShuffle, prev)) return prev
               shuffleboardRef.current = incomingShuffle
@@ -395,7 +423,10 @@ export function useBarGames({
             })
           }
           if (event.cornhole) {
-            const incomingCornhole = event.cornhole
+            const incomingCornhole: CornholeState = {
+              ...event.cornhole,
+              bags: (event.cornhole.bags ?? []).slice(-16),
+            }
             setCornholeState((prev) => {
               if (!isNewerState(incomingCornhole, prev)) return prev
               cornholeRef.current = incomingCornhole
@@ -403,7 +434,11 @@ export function useBarGames({
             })
           }
           if (event.holotable) {
-            const incomingHolo = event.holotable
+            const incomingHolo: HolotableState = {
+              ...event.holotable,
+              miniatures: (event.holotable.miniatures ?? []).slice(-24),
+              revealedFogCells: (event.holotable.revealedFogCells ?? []).slice(0, 36),
+            }
             setHolotableState((prev) => {
               if (!isNewerState(incomingHolo, prev)) return prev
               holotableRef.current = incomingHolo
@@ -762,9 +797,15 @@ export function useBarGames({
 
   const commitTabletop = useCallback(
     (next: TabletopState) => {
-      tabletopRef.current = next
-      setTabletopState(next)
-      broadcastBarGamesEvent({ kind: 'tabletop-state', payload: next })
+      const bounded: TabletopState = {
+        ...next,
+        dice: (next.dice ?? []).slice(-16),
+        tokens: (next.tokens ?? []).slice(-24),
+        tableCards: (next.tableCards ?? []).slice(-20),
+      }
+      tabletopRef.current = bounded
+      setTabletopState(bounded)
+      broadcastBarGamesEvent({ kind: 'tabletop-state', payload: bounded })
     },
     [broadcastBarGamesEvent],
   )
@@ -1415,9 +1456,14 @@ export function useBarGames({
 
   const commitHolotable = useCallback(
     (next: HolotableState) => {
-      holotableRef.current = next
-      setHolotableState(next)
-      broadcastBarGamesEvent({ kind: 'holotable-state', payload: next })
+      const bounded: HolotableState = {
+        ...next,
+        miniatures: (next.miniatures ?? []).slice(-24),
+        revealedFogCells: (next.revealedFogCells ?? []).slice(0, 36),
+      }
+      holotableRef.current = bounded
+      setHolotableState(bounded)
+      broadcastBarGamesEvent({ kind: 'holotable-state', payload: bounded })
     },
     [broadcastBarGamesEvent],
   )

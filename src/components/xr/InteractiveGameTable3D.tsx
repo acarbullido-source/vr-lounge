@@ -130,10 +130,13 @@ function PolyhedralDie3D({
   onReroll: (id: string) => void
 }) {
   const meshGroupRef = useRef<THREE.Group>(null)
+  const settledRollRef = useRef<number | null>(null)
   const [hovered, setHovered] = useState(false)
 
   useFrame(() => {
     if (!meshGroupRef.current) return
+    if (settledRollRef.current === die.rolledAt) return
+
     const elapsed = (Date.now() - die.rolledAt) / 1000
     if (die.rolledAt > 0 && elapsed >= 0 && elapsed < 0.6) {
       const t = 1 - elapsed / 0.6
@@ -151,6 +154,7 @@ function PolyhedralDie3D({
         die.rotation[1],
         die.rotation[2],
       )
+      settledRollRef.current = die.rolledAt
     }
   })
 

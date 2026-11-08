@@ -128,6 +128,7 @@ export interface ArcadeCabinetEngine {
   setButtonHeld: (btn: NesButtonId, pressed: boolean) => void
   cycleArcadeRom: () => ArcadeRomOption
   step: (dt: number, isFocused?: boolean) => void
+  dispose: () => void
 }
 
 export function createArcadeCabinetEngine(
@@ -153,12 +154,14 @@ export function createArcadeCabinetEngine(
 
   let nesCore: NES | null = null
   let romReady = false
+  let disposed = false
   let frameAccum = 0
-  let attractFrameDivider = 0
+  let attractAccum = 0
   let scoreEstimate = 1200 + romIndex * 350
   let highScore = 2400 + romIndex * 400
 
   const renderLoadingScreen = (msg: string) => {
+    if (disposed) return
     ctx.fillStyle = '#050811'
     ctx.fillRect(0, 0, 256, 240)
     ctx.strokeStyle = currentRom.accentColor
@@ -178,14 +181,16 @@ export function createArcadeCabinetEngine(
   }
 
   const bootCurrentRom = () => {
+    if (disposed) return
     romReady = false
     const targetRom = currentRom
     renderLoadingScreen('LOADING REAL ARCADE ROM...')
     void fetchRomBinaryString(targetRom.romFile)
       .then((binStr) => {
-        if (currentRom.romId !== targetRom.romId) return
+        if (disposed || currentRom.romId !== targetRom.romId) return
         const nes = new NES({
           onFrame: (fb: ArrayLike<number>) => {
+            if (disposed) return
             for (let i = 0; i < 256 * 240; i++) {
               romBuf32[i] = 0xff000000 | fb[i]
             }
@@ -202,6 +207,7 @@ export function createArcadeCabinetEngine(
         }
       })
       .catch((err) => {
+        if (disposed) return
         console.warn(`Arcade cabinet ${id} ROM load error:`, err)
         renderLoadingScreen('ROM READY — PRESS START')
       })
@@ -210,7 +216,7 @@ export function createArcadeCabinetEngine(
   bootCurrentRom()
 
   const setButtonHeld = (btn: NesButtonId, pressed: boolean) => {
-    if (!romReady || !nesCore) return
+    if (disposed || !romReady || !nesCore) return
     const code = JSNES_BTN_CODE[btn]
     if (pressed) {
       nesCore.buttonDown(1, code as never)
@@ -256,7 +262,7 @@ export function createArcadeCabinetEngine(
   }
 
   const step = (dt: number, isFocused = true) => {
-    if (!romReady || !nesCore) return
+    if (disposed || !romReady || !nesCore) return
     if (isFocused) {
       frameAccum += dt
       const frameTime = 1 / 60.0988
@@ -267,12 +273,20 @@ export function createArcadeCabinetEngine(
         steps++
       }
     } else {
-      // Unfocused cabinets run attract mode at 20fps so all 4 CRT screens stay alive at high VR FPS
-      attractFrameDivider = (attractFrameDivider + 1) % 3
-      if (attractFrameDivider === 0) {
+      // Unfocused cabinets tick attract mode at ~1.2 Hz to keep GPU/CPU overhead near zero in VR
+      attractAccum += dt
+      if (attractAccum >= 0.85) {
+        attractAccum = 0
         nesCore.frame()
       }
     }
+  }
+
+  const dispose = () => {
+    disposed = true
+    romReady = false
+    nesCore = null
+    texture.dispose()
   }
 
   const engine: ArcadeCabinetEngine = {
@@ -290,6 +304,7 @@ export function createArcadeCabinetEngine(
     setButtonHeld,
     cycleArcadeRom,
     step,
+    dispose,
   }
 
   return engine

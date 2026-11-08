@@ -195,6 +195,64 @@ function TacticalOperatorChair({
 
 export type LoungeMirrorCamPreset = 'wide' | 'screen' | 'games' | 'gameroom'
 
+function WorldClocksStrip3D({
+  cmdZ,
+  active,
+}: {
+  cmdZ: number
+  active: boolean
+}) {
+  const [clocks, setClocks] = useState<WorldClockEntry[]>(() => getCommandWorldClocks())
+
+  useEffect(() => {
+    if (!active) return
+    setClocks(getCommandWorldClocks())
+    const id = window.setInterval(() => {
+      setClocks(getCommandWorldClocks())
+    }, 1000)
+    return () => window.clearInterval(id)
+  }, [active])
+
+  return (
+    <group position={[-12.04, 3.48, cmdZ]} rotation={[0, Math.PI / 2, 0]}>
+      <RoundedBox args={[7.4, 0.42, 0.04]} radius={0.02} smoothness={2}>
+        <meshBasicMaterial color="#060B14" />
+      </RoundedBox>
+      <Text
+        position={[-3.05, 0, 0.026]}
+        fontSize={0.072}
+        color="#38BDF8"
+        anchorX="left"
+        anchorY="middle"
+      >
+        🛰 COMMAND OPS
+      </Text>
+      {clocks.map((clk, idx) => (
+        <group key={clk.code} position={[-1.35 + idx * 1.12, 0, 0.026]}>
+          <Text
+            position={[0, 0.08, 0]}
+            fontSize={0.052}
+            color="#94A3B8"
+            anchorX="center"
+            anchorY="middle"
+          >
+            {`${clk.code} · ${clk.city}`}
+          </Text>
+          <Text
+            position={[0, -0.06, 0]}
+            fontSize={0.085}
+            color="#F8FAFC"
+            anchorX="center"
+            anchorY="middle"
+          >
+            {clk.time}
+          </Text>
+        </group>
+      ))}
+    </group>
+  )
+}
+
 export interface CommandCenterRoom3DProps {
   wingLayout: ExpansionWingLayout
   wingState: ExpansionWingSyncedState
@@ -211,6 +269,8 @@ export interface CommandCenterRoom3DProps {
   localSeatId?: string
   participants: ParticipantProfile[]
   cinemaVolume: number
+  visible?: boolean
+  isActiveRoom?: boolean
   onSelectSeat: (seatId: string) => void
   onTeleportToFloor?: (point: [number, number, number]) => void
   onUpdateWingState: (patch: Partial<ExpansionWingSyncedState>) => void
@@ -233,6 +293,7 @@ export function CommandCenterRoom3D({
   localSeatId,
   participants,
   cinemaVolume,
+  visible = true,
   onSelectSeat,
   onTeleportToFloor,
   onUpdateWingState,
@@ -255,7 +316,6 @@ export function CommandCenterRoom3D({
   const [sportsNonce, setSportsNonce] = useState(0)
   const [sportsAutoCycle, setSportsAutoCycle] = useState(false)
 
-  const [clocks, setClocks] = useState<WorldClockEntry[]>(() => getCommandWorldClocks())
   const [opsAudioUnmuted, setOpsAudioUnmuted] = useState(false)
   const [hasOpsFrames, setHasOpsFrames] = useState(false)
   const [preferRoomCam, setPreferRoomCam] = useState(false)
@@ -442,20 +502,13 @@ export function CommandCenterRoom3D({
     return () => window.clearInterval(timer)
   }, [activeSportsLeague, onUpdateWingState, sportsAutoCycle])
 
-  // World clocks tick every 1s
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      setClocks(getCommandWorldClocks())
-    }, 1000)
-    return () => window.clearInterval(id)
-  }, [])
-
   // Rotating 3D Holographic Tactical Globe (zero per-frame allocations)
   const globeRef = useRef<THREE.Group>(null)
   const ring1Ref = useRef<THREE.Mesh>(null)
   const ring2Ref = useRef<THREE.Mesh>(null)
 
   useFrame((_, delta) => {
+    if (!visible) return
     const dt = Math.min(delta, 0.1)
     if (globeRef.current) {
       globeRef.current.rotation.y += dt * 0.34
@@ -509,7 +562,7 @@ export function CommandCenterRoom3D({
   const brightnessScale = Math.max(0.55, Math.min(1.65, lighting.brightness))
 
   return (
-    <group name="wing-command-center">
+    <group name="wing-command-center" visible={visible}>
       {/* Anti-Static Tactical Slate Floor (supports double-click / VR glide) */}
       <mesh
         position={[centerX, 0.005, cmdZ]}
@@ -621,42 +674,7 @@ export function CommandCenterRoom3D({
       {/* =================================================================== */}
       {/* TOP OVERHEAD 5-ZONE WORLD CLOCK & DEFCON STATUS BAR (West Wall)     */}
       {/* =================================================================== */}
-      <group position={[-12.04, 3.48, cmdZ]} rotation={[0, Math.PI / 2, 0]}>
-        <RoundedBox args={[7.4, 0.42, 0.04]} radius={0.02} smoothness={2}>
-          <meshBasicMaterial color="#060B14" />
-        </RoundedBox>
-        <Text
-          position={[-3.05, 0, 0.026]}
-          fontSize={0.072}
-          color="#38BDF8"
-          anchorX="left"
-          anchorY="middle"
-        >
-          🛰 COMMAND OPS
-        </Text>
-        {clocks.map((clk, idx) => (
-          <group key={clk.code} position={[-1.35 + idx * 1.12, 0, 0.026]}>
-            <Text
-              position={[0, 0.08, 0]}
-              fontSize={0.052}
-              color="#94A3B8"
-              anchorX="center"
-              anchorY="middle"
-            >
-              {`${clk.code} · ${clk.city}`}
-            </Text>
-            <Text
-              position={[0, -0.06, 0]}
-              fontSize={0.085}
-              color="#F8FAFC"
-              anchorX="center"
-              anchorY="middle"
-            >
-              {clk.time}
-            </Text>
-          </group>
-        ))}
-      </group>
+      <WorldClocksStrip3D cmdZ={cmdZ} active={visible} />
 
       {/* =================================================================== */}
       {/* CENTER PRIMARY AUXILIARY VIEWING SCREEN (Mirror Lounge or Ops Feed) */}

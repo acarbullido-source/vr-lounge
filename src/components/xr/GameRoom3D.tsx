@@ -298,6 +298,8 @@ export interface GameRoom3DProps {
   computedSeats: ComputedSeat[]
   localSeatId?: string
   participants: ParticipantProfile[]
+  visible?: boolean
+  isActiveRoom?: boolean
   onSelectSeat: (seatId: string) => void
   onTeleportToFloor?: (point: [number, number, number]) => void
   // Holotable Callbacks
@@ -410,6 +412,8 @@ export function GameRoom3D({
   computedSeats,
   localSeatId,
   participants,
+  visible = true,
+  isActiveRoom = false,
   onSelectSeat,
   onTeleportToFloor,
   onSetHolotableTerrain,
@@ -499,10 +503,22 @@ export function GameRoom3D({
     return map
   }, [onRecordArcadeScore])
 
+  // Dispose dynamic arcade cabinet CanvasTextures and jsnes instances on unmount
+  useEffect(() => {
+    return () => {
+      arcadeEngines['pac-maze'].dispose()
+      arcadeEngines.galaxia.dispose()
+      arcadeEngines.frogger.dispose()
+      arcadeEngines.arkanoid.dispose()
+    }
+  }, [arcadeEngines])
+
   const [, setCabinetRomRev] = useState(0)
 
-  // Keyboard listener for active arcade cabinet when player is in Game Room
+  // Keyboard listener for active arcade cabinet — ONLY active when player is in Game Room
   useEffect(() => {
+    if (!isActiveRoom) return
+
     const mapKey = (code: string) => {
       if (code === 'ArrowUp' || code === 'KeyI') return 'up' as const
       if (code === 'ArrowDown' || code === 'KeyK') return 'down' as const
@@ -541,8 +557,14 @@ export function GameRoom3D({
     return () => {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
+      const eng = arcadeEngines[activeCabinetId]
+      if (eng) {
+        for (const b of ['up', 'down', 'left', 'right', 'a', 'b', 'start', 'select'] as const) {
+          eng.setButtonHeld(b, false)
+        }
+      }
     }
-  }, [activeCabinetId, arcadeEngines])
+  }, [activeCabinetId, arcadeEngines, isActiveRoom])
 
   // Pop-A-Shot 3D Flying Basketball & Skee-Ball 3D Rolling Ball Physics State
   const [hoopsScore, setHoopsScore] = useState(36)
@@ -570,12 +592,13 @@ export function GameRoom3D({
   const scoreSyncTickRef = useRef(0)
 
   useFrame((_, delta) => {
+    if (!visible || !isActiveRoom) return
     const dt = Math.min(delta, 0.05)
     if (holoRingRef.current) {
       holoRingRef.current.rotation.z += dt * 0.28
     }
 
-    // Step all 4 classic arcade CRT engines (focused cabinet @ 60fps, others @ 20fps attract)
+    // Step all 4 classic arcade CRT engines (focused cabinet @ 60fps, others @ ~1.2fps attract)
     arcadeEngines['pac-maze'].step(dt, activeCabinetId === 'pac-maze')
     arcadeEngines.galaxia.step(dt, activeCabinetId === 'galaxia')
     arcadeEngines.frogger.step(dt, activeCabinetId === 'frogger')
@@ -836,7 +859,7 @@ export function GameRoom3D({
   }
 
   return (
-    <group name="wing-game-room">
+    <group name="wing-game-room" visible={visible}>
       {/* Expanded Neon Synthwave Slate Floor (15.2m x 11.2m — Double-Click to Walk / Glide) */}
       <mesh
         position={[centerX, 0.005, gameRoomZ]}

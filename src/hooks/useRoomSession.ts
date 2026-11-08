@@ -182,6 +182,11 @@ export function useRoomSession(
     const onVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
         flushLayoutToStorage()
+      } else if (document.visibilityState === 'visible') {
+        if (serviceRef.current) {
+          void serviceRef.current.updatePresence(localProfileRef.current)
+          serviceRef.current.requestRoomState()
+        }
       }
     }
 
@@ -194,6 +199,21 @@ export function useRoomSession(
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [])
+
+  // Periodically prune stale remote 6DoF poses for departed peers
+  useEffect(() => {
+    if (!joined) return
+    const timer = window.setInterval(() => {
+      const now = Date.now()
+      const activeIds = new Set(participants.map((p) => p.userId))
+      for (const [uid, pose] of remotePosesRef.current.entries()) {
+        if (!activeIds.has(uid) && now - (pose.timestamp || 0) > 15_000) {
+          remotePosesRef.current.delete(uid)
+        }
+      }
+    }, 15_000)
+    return () => window.clearInterval(timer)
+  }, [joined, participants])
 
   // Prune expired floating 3D emoji reactions every 500ms
   useEffect(() => {
@@ -652,6 +672,7 @@ export function useRoomSession(
       const nextRevision = Math.max(current.revision + 1, nextUpdatedAt)
       const next: RoomCustomizationState = {
         ...draft,
+        furniture: (draft.furniture ?? []).slice(-48),
         revision: nextRevision,
         updatedAt: nextUpdatedAt,
         updatedBy: localProfileRef.current.displayName,

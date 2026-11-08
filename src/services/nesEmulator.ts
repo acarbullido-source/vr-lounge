@@ -478,6 +478,7 @@ class NesEmulatorSingleton {
   private uiHeldButtons = new Set<NesButtonId>()
   private gamepadHeldButtons = new Set<NesButtonId>()
   private appliedButtons = new Set<NesButtonId>()
+  private activeConsumers = new Set<'screen' | 'modal'>()
 
   constructor() {
     this.canvas = document.createElement('canvas')
@@ -841,7 +842,38 @@ class NesEmulatorSingleton {
   public setMasterVolume(vol: number) {
     this.masterVolume = Math.max(0, Math.min(1, vol))
     if (this.gainNode) {
-      this.gainNode.gain.value = this.soundEnabled ? this.masterVolume * 0.35 : 0
+      this.gainNode.gain.value =
+        this.soundEnabled && !this.paused ? this.masterVolume * 0.35 : 0
+    }
+  }
+
+  public setConsumerActive(consumer: 'screen' | 'modal', active: boolean) {
+    if (active) {
+      this.activeConsumers.add(consumer)
+      this.paused = false
+      this.ensureLoopRunning()
+      if (this.gainNode) {
+        this.gainNode.gain.value = this.soundEnabled ? this.masterVolume * 0.35 : 0
+      }
+    } else {
+      this.activeConsumers.delete(consumer)
+      if (this.activeConsumers.size === 0) {
+        this.paused = true
+        if (this.rafId !== null && typeof window !== 'undefined') {
+          window.cancelAnimationFrame(this.rafId)
+          this.rafId = null
+        }
+        if (this.gainNode) {
+          this.gainNode.gain.value = 0
+        }
+      }
+    }
+  }
+
+  public wakeAudioAndTexture() {
+    this.texture.needsUpdate = true
+    if (this.audioCtx && this.audioCtx.state === 'suspended' && !this.paused) {
+      void this.audioCtx.resume().catch(() => undefined)
     }
   }
 
@@ -866,6 +898,10 @@ class NesEmulatorSingleton {
     if (this.rafId !== null || typeof window === 'undefined') return
     this.lastTick = performance.now()
     const loop = (now: number) => {
+      if (this.paused && this.activeConsumers.size === 0) {
+        this.rafId = null
+        return
+      }
       const dt = Math.min(0.05, Math.max(0.001, (now - this.lastTick) / 1000))
       this.lastTick = now
       this.stepFrame(dt)
@@ -875,7 +911,9 @@ class NesEmulatorSingleton {
   }
 
   private stepFrame(dt: number) {
-    this.pollQuestAndStandardGamepads(undefined, undefined, false)
+    if (!this.activeConsumers.has('screen')) {
+      this.pollQuestAndStandardGamepads(undefined, undefined, false)
+    }
     if (!this.romLoaded || !this.nesCore || this.paused) return
 
     this.frameAccumulator += dt

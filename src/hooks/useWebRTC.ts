@@ -12,6 +12,7 @@ interface PeerEntry {
   voiceSender: RTCRtpSender | null
   screenSenders: RTCRtpSender[]
   keepAliveChannel?: RTCDataChannel
+  disconnectTimer?: number | null
 }
 
 const METERED_TURN_STORAGE_KEY = 'vr-lounge:metered-turn-url'
@@ -423,6 +424,10 @@ export function useWebRTC({
   const closePeer = useCallback((remoteUserId: string) => {
     const entry = peersRef.current.get(remoteUserId)
     if (entry) {
+      if (entry.disconnectTimer != null) {
+        window.clearTimeout(entry.disconnectTimer)
+        entry.disconnectTimer = null
+      }
       entry.pc.onnegotiationneeded = null
       entry.pc.onicecandidate = null
       entry.pc.ontrack = null
@@ -481,6 +486,7 @@ export function useWebRTC({
         pendingCandidates: [],
         voiceSender: null,
         screenSenders: [],
+        disconnectTimer: null,
       }
 
       // Attach local mic track if ready
@@ -586,8 +592,32 @@ export function useWebRTC({
       }
 
       pc.onconnectionstatechange = () => {
-        if (pc.connectionState === 'failed') {
+        const state = pc.connectionState
+        if (state === 'connected' || state === 'closed') {
+          if (entry.disconnectTimer != null) {
+            window.clearTimeout(entry.disconnectTimer)
+            entry.disconnectTimer = null
+          }
+          return
+        }
+        if (state === 'failed') {
+          if (entry.disconnectTimer != null) {
+            window.clearTimeout(entry.disconnectTimer)
+            entry.disconnectTimer = null
+          }
           pc.restartIce()
+          return
+        }
+        if (state === 'disconnected' && entry.disconnectTimer == null) {
+          entry.disconnectTimer = window.setTimeout(() => {
+            entry.disconnectTimer = null
+            if (
+              pc.connectionState === 'disconnected' ||
+              pc.connectionState === 'failed'
+            ) {
+              pc.restartIce()
+            }
+          }, 4500)
         }
       }
 

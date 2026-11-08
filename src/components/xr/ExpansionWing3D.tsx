@@ -1,6 +1,6 @@
 import { RoundedBox, Text } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import * as THREE from 'three'
 import {
   BOARDROOM_STRATEGY_SLIDES,
@@ -25,6 +25,7 @@ import type {
   ComputedSeat,
   ExpansionWingSyncedState,
   LightingPresetId,
+  LoungeWingId,
   ParticipantProfile,
   PresenterState,
   RoomCustomizationState,
@@ -38,6 +39,37 @@ import { GameRoom3D } from './GameRoom3D'
 import { OutdoorLakeDeck3D } from './OutdoorLakeDeck3D'
 
 const noopRaycast = () => null
+
+interface WingRoomErrorBoundaryProps {
+  roomName: string
+  children: ReactNode
+}
+
+interface WingRoomErrorBoundaryState {
+  hasError: boolean
+}
+
+class WingRoomErrorBoundary extends Component<
+  WingRoomErrorBoundaryProps,
+  WingRoomErrorBoundaryState
+> {
+  state: WingRoomErrorBoundaryState = { hasError: false }
+
+  static getDerivedStateFromError(): WingRoomErrorBoundaryState {
+    return { hasError: true }
+  }
+
+  componentDidCatch(error: Error): void {
+    console.warn(`[ExpansionWing3D] Isolated error in ${this.props.roomName}:`, error.message)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return null
+    }
+    return this.props.children
+  }
+}
 
 // Pre-allocated shared geometries & materials for Bookcases (eliminates 150+ per-instance GPU allocations)
 const BOOK_PALETTE = [
@@ -392,6 +424,7 @@ export interface ExpansionWing3DProps {
   cornholeState: CornholeState
   holotableState: HolotableState
   gameRoomStreamMuted: boolean
+  activeLoungeWing?: LoungeWingId
   onToggleGameRoomStreamMute: () => void
   onRecordCornholeThrow: (bag: CornholeBagRecord) => void
   onResetCornhole: () => void
@@ -439,6 +472,7 @@ export function ExpansionWing3D({
   cornholeState,
   holotableState,
   gameRoomStreamMuted,
+  activeLoungeWing = 'main-lounge',
   onToggleGameRoomStreamMute,
   onRecordCornholeThrow,
   onResetCornhole,
@@ -475,6 +509,17 @@ export function ExpansionWing3D({
   const [crackleAudioOn, setCrackleAudioOn] = useState(() => fireplaceAudio.isPlaying())
   const [loungeCamPreset, setLoungeCamPreset] =
     useState<LoungeMirrorCamPreset>('wide')
+
+  // Sightline-safe room visibility flags (keeps React state mounted while culling unseen rooms)
+  const isRearWingZone =
+    activeLoungeWing === 'command-center' ||
+    activeLoungeWing === 'game-room' ||
+    activeLoungeWing === 'outdoor-deck'
+  const isFrontRoomsVisible = !isRearWingZone
+  const isRearRoomsVisible =
+    activeLoungeWing !== 'main-lounge' &&
+    activeLoungeWing !== 'boardroom' &&
+    activeLoungeWing !== 'library'
 
   const handleCycleLoungeCamPreset = () => {
     setLoungeCamPreset((prev) =>
@@ -573,7 +618,7 @@ export function ExpansionWing3D({
       wingRearLightRef.current.color.lerp(targetAmbientColor, lerpAlpha)
     }
 
-    if (hearthFlameRef.current && wingState.libraryFireLit) {
+    if (isFrontRoomsVisible && hearthFlameRef.current && wingState.libraryFireLit) {
       hearthFlameRef.current.scale.y =
         0.95 + Math.sin(t * 10.5) * 0.14 + Math.cos(t * 16.0) * 0.06
       hearthFlameRef.current.scale.x = 0.96 + Math.sin(t * 7.2) * 0.06
@@ -585,8 +630,14 @@ export function ExpansionWing3D({
         : 0
     }
 
-    // Round-robin update the 4 internal security cameras (~14 FPS total, 1 pass per tick)
-    if (t - lastMirrorRenderRef.current >= 0.068) {
+    // Only render the 4 off-screen internal security camera targets when the local player can see a security cam monitor
+    const shouldRenderSecurityCams =
+      activeLoungeWing === 'command-center' ||
+      activeLoungeWing === 'hallway' ||
+      (!hasMainVideoFrames &&
+        (activeLoungeWing === 'boardroom' || activeLoungeWing === 'game-room'))
+
+    if (shouldRenderSecurityCams && t - lastMirrorRenderRef.current >= 0.18) {
       lastMirrorRenderRef.current = t
 
       const camOrder: readonly LoungeMirrorCamPreset[] = [
@@ -622,14 +673,18 @@ export function ExpansionWing3D({
 
       const wingGroup = wingGroupRef.current
       const prevWingVisible = wingGroup ? wingGroup.visible : true
+      const gameRoomObj =
+        currentCam === 'gameroom' ? scene.getObjectByName('wing-game-room') : null
+      const prevGameRoomVisible = gameRoomObj ? gameRoomObj.visible : true
       const prevTarget = gl.getRenderTarget()
       const prevXrEnabled = gl.xr.enabled
       const prevAutoClear = gl.autoClear
 
       try {
         // Hide wingGroup only when looking into Main Lounge so the back wall doesn't block the lens;
-        // keep wingGroup visible when rendering the Game Room internal cam!
+        // keep wingGroup & wing-game-room visible when rendering the Game Room internal cam!
         if (wingGroup) wingGroup.visible = currentCam === 'gameroom'
+        if (gameRoomObj) gameRoomObj.visible = true
         gl.xr.enabled = false
         gl.autoClear = true
         gl.setRenderTarget(loungeCamTargets[currentCam])
@@ -640,6 +695,7 @@ export function ExpansionWing3D({
         gl.xr.enabled = prevXrEnabled
         gl.autoClear = prevAutoClear
         if (wingGroup) wingGroup.visible = prevWingVisible
+        if (gameRoomObj) gameRoomObj.visible = prevGameRoomVisible
       }
     }
   })
@@ -1062,7 +1118,8 @@ export function ExpansionWing3D({
       {/* =================================================================== */}
       {/* 2. FANCY EXECUTIVE BOARD ROOM (West Wing Front, x -11.2..-1.65)     */}
       {/* =================================================================== */}
-      <group name="wing-executive-boardroom">
+      <WingRoomErrorBoundary roomName="Executive Boardroom">
+      <group name="wing-executive-boardroom" visible={isFrontRoomsVisible}>
         {/* Warm Travertine Floor + Navy/Gold Wool Executive Carpet */}
         <mesh
           position={[-6.425, 0.005, boardZ]}
@@ -1493,11 +1550,13 @@ export function ExpansionWing3D({
           />
         ))}
       </group>
+      </WingRoomErrorBoundary>
 
       {/* =================================================================== */}
       {/* 3. COZY LIBRARY & CRACKLING FIREPLACE (East Wing Front, x 1.65..11.2) */}
       {/* =================================================================== */}
-      <group name="wing-cozy-library">
+      <WingRoomErrorBoundary roomName="Cozy Library">
+      <group name="wing-cozy-library" visible={isFrontRoomsVisible}>
         {/* Warm Honey-Oak Parquet Floor + Ornate Crimson & Gold Persian Rug */}
         <mesh
           position={[6.425, 0.005, libZ]}
@@ -1840,10 +1899,12 @@ export function ExpansionWing3D({
           />
         ))}
       </group>
+      </WingRoomErrorBoundary>
 
       {/* =================================================================== */}
       {/* 4. COMMAND & CONTROL CENTER (West Wing Rear)                        */}
       {/* =================================================================== */}
+      <WingRoomErrorBoundary roomName="Command Center">
       <CommandCenterRoom3D
         wingLayout={wingLayout}
         wingState={wingState}
@@ -1860,15 +1921,19 @@ export function ExpansionWing3D({
         localSeatId={localSeatId}
         participants={participants}
         cinemaVolume={cinemaVolume}
+        visible={isRearRoomsVisible}
+        isActiveRoom={activeLoungeWing === 'command-center'}
         onSelectSeat={onSelectSeat}
         onTeleportToFloor={onTeleportToFloor}
         onUpdateWingState={onUpdateWingState}
         onOpenCommandOpsDrawer={onOpenCommandOpsDrawer}
       />
+      </WingRoomErrorBoundary>
 
       {/* =================================================================== */}
       {/* 5. THE GAME ROOM (East Wing Rear: Holotable, Arcade & Stream Mirror)*/}
       {/* =================================================================== */}
+      <WingRoomErrorBoundary roomName="The Game Room">
       <GameRoom3D
         wingLayout={wingLayout}
         lighting={lighting}
@@ -1881,6 +1946,8 @@ export function ExpansionWing3D({
         participants={participants}
         holotableState={holotableState}
         gameRoomStreamMuted={gameRoomStreamMuted}
+        visible={isRearRoomsVisible}
+        isActiveRoom={activeLoungeWing === 'game-room'}
         onToggleGameRoomStreamMute={onToggleGameRoomStreamMute}
         onSelectSeat={onSelectSeat}
         onTeleportToFloor={onTeleportToFloor}
@@ -1896,10 +1963,12 @@ export function ExpansionWing3D({
         onShroudAllHolotableFog={onShroudAllHolotableFog}
         onRecordArcadeScore={onRecordArcadeScore}
       />
+      </WingRoomErrorBoundary>
 
       {/* =================================================================== */}
       {/* 6. OUTDOOR LAKE & MOUNTAIN OBSERVATION DECK (South Vista + Cornhole)*/}
       {/* =================================================================== */}
+      <WingRoomErrorBoundary roomName="Outdoor Lake Deck">
       <OutdoorLakeDeck3D
         wingLayout={wingLayout}
         wingState={wingState}
@@ -1909,12 +1978,15 @@ export function ExpansionWing3D({
         participants={participants}
         cornholeState={cornholeState}
         localDisplayName={localDisplayName}
+        visible={isRearRoomsVisible}
+        isActiveRoom={activeLoungeWing === 'outdoor-deck'}
         onRecordCornholeThrow={onRecordCornholeThrow}
         onResetCornhole={onResetCornhole}
         onSelectSeat={onSelectSeat}
         onTeleportToFloor={onTeleportToFloor}
         onUpdateWingState={onUpdateWingState}
       />
+      </WingRoomErrorBoundary>
     </group>
   )
 }

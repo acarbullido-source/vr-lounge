@@ -319,6 +319,8 @@ export interface OutdoorLakeDeck3DProps {
   participants: ParticipantProfile[]
   cornholeState: CornholeState
   localDisplayName: string
+  visible?: boolean
+  isActiveRoom?: boolean
   onRecordCornholeThrow: (bag: CornholeBagRecord) => void
   onResetCornhole: () => void
   onSelectSeat: (seatId: string) => void
@@ -354,6 +356,7 @@ export function OutdoorLakeDeck3D({
   participants,
   cornholeState,
   localDisplayName,
+  visible = true,
   onRecordCornholeThrow,
   onResetCornhole,
   onSelectSeat,
@@ -380,6 +383,7 @@ export function OutdoorLakeDeck3D({
   const cloudGroupRef = useRef<THREE.Group>(null)
 
   useFrame(({ clock }) => {
+    if (!visible) return
     const t = clock.getElapsedTime()
     if (shimmer1Ref.current) {
       shimmer1Ref.current.scale.x = 1 + Math.sin(t * 1.4) * 0.14
@@ -457,7 +461,7 @@ export function OutdoorLakeDeck3D({
   const deckCenterZ = z0 + 25.1
 
   return (
-    <group name="wing-outdoor-lake-deck">
+    <group name="wing-outdoor-lake-deck" visible={visible}>
       {/* =================================================================== */}
       {/* REDWOOD & HONEY-CEDAR OBSERVATION DECK + WALKABLE LAKESHORE PIER    */}
       {/* =================================================================== */}

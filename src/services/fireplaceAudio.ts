@@ -14,6 +14,12 @@ class FireplaceAudioEngine {
     return this.active
   }
 
+  resumeIfNeeded(): void {
+    if (this.active && this.ctx && this.ctx.state === 'suspended') {
+      void this.ctx.resume().catch(() => {})
+    }
+  }
+
   toggle(): boolean {
     if (this.active) {
       this.stop()
