@@ -1,5 +1,6 @@
 import {
   Check,
+  Compass,
   Copy,
   Crown,
   Dices,
@@ -249,6 +250,8 @@ export function CompanionOverlay({
   onToggleBarGames,
   wardrobeOpen = false,
   onToggleWardrobe,
+  clubhouseOpen = false,
+  onToggleClubhouse,
 }: CompanionOverlayProps) {
   // Pre-join lobby form state hydrated from saved avatar preferences
   const [savedAvatarPrefs] = useState(() => loadSavedAvatarPreferences())
@@ -1497,7 +1500,8 @@ export function CompanionOverlay({
         !buildDrawerOpen &&
         !urlDrawerOpen &&
         !barGamesOpen &&
-        !wardrobeOpen && (
+        !wardrobeOpen &&
+        !clubhouseOpen && (
           <div className="pointer-events-none mx-auto mb-2 flex items-center gap-2 rounded-full border border-[#38bdf8]/35 bg-[#080a0d]/85 px-3.5 py-1 text-[11px] text-[#cbd5e1] shadow-lg backdrop-blur-md">
             <Footprints className="h-3.5 w-3.5 text-[#38bdf8]" />
             <span>
@@ -1520,7 +1524,7 @@ export function CompanionOverlay({
 
       {/* Bottom Companion Presenter & Watch-Party Dock */}
       <footer className="pointer-events-auto lounge-dock-bar mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-2.5 rounded-2xl px-3.5 py-2.5">
-        {/* Left: Presenter Handoff + Tab Share + URL Player + Customize Room + Games + Avatar */}
+        {/* Left: Presenter Handoff + Tab Share + URL Player + Customize Room + Games + Rooms + Avatar */}
         <div className="flex flex-wrap items-center gap-2">
           <button
             id="btn-take-or-release-control"
@@ -1568,6 +1572,7 @@ export function CompanionOverlay({
                 if (next) {
                   setBuildDrawerOpen(false)
                   onToggleWardrobe?.(false)
+                  onToggleClubhouse?.(false)
                 }
                 return next
               })
@@ -1591,6 +1596,7 @@ export function CompanionOverlay({
                 if (next) {
                   setUrlDrawerOpen(false)
                   onToggleWardrobe?.(false)
+                  onToggleClubhouse?.(false)
                   onToggleBuildMode(true)
                 } else {
                   onToggleBuildMode(false)
@@ -1618,6 +1624,7 @@ export function CompanionOverlay({
                   setUrlDrawerOpen(false)
                   onToggleBuildMode(false)
                   onToggleWardrobe?.(false)
+                  onToggleClubhouse?.(false)
                 }
                 onToggleBarGames()
               }}
@@ -1632,6 +1639,31 @@ export function CompanionOverlay({
             </button>
           )}
 
+          {onToggleClubhouse && (
+            <button
+              id="btn-open-clubhouse-rooms"
+              type="button"
+              onClick={() => {
+                if (!clubhouseOpen) {
+                  setBuildDrawerOpen(false)
+                  setUrlDrawerOpen(false)
+                  setChatDrawerOpen(false)
+                  onToggleBuildMode(false)
+                  onToggleWardrobe?.(false)
+                }
+                onToggleClubhouse()
+              }}
+              className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition ${
+                clubhouseOpen
+                  ? 'border-[#34d399] bg-[#34d399]/18 text-[#a7f3d0]'
+                  : 'border-[#f4f1ea]/12 bg-[#141922] text-[#f4f1ea] hover:border-[#34d399]/60'
+              }`}
+            >
+              <Compass className="h-3.5 w-3.5 text-[#34d399]" />
+              <span>Rooms &amp; Ops</span>
+            </button>
+          )}
+
           {onToggleWardrobe && (
             <button
               id="btn-open-avatar-wardrobe"
@@ -1642,6 +1674,7 @@ export function CompanionOverlay({
                   setUrlDrawerOpen(false)
                   setChatDrawerOpen(false)
                   onToggleBuildMode(false)
+                  onToggleClubhouse?.(false)
                 }
                 onToggleWardrobe()
               }}

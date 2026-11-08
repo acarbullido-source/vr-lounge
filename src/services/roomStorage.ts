@@ -1,4 +1,5 @@
 import { CANONICAL_ROOM_CODE } from '../constants/cinema'
+import { resolveExpansionWingState } from '../constants/expansionRooms'
 import { createDefaultRoomCustomization } from '../constants/hangout'
 import type { RoomCustomizationState } from '../types/lounge'
 import { hasSupabaseCredentials } from './realtime'
@@ -58,6 +59,7 @@ export function sanitizeRoomCustomization(raw: unknown): RoomCustomizationState 
           : defaults.screen.position,
     },
     furniture: candidate.furniture.slice(0, 80),
+    expansionWing: resolveExpansionWingState(candidate.expansionWing),
   }
 }
 
