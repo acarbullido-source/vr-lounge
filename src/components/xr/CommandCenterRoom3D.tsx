@@ -187,6 +187,8 @@ function TacticalOperatorChair({
   )
 }
 
+export type LoungeMirrorCamPreset = 'wide' | 'screen' | 'games'
+
 export interface CommandCenterRoom3DProps {
   wingLayout: ExpansionWingLayout
   wingState: ExpansionWingSyncedState
@@ -194,6 +196,9 @@ export interface CommandCenterRoom3DProps {
   presenterState: PresenterState
   mainVideoTexture: THREE.VideoTexture
   hasMainVideoFrames: boolean
+  loungeMirrorTexture: THREE.Texture
+  loungeCamPreset: LoungeMirrorCamPreset
+  onCycleLoungeCamPreset: () => void
   computedSeats: ComputedSeat[]
   localSeatId?: string
   participants: ParticipantProfile[]
@@ -211,6 +216,9 @@ export function CommandCenterRoom3D({
   presenterState,
   mainVideoTexture,
   hasMainVideoFrames,
+  loungeMirrorTexture,
+  loungeCamPreset,
+  onCycleLoungeCamPreset,
   computedSeats,
   localSeatId,
   participants,
@@ -234,6 +242,7 @@ export function CommandCenterRoom3D({
   const [clocks, setClocks] = useState<WorldClockEntry[]>(() => getCommandWorldClocks())
   const [opsAudioUnmuted, setOpsAudioUnmuted] = useState(false)
   const [hasOpsFrames, setHasOpsFrames] = useState(false)
+  const [preferRoomCam, setPreferRoomCam] = useState(false)
 
   // Dedicated lightweight HTML5 <video> + VideoTexture for independent Command Ops streams
   const opsMedia = useMemo(() => {
@@ -426,8 +435,11 @@ export function CommandCenterRoom3D({
     return map
   }, [participants])
 
-  const showingLiveMirror =
-    wingState.commandScreenMode === 'mirror-lounge' && hasMainVideoFrames
+  const isMirrorMode = wingState.commandScreenMode === 'mirror-lounge'
+  const showingDirectVideoMirror =
+    isMirrorMode && hasMainVideoFrames && !preferRoomCam
+  const showingLoungeRoomCam =
+    isMirrorMode && (!hasMainVideoFrames || preferRoomCam)
   const showingOpsVideo =
     wingState.commandScreenMode === 'ops-stream' && hasOpsFrames
 
@@ -609,7 +621,7 @@ export function CommandCenterRoom3D({
           <meshStandardMaterial color="#090F1A" metalness={0.55} roughness={0.35} />
         </RoundedBox>
 
-        {/* Active Video Surface */}
+        {/* Active Video / Live Main Lounge Mirror Surface */}
         <mesh
           position={[0, 0.05, 0.029]}
           onClick={(e) => {
@@ -620,21 +632,98 @@ export function CommandCenterRoom3D({
               } else {
                 opsMedia.videoEl.pause()
               }
+            } else if (isMirrorMode && hasMainVideoFrames) {
+              setPreferRoomCam((v) => !v)
+            } else if (isMirrorMode) {
+              onCycleLoungeCamPreset()
             }
           }}
         >
           <planeGeometry args={[3.84, 2.02]} />
-          {showingLiveMirror ? (
-            <meshBasicMaterial map={mainVideoTexture} toneMapped={false} />
+          {showingDirectVideoMirror ? (
+            <meshBasicMaterial
+              key="cmd-main-video"
+              map={mainVideoTexture}
+              color="#ffffff"
+              toneMapped={false}
+            />
+          ) : showingLoungeRoomCam ? (
+            <meshBasicMaterial
+              key="cmd-lounge-cam"
+              map={loungeMirrorTexture}
+              color="#ffffff"
+              toneMapped={false}
+            />
           ) : showingOpsVideo ? (
-            <meshBasicMaterial map={opsMedia.texture} toneMapped={false} />
+            <meshBasicMaterial
+              key="cmd-ops-video"
+              map={opsMedia.texture}
+              color="#ffffff"
+              toneMapped={false}
+            />
           ) : (
-            <meshBasicMaterial color="#07101E" />
+            <meshBasicMaterial key="cmd-standby" color="#07101E" />
           )}
         </mesh>
 
-        {/* Standby / Loading Overlay when no frames yet */}
-        {!showingLiveMirror && !showingOpsVideo && (
+        {/* Live Main Lounge Mirror Status Badge + Optional Picture-in-Picture Room Cam */}
+        {isMirrorMode && (
+          <group position={[0, 0, 0.034]}>
+            {/* Top-left live indicator pill */}
+            <group position={[-1.12, 0.92, 0]}>
+              <RoundedBox args={[1.48, 0.13, 0.008]} radius={0.015}>
+                <meshBasicMaterial color="#060D1A" transparent opacity={0.82} />
+              </RoundedBox>
+              <Text
+                position={[0, 0, 0.006]}
+                fontSize={0.044}
+                color="#34D399"
+                anchorX="center"
+                anchorY="middle"
+              >
+                {showingDirectVideoMirror
+                  ? `🟢 LIVE MAIN LOUNGE STREAM · ${presenterState.mediaTitle || 'Active Feed'}`
+                  : `🟢 LIVE MAIN LOUNGE CAM · ${loungeCamPreset === 'wide' ? 'WIDE HANGOUT' : loungeCamPreset === 'screen' ? 'CINEMA SCREEN' : 'BAR & GAMES'}`}
+              </Text>
+            </group>
+
+            {/* Picture-in-Picture (PiP) 3D Room Cam when Main Video is Fullscreen */}
+            {showingDirectVideoMirror && (
+              <group
+                position={[1.26, -0.58, 0.003]}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setPreferRoomCam(true)
+                }}
+              >
+                <RoundedBox args={[1.16, 0.66, 0.008]} radius={0.015}>
+                  <meshBasicMaterial color="#E5A93C" />
+                </RoundedBox>
+                <mesh position={[0, 0, 0.006]}>
+                  <planeGeometry args={[1.11, 0.61]} />
+                  <meshBasicMaterial
+                    key="cmd-pip-lounge-cam"
+                    map={loungeMirrorTexture}
+                    color="#ffffff"
+                    toneMapped={false}
+                  />
+                </mesh>
+                <Text
+                  position={[0, -0.25, 0.01]}
+                  fontSize={0.036}
+                  color="#FDE68A"
+                  anchorX="center"
+                  anchorY="middle"
+                >
+                  🎥 LOUNGE ROOM CAM (CLICK TO EXPAND)
+                </Text>
+              </group>
+            )}
+          </group>
+        )}
+
+        {/* Loading Overlay only when Ops Stream is still buffering frames */}
+        {!isMirrorMode && !showingOpsVideo && (
           <group position={[0, 0.08, 0.035]}>
             <Text
               position={[0, 0.24, 0]}
@@ -643,9 +732,7 @@ export function CommandCenterRoom3D({
               anchorX="center"
               anchorY="middle"
             >
-              {wingState.commandScreenMode === 'mirror-lounge'
-                ? 'MAIN LOUNGE MIRROR STANDBY'
-                : 'CONNECTING TACTICAL STREAM…'}
+              CONNECTING TACTICAL STREAM…
             </Text>
             <Text
               position={[0, -0.02, 0]}
@@ -656,11 +743,7 @@ export function CommandCenterRoom3D({
               anchorX="center"
               anchorY="middle"
             >
-              {wingState.commandScreenMode === 'mirror-lounge'
-                ? presenterState.activePresenterId
-                  ? `Linked to ${presenterState.presenterName ?? 'Presenter'} (${presenterState.mediaTitle || 'Ready'})`
-                  : 'Main Cinema Screen is currently idle. Start a YouTube / TV stream in the Main Lounge, or switch to an Independent Ops Feed below!'
-                : `Loading ${effectiveOpsTitle}…`}
+              {`Loading ${effectiveOpsTitle}…`}
             </Text>
           </group>
         )}
@@ -673,9 +756,16 @@ export function CommandCenterRoom3D({
             width={1.06}
             height={0.13}
             fontSize={0.052}
-            active={wingState.commandScreenMode === 'mirror-lounge'}
+            active={isMirrorMode}
             accent="#E5A93C"
-            onClick={() => onUpdateWingState({ commandScreenMode: 'mirror-lounge' })}
+            onClick={() => {
+              if (isMirrorMode && hasMainVideoFrames) {
+                setPreferRoomCam((v) => !v)
+              } else {
+                setPreferRoomCam(false)
+                onUpdateWingState({ commandScreenMode: 'mirror-lounge' })
+              }
+            }}
           />
           <OpsButton3D
             label="🛰 Independent Ops Feed"
@@ -688,12 +778,28 @@ export function CommandCenterRoom3D({
             onClick={() => onUpdateWingState({ commandScreenMode: 'ops-stream' })}
           />
           <OpsButton3D
-            label="⏭ Next Channel"
+            label={
+              isMirrorMode
+                ? `🎥 Cam: ${loungeCamPreset === 'wide' ? 'Wide' : loungeCamPreset === 'screen' ? 'Screen' : 'Games'}`
+                : '⏭ Next Channel'
+            }
             position={[0.84, 0, 0]}
             width={0.82}
             height={0.13}
             fontSize={0.05}
-            onClick={handleCycleOpsPreset}
+            active={isMirrorMode}
+            accent="#38BDF8"
+            onClick={() => {
+              if (isMirrorMode) {
+                if (hasMainVideoFrames && !preferRoomCam) {
+                  setPreferRoomCam(true)
+                } else {
+                  onCycleLoungeCamPreset()
+                }
+              } else {
+                handleCycleOpsPreset()
+              }
+            }}
           />
           <OpsButton3D
             label={opsAudioUnmuted ? '🔊 Ops Audio' : '🔇 Muted'}

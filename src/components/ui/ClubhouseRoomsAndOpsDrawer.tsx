@@ -424,6 +424,43 @@ export function ClubhouseRoomsAndOpsDrawer({
                     </div>
                   )}
 
+                  {dest.id === 'command-center' && (
+                    <div className="mt-2.5 flex items-center gap-1.5">
+                      <button
+                        id="btn-cmd-card-mirror"
+                        type="button"
+                        onClick={() =>
+                          onUpdateWingState({
+                            commandScreenMode: 'mirror-lounge',
+                          })
+                        }
+                        className={`rounded-lg border px-2 py-1 text-[10px] font-medium transition ${
+                          wingState.commandScreenMode === 'mirror-lounge'
+                            ? 'border-[#e5a93c]/60 bg-[#e5a93c]/20 text-[#fde68a]'
+                            : 'border-[#f4f1ea]/12 bg-[#0b1019] text-[#94a3b8] hover:text-[#f4f1ea]'
+                        }`}
+                      >
+                        📺 Mirror Main Lounge
+                      </button>
+                      <button
+                        id="btn-cmd-card-ops"
+                        type="button"
+                        onClick={() =>
+                          onUpdateWingState({
+                            commandScreenMode: 'ops-stream',
+                          })
+                        }
+                        className={`rounded-lg border px-2 py-1 text-[10px] font-medium transition ${
+                          wingState.commandScreenMode === 'ops-stream'
+                            ? 'border-[#38bdf8]/60 bg-[#38bdf8]/20 text-[#7dd3fc]'
+                            : 'border-[#f4f1ea]/12 bg-[#0b1019] text-[#94a3b8] hover:text-[#f4f1ea]'
+                        }`}
+                      >
+                        🛰 Ops Feed
+                      </button>
+                    </div>
+                  )}
+
                   {dest.id === 'outdoor-deck' && (
                     <div className="mt-2.5 flex flex-wrap gap-1">
                       {(

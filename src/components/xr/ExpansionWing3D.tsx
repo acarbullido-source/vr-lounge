@@ -22,7 +22,10 @@ import type {
   RoomCustomizationState,
   RoomLightingConfig,
 } from '../../types/lounge'
-import { CommandCenterRoom3D } from './CommandCenterRoom3D'
+import {
+  CommandCenterRoom3D,
+  type LoungeMirrorCamPreset,
+} from './CommandCenterRoom3D'
 import { OutdoorLakeDeck3D } from './OutdoorLakeDeck3D'
 
 const noopRaycast = () => null
@@ -414,12 +417,39 @@ export function ExpansionWing3D({
   )
 
   const [crackleAudioOn, setCrackleAudioOn] = useState(() => fireplaceAudio.isPlaying())
+  const [loungeCamPreset, setLoungeCamPreset] =
+    useState<LoungeMirrorCamPreset>('wide')
+
+  const handleCycleLoungeCamPreset = () => {
+    setLoungeCamPreset((prev) =>
+      prev === 'wide' ? 'screen' : prev === 'screen' ? 'games' : 'wide',
+    )
+  }
+
+  // Real-time 3D Main Lounge mirror camera & offscreen render target (640x360, Quest 3 safe)
+  const wingGroupRef = useRef<THREE.Group>(null)
+  const lastMirrorRenderRef = useRef(-10)
+  const loungeMirrorTarget = useMemo(() => {
+    const rt = new THREE.WebGLRenderTarget(640, 360, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      depthBuffer: true,
+      stencilBuffer: false,
+    })
+    rt.texture.colorSpace = THREE.SRGBColorSpace
+    return rt
+  }, [])
+  const loungeCamera = useMemo(
+    () => new THREE.PerspectiveCamera(58, 16 / 9, 0.2, 65),
+    [],
+  )
 
   useEffect(() => {
     return () => {
       fireplaceAudio.stop()
+      loungeMirrorTarget.dispose()
     }
-  }, [])
+  }, [loungeMirrorTarget])
 
   const wingFrontLightRef = useRef<THREE.PointLight>(null)
   const wingRearLightRef = useRef<THREE.PointLight>(null)
@@ -431,8 +461,8 @@ export function ExpansionWing3D({
     [lighting.ambientTint],
   )
 
-  // Consolidated single useFrame for Wing lighting & hearth animation (72Hz/90Hz Quest 3 safe)
-  useFrame(({ clock }, delta) => {
+  // Consolidated single useFrame for Wing lighting, hearth animation, & Main Lounge mirror camera (72Hz/90Hz Quest 3 safe)
+  useFrame(({ clock, gl, scene }, delta) => {
     const t = clock.getElapsedTime()
     const lerpAlpha = 1 - Math.exp(-5.0 * Math.min(delta, 0.1))
     const masterGain = Math.max(0.25, lighting.brightness || 1.0)
@@ -466,6 +496,52 @@ export function ExpansionWing3D({
         ? (16.5 + Math.sin(t * 11.0) * 2.5) * Math.max(0.55, masterGain)
         : 0
     }
+
+    // Render live 3D Main Lounge feed at ~20 FPS whenever Command Center or Boardroom is mirroring
+    const needsMirrorCam =
+      wingState.commandScreenMode === 'mirror-lounge' ||
+      wingState.boardroomScreenMode === 'mirror-lounge'
+
+    if (needsMirrorCam && t - lastMirrorRenderRef.current >= 0.048) {
+      lastMirrorRenderRef.current = t
+
+      const scrPos = roomCustomization.screen.position
+      if (loungeCamPreset === 'screen') {
+        loungeCamera.fov = 46
+        loungeCamera.position.set(0, 2.32, 0.45)
+        loungeCamera.lookAt(scrPos[0], scrPos[1], scrPos[2])
+      } else if (loungeCamPreset === 'games') {
+        loungeCamera.fov = 56
+        loungeCamera.position.set(-1.35, 2.35, 1.1)
+        loungeCamera.lookAt(2.35, 1.25, sizeSpec.backZ - 1.35)
+      } else {
+        loungeCamera.fov = 58
+        loungeCamera.position.set(0, 2.55, Math.min(sizeSpec.backZ - 0.65, 5.15))
+        loungeCamera.lookAt(0, 1.75, -4.2)
+      }
+      loungeCamera.updateProjectionMatrix()
+      loungeCamera.updateMatrixWorld()
+
+      const wingGroup = wingGroupRef.current
+      const prevWingVisible = wingGroup ? wingGroup.visible : true
+      const prevTarget = gl.getRenderTarget()
+      const prevXrEnabled = gl.xr.enabled
+      const prevAutoClear = gl.autoClear
+
+      try {
+        if (wingGroup) wingGroup.visible = false
+        gl.xr.enabled = false
+        gl.autoClear = true
+        gl.setRenderTarget(loungeMirrorTarget)
+        gl.clear()
+        gl.render(scene, loungeCamera)
+      } finally {
+        gl.setRenderTarget(prevTarget)
+        gl.xr.enabled = prevXrEnabled
+        gl.autoClear = prevAutoClear
+        if (wingGroup) wingGroup.visible = prevWingVisible
+      }
+    }
   })
 
   const seatOccupants = useMemo(() => {
@@ -492,14 +568,14 @@ export function ExpansionWing3D({
     BOARDROOM_STRATEGY_SLIDES[wingState.boardroomAgendaIndex] ??
     BOARDROOM_STRATEGY_SLIDES[0]
   const boardroomShowingMirror =
-    wingState.boardroomScreenMode === 'mirror-lounge' && hasMainVideoFrames
+    wingState.boardroomScreenMode === 'mirror-lounge'
 
   // Scale architectural self-illumination smoothly with the user's lighting brightness slider
   const emissiveBoost = Math.max(0.28, Math.min(1.5, lighting.brightness || 1.0))
   const accentHex = lighting.accentColor || '#E5A93C'
 
   return (
-    <group name="clubhouse-expansion-wing">
+    <group ref={wingGroupRef} name="clubhouse-expansion-wing">
       {/* High-Output Zone-Balanced Wing PointLights (replaces 8 tiny lights with 2 wide-throw lights) */}
       <pointLight
         ref={wingFrontLightRef}
@@ -1121,10 +1197,47 @@ export function ExpansionWing3D({
           </RoundedBox>
 
           {boardroomShowingMirror ? (
-            <mesh position={[0, 0.06, 0.029]}>
-              <planeGeometry args={[3.66, 1.94]} />
-              <meshBasicMaterial map={mainVideoTexture} toneMapped={false} />
-            </mesh>
+            <group position={[0, 0.06, 0.029]}>
+              <mesh
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleCycleLoungeCamPreset()
+                }}
+              >
+                <planeGeometry args={[3.66, 1.94]} />
+                {hasMainVideoFrames ? (
+                  <meshBasicMaterial
+                    key="board-main-video"
+                    map={mainVideoTexture}
+                    color="#ffffff"
+                    toneMapped={false}
+                  />
+                ) : (
+                  <meshBasicMaterial
+                    key="board-lounge-cam"
+                    map={loungeMirrorTarget.texture}
+                    color="#ffffff"
+                    toneMapped={false}
+                  />
+                )}
+              </mesh>
+              <group position={[-1.08, 0.84, 0.006]}>
+                <RoundedBox args={[1.38, 0.12, 0.006]} radius={0.014}>
+                  <meshBasicMaterial color="#060D1A" transparent opacity={0.82} />
+                </RoundedBox>
+                <Text
+                  position={[0, 0, 0.005]}
+                  fontSize={0.042}
+                  color="#34D399"
+                  anchorX="center"
+                  anchorY="middle"
+                >
+                  {hasMainVideoFrames
+                    ? `🟢 LIVE MAIN LOUNGE STREAM`
+                    : `🟢 LIVE MAIN LOUNGE CAM (CLICK TO SWITCH ANGLE)`}
+                </Text>
+              </group>
+            </group>
           ) : (
             <group position={[0, 0.06, 0.029]}>
               <mesh>
@@ -1628,6 +1741,9 @@ export function ExpansionWing3D({
         presenterState={presenterState}
         mainVideoTexture={mainVideoTexture}
         hasMainVideoFrames={hasMainVideoFrames}
+        loungeMirrorTexture={loungeMirrorTarget.texture}
+        loungeCamPreset={loungeCamPreset}
+        onCycleLoungeCamPreset={handleCycleLoungeCamPreset}
         computedSeats={computedSeats}
         localSeatId={localSeatId}
         participants={participants}
