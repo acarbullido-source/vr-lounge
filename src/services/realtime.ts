@@ -5,12 +5,17 @@ import type {
   AvatarPose6DoF,
   ChatMessage,
   FloatingReaction,
+  NesWireEvent,
   ParticipantProfile,
   PresenterState,
   RoomCustomizationState,
   TransportMode,
   WebRTCSignalMessage,
 } from '../types/lounge'
+import type {
+  RetainedNesVaultPayload,
+  RetainedProfilesVaultPayload,
+} from './persistentVault'
 import {
   decryptRoomPayload,
   derivePbkdf2Hex,
@@ -36,6 +41,10 @@ export interface RealtimeCallbacks {
   onPresenterState: (state: PresenterState) => void
   onRoomCustomization?: (state: RoomCustomizationState) => void
   onBarGamesEvent?: (event: BarGamesWireEvent) => void
+  onNesEvent?: (event: NesWireEvent) => void
+  onRetainedClubhouseState?: (state: unknown) => void
+  onRetainedNesVault?: (payload: RetainedNesVaultPayload) => void
+  onRetainedProfilesVault?: (payload: RetainedProfilesVaultPayload) => void
   onRoomStateRequest: (requesterId: string) => void
   onChatMessage: (message: ChatMessage) => void
   onReaction: (reaction: FloatingReaction) => void
@@ -48,6 +57,10 @@ export type RelayEnvelopeType =
   | 'presenter-state'
   | 'room-customization'
   | 'bar-games-event'
+  | 'nes-event'
+  | 'clubhouse-vault'
+  | 'nes-vault'
+  | 'profiles-vault'
   | 'request-room-state'
   | 'chat-message'
   | 'emoji-reaction'
@@ -149,7 +162,13 @@ export class RoomRealtimeService {
   private mqttClient: MqttClient | null = null
   private mqttTopic = ''
   private mqttRetainedLayoutTopic = ''
+  private mqttRetainedClubhouseTopic = ''
+  private mqttRetainedNesVaultTopic = ''
+  private mqttRetainedProfilesTopic = ''
   private pendingRetainedLayout: RoomCustomizationState | null = null
+  private pendingRetainedClubhouse: unknown = null
+  private pendingRetainedNesVault: RetainedNesVaultPayload | null = null
+  private pendingRetainedProfiles: RetainedProfilesVaultPayload | null = null
   private localChannel: BroadcastChannel | null = null
   private heartbeatTimer: number | null = null
   private presenceMap = new Map<string, PresenceRecord>()
@@ -198,6 +217,9 @@ export class RoomRealtimeService {
     this.topicToken = cryptoCtx.topicToken
     this.mqttTopic = `vrlounge/v2/enc/${this.topicToken}/bus`
     this.mqttRetainedLayoutTopic = `vrlounge/v2/enc/${this.topicToken}/retained-layout`
+    this.mqttRetainedClubhouseTopic = `vrlounge/v2/enc/${this.topicToken}/retained-clubhouse`
+    this.mqttRetainedNesVaultTopic = `vrlounge/v2/enc/${this.topicToken}/retained-nes-saves`
+    this.mqttRetainedProfilesTopic = `vrlounge/v2/enc/${this.topicToken}/retained-profiles`
 
     if (this.mode === 'supabase') {
       void this.connectMqttBroker(0, true)
@@ -381,7 +403,7 @@ export class RoomRealtimeService {
 
   private async connectMqttBroker(
     brokerIndex: number,
-    retainedLayoutOnly = false,
+    retainedVaultsOnly = false,
   ): Promise<void> {
     if (this.destroyed || !this.topicToken || !this.masterKeyHex) return
     if (this.mqttClient) {
@@ -414,7 +436,7 @@ export class RoomRealtimeService {
       keepalive: 25,
       connectTimeout: 7000,
       reconnectPeriod: 2500,
-      ...(retainedLayoutOnly || !willBuilt
+      ...(retainedVaultsOnly || !willBuilt
         ? {}
         : {
             will: {
@@ -435,14 +457,49 @@ export class RoomRealtimeService {
       }
       connectedOnce = true
 
-      // Subscribe to the encrypted retained room layout snapshot topic
-      client.subscribe(this.mqttRetainedLayoutTopic, { qos: 1 }, () => {
-        if (!this.destroyed && this.pendingRetainedLayout) {
-          void this.publishEncryptedRetainedLayout(this.pendingRetainedLayout)
-        }
-      })
+      // Subscribe to the 4 encrypted retained cloud vault topics
+      client.subscribe(
+        [
+          this.mqttRetainedLayoutTopic,
+          this.mqttRetainedClubhouseTopic,
+          this.mqttRetainedNesVaultTopic,
+          this.mqttRetainedProfilesTopic,
+        ],
+        { qos: 1 },
+        () => {
+          if (this.destroyed) return
+          if (this.pendingRetainedLayout) {
+            void this.publishEncryptedRetainedTopic(
+              this.mqttRetainedLayoutTopic,
+              'room-customization',
+              this.pendingRetainedLayout,
+            )
+          }
+          if (this.pendingRetainedClubhouse) {
+            void this.publishEncryptedRetainedTopic(
+              this.mqttRetainedClubhouseTopic,
+              'clubhouse-vault',
+              this.pendingRetainedClubhouse,
+            )
+          }
+          if (this.pendingRetainedNesVault) {
+            void this.publishEncryptedRetainedTopic(
+              this.mqttRetainedNesVaultTopic,
+              'nes-vault',
+              this.pendingRetainedNesVault,
+            )
+          }
+          if (this.pendingRetainedProfiles) {
+            void this.publishEncryptedRetainedTopic(
+              this.mqttRetainedProfilesTopic,
+              'profiles-vault',
+              this.pendingRetainedProfiles,
+            )
+          }
+        },
+      )
 
-      if (!retainedLayoutOnly) {
+      if (!retainedVaultsOnly) {
         client.subscribe(this.mqttTopic, { qos: 0 }, (err) => {
           if (!err && !this.destroyed) {
             this.callbacks.onConnectionStatus?.(true)
@@ -465,6 +522,24 @@ export class RoomRealtimeService {
             }
             return
           }
+          if (topic === this.mqttRetainedClubhouseTopic) {
+            if (env.type === 'clubhouse-vault' && env.payload && typeof env.payload === 'object') {
+              this.callbacks.onRetainedClubhouseState?.(env.payload)
+            }
+            return
+          }
+          if (topic === this.mqttRetainedNesVaultTopic) {
+            if (env.type === 'nes-vault' && env.payload && typeof env.payload === 'object') {
+              this.callbacks.onRetainedNesVault?.(env.payload as RetainedNesVaultPayload)
+            }
+            return
+          }
+          if (topic === this.mqttRetainedProfilesTopic) {
+            if (env.type === 'profiles-vault' && env.payload && typeof env.payload === 'object') {
+              this.callbacks.onRetainedProfilesVault?.(env.payload as RetainedProfilesVaultPayload)
+            }
+            return
+          }
           this.handleRelayEnvelope(env)
         })
       } catch {
@@ -476,12 +551,12 @@ export class RoomRealtimeService {
       if (!connectedOnce && !this.destroyed && brokerIndex + 1 < PUBLIC_WSS_BROKERS.length) {
         client.end(true)
         this.mqttClient = null
-        void this.connectMqttBroker(brokerIndex + 1, retainedLayoutOnly)
+        void this.connectMqttBroker(brokerIndex + 1, retainedVaultsOnly)
       }
     })
 
     client.on('offline', () => {
-      if (!this.destroyed && !retainedLayoutOnly) {
+      if (!this.destroyed && !retainedVaultsOnly) {
         this.callbacks.onConnectionStatus?.(false)
       }
     })
@@ -489,15 +564,18 @@ export class RoomRealtimeService {
     this.mqttClient = client
   }
 
-  private async publishEncryptedRetainedLayout(state: RoomCustomizationState): Promise<void> {
-    if (this.destroyed || !this.mqttClient?.connected) return
-    const built = await this.buildEncryptedPacket('room-customization', state)
+  private async publishEncryptedRetainedTopic(
+    topic: string,
+    type: RelayEnvelopeType,
+    payload: unknown,
+  ): Promise<void> {
+    if (this.destroyed || !this.mqttClient?.connected || !topic) return
+    const built = await this.buildEncryptedPacket(type, payload)
     if (!built || this.destroyed || !this.mqttClient?.connected) return
-    this.mqttClient.publish(
-      this.mqttRetainedLayoutTopic,
-      JSON.stringify(built.wirePacket),
-      { qos: 1, retain: true },
-    )
+    this.mqttClient.publish(topic, JSON.stringify(built.wirePacket), {
+      qos: 1,
+      retain: true,
+    })
   }
 
   private markPacketSeen(id: string): boolean {
@@ -514,7 +592,11 @@ export class RoomRealtimeService {
   private handleRelayEnvelope(env: RelayEnvelope): void {
     if (!env || env.senderId === this.localUserId) return
 
-    if (env.type !== 'pose-update' && this.markPacketSeen(env.id)) {
+    if (
+      env.type !== 'pose-update' &&
+      env.type !== 'nes-event' &&
+      this.markPacketSeen(env.id)
+    ) {
       return
     }
 
@@ -562,6 +644,18 @@ export class RoomRealtimeService {
         break
       case 'bar-games-event':
         this.callbacks.onBarGamesEvent?.(env.payload as BarGamesWireEvent)
+        break
+      case 'nes-event':
+        this.callbacks.onNesEvent?.(env.payload as NesWireEvent)
+        break
+      case 'clubhouse-vault':
+        this.callbacks.onRetainedClubhouseState?.(env.payload)
+        break
+      case 'nes-vault':
+        this.callbacks.onRetainedNesVault?.(env.payload as RetainedNesVaultPayload)
+        break
+      case 'profiles-vault':
+        this.callbacks.onRetainedProfilesVault?.(env.payload as RetainedProfilesVaultPayload)
         break
       case 'request-room-state': {
         const req = env.payload as { requesterId: string }
@@ -696,13 +790,55 @@ export class RoomRealtimeService {
   broadcastRoomCustomization(state: RoomCustomizationState): void {
     if (this.destroyed) return
     this.pendingRetainedLayout = state
-    void this.publishEncryptedRetainedLayout(state)
+    void this.publishEncryptedRetainedTopic(
+      this.mqttRetainedLayoutTopic,
+      'room-customization',
+      state,
+    )
     this.publishEncrypted('room-customization', state)
   }
 
   broadcastBarGamesEvent(event: BarGamesWireEvent): void {
     if (this.destroyed) return
     this.publishEncrypted('bar-games-event', event)
+  }
+
+  broadcastNesEvent(event: NesWireEvent): void {
+    if (this.destroyed) return
+    this.publishEncrypted('nes-event', event)
+  }
+
+  publishRetainedClubhouseState(state: unknown): void {
+    if (this.destroyed) return
+    this.pendingRetainedClubhouse = state
+    void this.publishEncryptedRetainedTopic(
+      this.mqttRetainedClubhouseTopic,
+      'clubhouse-vault',
+      state,
+    )
+    this.publishEncrypted('clubhouse-vault', state)
+  }
+
+  publishRetainedNesVault(payload: RetainedNesVaultPayload): void {
+    if (this.destroyed) return
+    this.pendingRetainedNesVault = payload
+    void this.publishEncryptedRetainedTopic(
+      this.mqttRetainedNesVaultTopic,
+      'nes-vault',
+      payload,
+    )
+    this.publishEncrypted('nes-vault', payload)
+  }
+
+  publishRetainedProfilesVault(payload: RetainedProfilesVaultPayload): void {
+    if (this.destroyed) return
+    this.pendingRetainedProfiles = payload
+    void this.publishEncryptedRetainedTopic(
+      this.mqttRetainedProfilesTopic,
+      'profiles-vault',
+      payload,
+    )
+    this.publishEncrypted('profiles-vault', payload)
   }
 
   requestRoomState(): void {

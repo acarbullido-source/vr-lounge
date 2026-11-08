@@ -202,9 +202,10 @@ export function createArcadeCabinetEngine(
         nes.loadROM(binStr)
         nesCore = nes
         romReady = true
-        for (let i = 0; i < 6; i++) {
+        for (let i = 0; i < 60; i++) {
           nes.frame()
         }
+        texture.needsUpdate = true
       })
       .catch((err) => {
         if (disposed) return

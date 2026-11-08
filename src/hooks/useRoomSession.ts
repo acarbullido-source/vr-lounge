@@ -20,6 +20,19 @@ import {
   ensureMemberIdentity,
   getInitialMemberUserId,
 } from '../services/identityAuth'
+import {
+  NES_LIBRARY_CARTRIDGES,
+  getNesEmulator,
+} from '../services/nesEmulator'
+import {
+  buildRetainedNesVaultPayload,
+  buildRetainedProfilesVaultPayload,
+  initializePersistentVault,
+  mergeIncomingNesVaultPayload,
+  mergeIncomingProfilesVaultPayload,
+  recordMemberProfileToVault,
+  storeNesSaveSlot,
+} from '../services/persistentVault'
 import { RoomRealtimeService, hasSupabaseCredentials } from '../services/realtime'
 import {
   clearLocalRoomCustomization,
@@ -37,6 +50,9 @@ import type {
   ChatMessage,
   ComputedSeat,
   FloatingReaction,
+  NesMultiplayerState,
+  NesSaveSlotMeta,
+  NesWireEvent,
   ParticipantProfile,
   PresenterState,
   RoomCustomizationState,
@@ -128,6 +144,27 @@ export function useRoomSession(
 
   useEffect(() => {
     let cancelled = false
+    void initializePersistentVault().then(() => {
+      if (cancelled) return
+      const hydratedLayout = loadLocalRoomCustomization(CANONICAL_ROOM_CODE)
+      if (hydratedLayout) {
+        setRoomCustomization((prev) =>
+          isNewerCustomization(hydratedLayout, prev) ? hydratedLayout : prev,
+        )
+      }
+      const savedPrefs = loadSavedAvatarPreferences()
+      if (savedPrefs?.displayName) {
+        const safeName = savedPrefs.displayName
+        setLocalProfile((prev) => ({
+          ...prev,
+          displayName: safeName,
+          avatarColor: savedPrefs.avatarColor ?? prev.avatarColor,
+          avatarStyle: savedPrefs.avatarStyle ?? prev.avatarStyle,
+          avatarCustomization:
+            savedPrefs.avatarCustomization ?? prev.avatarCustomization,
+        }))
+      }
+    })
     void ensureMemberIdentity().then((identity) => {
       if (cancelled) return
       setLocalUserId((prev) => (prev === identity.userId ? prev : identity.userId))
@@ -150,6 +187,18 @@ export function useRoomSession(
   const [presenterState, setPresenterState] = useState<PresenterState>(() =>
     createInitialPresenterState(),
   )
+  const [nesMultiplayerState, setNesMultiplayerState] = useState<NesMultiplayerState>(
+    () => ({
+      cartridgeId: NES_LIBRARY_CARTRIDGES[0].id,
+      cartridgeTitle: NES_LIBRARY_CARTRIDGES[0].title,
+      player1Id: null,
+      player1Name: null,
+      player2Id: null,
+      player2Name: null,
+      revision: 0,
+      updatedAt: 0,
+    }),
+  )
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [reactions, setReactions] = useState<FloatingReaction[]>([])
 
@@ -157,6 +206,7 @@ export function useRoomSession(
   const remotePosesRef = useRef<Map<string, AvatarPose6DoF>>(new Map())
   const serviceRef = useRef<RoomRealtimeService | null>(null)
   const presenterStateRef = useRef<PresenterState>(presenterState)
+  const nesMultiplayerStateRef = useRef<NesMultiplayerState>(nesMultiplayerState)
   const roomCustomizationRef = useRef<RoomCustomizationState>(roomCustomization)
   const computedSeatsRef = useRef<ComputedSeat[]>(computedSeats)
   const localProfileRef = useRef<ParticipantProfile>(localProfile)
@@ -165,6 +215,10 @@ export function useRoomSession(
   useEffect(() => {
     presenterStateRef.current = presenterState
   }, [presenterState])
+
+  useEffect(() => {
+    nesMultiplayerStateRef.current = nesMultiplayerState
+  }, [nesMultiplayerState])
 
   useEffect(() => {
     roomCustomizationRef.current = roomCustomization
@@ -181,6 +235,37 @@ export function useRoomSession(
   useEffect(() => {
     roomCodeRef.current = roomCode
   }, [roomCode])
+
+  // Stream local NES controller inputs to peers when participating in a 2-player session
+  useEffect(() => {
+    const emu = getNesEmulator()
+    const unsubscribeInput = emu.onLocalInputMaskChange((player, buttonsMask, seq) => {
+      const svc = serviceRef.current
+      if (!svc) return
+      const mp = nesMultiplayerStateRef.current
+      const isParticipant =
+        mp.player1Id === localUserId || mp.player2Id === localUserId
+      if (!isParticipant && !mp.player2Id) return
+      svc.broadcastNesEvent({
+        kind: 'nes-input',
+        player,
+        senderId: localUserId,
+        cartridgeId: emu.getActiveCartridge().id,
+        buttonsMask,
+        seq,
+        timestamp: Date.now(),
+      })
+    })
+    const unsubscribeSaves = emu.onSaveSlotsChanged(() => {
+      const svc = serviceRef.current
+      if (!svc) return
+      svc.publishRetainedNesVault(buildRetainedNesVaultPayload())
+    })
+    return () => {
+      unsubscribeInput()
+      unsubscribeSaves()
+    }
+  }, [localUserId])
 
   // Hydrate from cloud storage on initial mount and guarantee flush on pagehide/beforeunload
   useEffect(() => {
@@ -199,6 +284,7 @@ export function useRoomSession(
       if (current.revision > 0 || current.updatedAt > 0) {
         saveLocalRoomCustomization(CANONICAL_ROOM_CODE, current)
       }
+      getNesEmulator().persistBatterySram()
     }
 
     const onVisibilityChange = () => {
@@ -561,6 +647,45 @@ export function useRoomSession(
         onBarGamesEvent: (event) => {
           barGamesBridgeRef.current?.onEvent(event)
         },
+        onNesEvent: (event: NesWireEvent) => {
+          const emu = getNesEmulator()
+          if (event.kind === 'nes-multiplayer-state') {
+            setNesMultiplayerState((prev) => {
+              if (event.state.revision < prev.revision) return prev
+              const next = event.state
+              if (next.player2Id === activeLocalId) {
+                emu.setLocalInputPlayer(2)
+              } else if (next.player1Id === activeLocalId) {
+                emu.setLocalInputPlayer(1)
+              }
+              return next
+            })
+          } else if (event.kind === 'nes-input') {
+            if (event.senderId !== activeLocalId) {
+              emu.setRemotePlayerMask(event.player, event.buttonsMask)
+            }
+          } else if (event.kind === 'nes-state-checkpoint') {
+            if (event.senderId !== activeLocalId && event.compressedState) {
+              void emu.importCompressedState(event.compressedState)
+            }
+          } else if (event.kind === 'nes-save-slot-shared') {
+            if (event.slot?.cartridgeId && event.slot?.slotId) {
+              void storeNesSaveSlot(event.slot).then(() => {
+                emu.notifySaveStateListeners(event.slot.cartridgeId)
+              })
+            }
+          }
+        },
+        onRetainedNesVault: (payload) => {
+          void mergeIncomingNesVaultPayload(payload).then((imported) => {
+            if (imported > 0) {
+              getNesEmulator().notifySaveStateListeners()
+            }
+          })
+        },
+        onRetainedProfilesVault: (payload) => {
+          mergeIncomingProfilesVaultPayload(payload)
+        },
         onRoomStateRequest: (requesterId) => {
           const current = presenterStateRef.current
           const me = localProfileRef.current
@@ -585,6 +710,14 @@ export function useRoomSession(
             service.broadcastRoomCustomization(currentCustom)
           }
 
+          const currentNesMp = nesMultiplayerStateRef.current
+          if (currentNesMp.revision > 0 && me.isHost) {
+            service.broadcastNesEvent({
+              kind: 'nes-multiplayer-state',
+              state: currentNesMp,
+            })
+          }
+
           barGamesBridgeRef.current?.onStateRequest(requesterId, me.isHost, (ev) =>
             service.broadcastBarGamesEvent(ev),
           )
@@ -607,6 +740,15 @@ export function useRoomSession(
       })
 
       serviceRef.current = service
+      recordMemberProfileToVault({
+        displayName: cleanName,
+        avatarColor: opts.avatarColor,
+        avatarStyle: opts.avatarStyle,
+        avatarCustomization: resolvedCustomization,
+      })
+      service.publishRetainedProfilesVault(buildRetainedProfilesVaultPayload())
+      service.publishRetainedNesVault(buildRetainedNesVaultPayload())
+
       barGamesBridgeRef.current?.onRoomJoined(normalizedCode, (ev) =>
         service.broadcastBarGamesEvent(ev),
       )
@@ -945,12 +1087,17 @@ export function useRoomSession(
         ...(patch.avatarCustomization ?? {}),
       })
 
-      saveAvatarPreferences({
+      const nextPrefs = {
         displayName: nextName,
         avatarColor: nextColor,
         avatarStyle: nextStyle,
         avatarCustomization: nextCustomization,
-      })
+      }
+      saveAvatarPreferences(nextPrefs)
+      recordMemberProfileToVault(nextPrefs)
+      serviceRef.current?.publishRetainedProfilesVault(
+        buildRetainedProfilesVaultPayload(),
+      )
 
       updateLocalProfile({
         displayName: nextName,
@@ -961,6 +1108,81 @@ export function useRoomSession(
     },
     [updateLocalProfile],
   )
+
+  const claimNesPlayerSlot = useCallback(
+    (slot: 1 | 2 | null) => {
+      const emu = getNesEmulator()
+      const me = localProfileRef.current
+      const cur = nesMultiplayerStateRef.current
+      const activeCart = emu.getActiveCartridge()
+
+      let nextP1Id = cur.player1Id
+      let nextP1Name = cur.player1Name
+      let nextP2Id = cur.player2Id
+      let nextP2Name = cur.player2Name
+
+      if (nextP1Id === localUserId) {
+        nextP1Id = null
+        nextP1Name = null
+      }
+      if (nextP2Id === localUserId) {
+        nextP2Id = null
+        nextP2Name = null
+      }
+
+      if (slot === 1) {
+        nextP1Id = localUserId
+        nextP1Name = me.displayName
+        emu.setLocalInputPlayer(1)
+      } else if (slot === 2) {
+        nextP2Id = localUserId
+        nextP2Name = me.displayName
+        emu.setLocalInputPlayer(2)
+      } else {
+        emu.setLocalInputPlayer(1)
+      }
+
+      const nextState: NesMultiplayerState = {
+        cartridgeId: activeCart.id,
+        cartridgeTitle: activeCart.title,
+        player1Id: nextP1Id,
+        player1Name: nextP1Name,
+        player2Id: nextP2Id,
+        player2Name: nextP2Name,
+        revision: cur.revision + 1,
+        updatedAt: Date.now(),
+      }
+      nesMultiplayerStateRef.current = nextState
+      setNesMultiplayerState(nextState)
+      serviceRef.current?.broadcastNesEvent({
+        kind: 'nes-multiplayer-state',
+        state: nextState,
+      })
+    },
+    [localUserId],
+  )
+
+  const shareNesCheckpointWithRoom = useCallback(async () => {
+    const emu = getNesEmulator()
+    const compressed = await emu.exportCompressedState()
+    if (!compressed) return false
+    serviceRef.current?.broadcastNesEvent({
+      kind: 'nes-state-checkpoint',
+      cartridgeId: emu.getActiveCartridge().id,
+      senderId: localUserId,
+      compressedState: compressed,
+      timestamp: Date.now(),
+    })
+    return true
+  }, [localUserId])
+
+  const shareNesSaveSlotWithRoom = useCallback((slot: NesSaveSlotMeta) => {
+    serviceRef.current?.broadcastNesEvent({
+      kind: 'nes-save-slot-shared',
+      slot,
+    })
+    serviceRef.current?.publishRetainedNesVault(buildRetainedNesVaultPayload())
+  }, [])
 
   const broadcastPose = useCallback((pose: AvatarPose6DoF) => {
     serviceRef.current?.broadcastPose(pose)
@@ -983,6 +1205,7 @@ export function useRoomSession(
     localProfile,
     participants,
     presenterState,
+    nesMultiplayerState,
     roomCustomization,
     computedSeats,
     isLocalPresenter,
@@ -1003,6 +1226,9 @@ export function useRoomSession(
     releaseControl,
     toggleHostLock,
     updatePresenterMedia,
+    claimNesPlayerSlot,
+    shareNesCheckpointWithRoom,
+    shareNesSaveSlotWithRoom,
     sendChatMessage,
     sendReaction,
     broadcastPose,

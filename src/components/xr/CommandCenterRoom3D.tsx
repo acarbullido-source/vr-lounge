@@ -706,7 +706,7 @@ export function CommandCenterRoom3D({
           <planeGeometry args={[3.84, 2.02]} />
           {showingDirectVideoMirror ? (
             <meshBasicMaterial
-              key="cmd-main-video"
+              key={`cmd-main-${mainVideoTexture.uuid}`}
               map={mainVideoTexture}
               color="#ffffff"
               toneMapped={false}

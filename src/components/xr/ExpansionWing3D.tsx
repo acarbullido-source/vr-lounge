@@ -1395,7 +1395,7 @@ export function ExpansionWing3D({
                 <planeGeometry args={[3.66, 1.94]} />
                 {hasMainVideoFrames ? (
                   <meshBasicMaterial
-                    key="board-main-video"
+                    key={`board-main-${mainVideoTexture.uuid}`}
                     map={mainVideoTexture}
                     color="#ffffff"
                     toneMapped={false}

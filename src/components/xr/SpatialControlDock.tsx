@@ -28,6 +28,8 @@ interface DockButtonProps {
   variant?: 'default' | 'primary' | 'danger' | 'active'
   disabled?: boolean
   onClick: () => void
+  onPointerDown?: () => void
+  onPointerUp?: () => void
 }
 
 function DockButton({
@@ -39,6 +41,8 @@ function DockButton({
   variant = 'default',
   disabled = false,
   onClick,
+  onPointerDown,
+  onPointerUp,
 }: DockButtonProps) {
   const [hovered, setHovered] = useState(false)
 
@@ -75,7 +79,20 @@ function DockButton({
         e.stopPropagation()
         setHovered(true)
       }}
-      onPointerOut={() => setHovered(false)}
+      onPointerOut={() => {
+        setHovered(false)
+        onPointerUp?.()
+      }}
+      onPointerDown={(e) => {
+        if (disabled || !onPointerDown) return
+        e.stopPropagation()
+        onPointerDown()
+      }}
+      onPointerUp={(e) => {
+        if (disabled || !onPointerUp) return
+        e.stopPropagation()
+        onPointerUp()
+      }}
       onClick={(e) => {
         if (disabled) return
         e.stopPropagation()
@@ -402,74 +419,209 @@ export function SpatialControlDock({
         onClick={() => setMinimized(true)}
       />
 
-      {/* Second Row: Playback Transport & Interactive Timeline Scrub Bar */}
-      <DockButton
-        label={presenterState.isPlaying ? 'Pause ❚❚' : 'Play ▶'}
-        position={[-0.48, 0.035, 0.016]}
-        width={0.23}
-        height={0.092}
-        variant={isLocalPresenter ? 'primary' : 'default'}
-        disabled={!isLocalPresenter || presenterState.screenMode !== 'url-sync'}
-        onClick={onTogglePlayPause}
-      />
+      {/* Second Row: Dedicated 3D NES Controller & Save Deck when NES is Active, or Video Playback Transport */}
+      {isNesMediaUrl(presenterState.mediaUrl) ? (
+        <group position={[0, 0.035, 0.016]}>
+          {/* NES D-Pad 3D Buttons */}
+          <DockButton
+            label="◀"
+            sublabel="Left"
+            position={[-0.555, 0, 0]}
+            width={0.084}
+            height={0.092}
+            variant="active"
+            onPointerDown={() => getNesEmulator().setButtonState('left', true)}
+            onPointerUp={() => getNesEmulator().setButtonState('left', false)}
+            onClick={() => getNesEmulator().tapButton('left')}
+          />
+          <DockButton
+            label="▲"
+            sublabel="Up"
+            position={[-0.463, 0, 0]}
+            width={0.084}
+            height={0.092}
+            variant="active"
+            onPointerDown={() => getNesEmulator().setButtonState('up', true)}
+            onPointerUp={() => getNesEmulator().setButtonState('up', false)}
+            onClick={() => getNesEmulator().tapButton('up')}
+          />
+          <DockButton
+            label="▼"
+            sublabel="Down"
+            position={[-0.371, 0, 0]}
+            width={0.084}
+            height={0.092}
+            variant="active"
+            onPointerDown={() => getNesEmulator().setButtonState('down', true)}
+            onPointerUp={() => getNesEmulator().setButtonState('down', false)}
+            onClick={() => getNesEmulator().tapButton('down')}
+          />
+          <DockButton
+            label="▶"
+            sublabel="Right"
+            position={[-0.279, 0, 0]}
+            width={0.084}
+            height={0.092}
+            variant="active"
+            onPointerDown={() => getNesEmulator().setButtonState('right', true)}
+            onPointerUp={() => getNesEmulator().setButtonState('right', false)}
+            onClick={() => getNesEmulator().tapButton('right')}
+          />
 
-      <DockButton
-        label="-15s"
-        position={[-0.29, 0.035, 0.016]}
-        width={0.11}
-        height={0.092}
-        disabled={!isLocalPresenter || presenterState.screenMode !== 'url-sync'}
-        onClick={() => onSeekRelative(-15)}
-      />
+          {/* SELECT & START */}
+          <DockButton
+            label="SEL"
+            sublabel="Mode"
+            position={[-0.175, 0, 0]}
+            width={0.1}
+            height={0.092}
+            variant="default"
+            onPointerDown={() => getNesEmulator().setButtonState('select', true)}
+            onPointerUp={() => getNesEmulator().setButtonState('select', false)}
+            onClick={() => getNesEmulator().tapButton('select')}
+          />
+          <DockButton
+            label="START"
+            sublabel="Play"
+            position={[-0.055, 0, 0]}
+            width={0.118}
+            height={0.092}
+            variant="primary"
+            onPointerDown={() => getNesEmulator().setButtonState('start', true)}
+            onPointerUp={() => getNesEmulator().setButtonState('start', false)}
+            onClick={() => getNesEmulator().tapButton('start')}
+          />
 
-      <DockButton
-        label="+15s"
-        position={[-0.16, 0.035, 0.016]}
-        width={0.11}
-        height={0.092}
-        disabled={!isLocalPresenter || presenterState.screenMode !== 'url-sync'}
-        onClick={() => onSeekRelative(15)}
-      />
+          {/* B & A Action Buttons */}
+          <DockButton
+            label="B"
+            sublabel="Fire/Run"
+            position={[0.068, 0, 0]}
+            width={0.104}
+            height={0.092}
+            variant="danger"
+            onPointerDown={() => getNesEmulator().setButtonState('b', true)}
+            onPointerUp={() => getNesEmulator().setButtonState('b', false)}
+            onClick={() => getNesEmulator().tapButton('b')}
+          />
+          <DockButton
+            label="A"
+            sublabel="Jump"
+            position={[0.182, 0, 0]}
+            width={0.104}
+            height={0.092}
+            variant="danger"
+            onPointerDown={() => getNesEmulator().setButtonState('a', true)}
+            onPointerUp={() => getNesEmulator().setButtonState('a', false)}
+            onClick={() => getNesEmulator().tapButton('a')}
+          />
 
-      {/* Interactive 3D Scrub Bar */}
-      <group
-        position={[0.25, 0.035, 0.016]}
-        pointerEventsType={{ deny: 'grab' }}
-        onClick={(e) => {
-          if (!isLocalPresenter || presenterState.screenMode !== 'url-sync') return
-          e.stopPropagation()
-          const localPt = e.object.worldToLocal(e.point.clone())
-          const frac = Math.max(0, Math.min(1, (localPt.x + 0.31) / 0.62))
-          onSeekFraction(frac)
-        }}
-      >
-        <RoundedBox args={[0.64, 0.088, 0.012]} radius={0.018} smoothness={2}>
-          <meshBasicMaterial color="#131822" />
-        </RoundedBox>
-        {/* Track groove */}
-        <mesh position={[0, -0.014, 0.008]}>
-          <planeGeometry args={[0.56, 0.014]} />
-          <meshBasicMaterial color="#273142" />
-        </mesh>
-        {/* Progress fill */}
-        <mesh
-          position={[-0.28 + (0.56 * progressRatio) / 2, -0.014, 0.01]}
-        >
-          <planeGeometry args={[Math.max(0.008, 0.56 * progressRatio), 0.014]} />
-          <meshBasicMaterial color="#E5A93C" />
-        </mesh>
-        <Text
-          position={[0, 0.016, 0.01]}
-          fontSize={0.022}
-          color="#C7C2B8"
-          anchorX="center"
-          anchorY="middle"
-        >
-          {presenterState.screenMode === 'tab-stream'
-            ? 'LIVE WEBRTC STREAM'
-            : `${formatClock(localCurrentTime)} / ${formatClock(localDuration)}`}
-        </Text>
-      </group>
+          {/* Save State, Load State & Reset Cartridge */}
+          <DockButton
+            label="💾 Save"
+            sublabel="Slot 1"
+            position={[0.302, 0, 0]}
+            width={0.114}
+            height={0.092}
+            variant="active"
+            onClick={() => {
+              void getNesEmulator().saveSlot('slot-1')
+            }}
+          />
+          <DockButton
+            label="📂 Load"
+            sublabel="Resume"
+            position={[0.424, 0, 0]}
+            width={0.114}
+            height={0.092}
+            variant="default"
+            onClick={() => {
+              void getNesEmulator().resumeMostRecentSave()
+            }}
+          />
+          <DockButton
+            label="↺ ROM"
+            sublabel="Reset"
+            position={[0.542, 0, 0]}
+            width={0.098}
+            height={0.092}
+            variant="default"
+            onClick={() => {
+              getNesEmulator().resetCartridge()
+            }}
+          />
+        </group>
+      ) : (
+        <>
+          <DockButton
+            label={presenterState.isPlaying ? 'Pause ❚❚' : 'Play ▶'}
+            position={[-0.48, 0.035, 0.016]}
+            width={0.23}
+            height={0.092}
+            variant={isLocalPresenter ? 'primary' : 'default'}
+            disabled={!isLocalPresenter || presenterState.screenMode !== 'url-sync'}
+            onClick={onTogglePlayPause}
+          />
+
+          <DockButton
+            label="-15s"
+            position={[-0.29, 0.035, 0.016]}
+            width={0.11}
+            height={0.092}
+            disabled={!isLocalPresenter || presenterState.screenMode !== 'url-sync'}
+            onClick={() => onSeekRelative(-15)}
+          />
+
+          <DockButton
+            label="+15s"
+            position={[-0.16, 0.035, 0.016]}
+            width={0.11}
+            height={0.092}
+            disabled={!isLocalPresenter || presenterState.screenMode !== 'url-sync'}
+            onClick={() => onSeekRelative(15)}
+          />
+
+          {/* Interactive 3D Scrub Bar */}
+          <group
+            position={[0.25, 0.035, 0.016]}
+            pointerEventsType={{ deny: 'grab' }}
+            onClick={(e) => {
+              if (!isLocalPresenter || presenterState.screenMode !== 'url-sync') return
+              e.stopPropagation()
+              const localPt = e.object.worldToLocal(e.point.clone())
+              const frac = Math.max(0, Math.min(1, (localPt.x + 0.31) / 0.62))
+              onSeekFraction(frac)
+            }}
+          >
+            <RoundedBox args={[0.64, 0.088, 0.012]} radius={0.018} smoothness={2}>
+              <meshBasicMaterial color="#131822" />
+            </RoundedBox>
+            {/* Track groove */}
+            <mesh position={[0, -0.014, 0.008]}>
+              <planeGeometry args={[0.56, 0.014]} />
+              <meshBasicMaterial color="#273142" />
+            </mesh>
+            {/* Progress fill */}
+            <mesh
+              position={[-0.28 + (0.56 * progressRatio) / 2, -0.014, 0.01]}
+            >
+              <planeGeometry args={[Math.max(0.008, 0.56 * progressRatio), 0.014]} />
+              <meshBasicMaterial color="#E5A93C" />
+            </mesh>
+            <Text
+              position={[0, 0.016, 0.01]}
+              fontSize={0.022}
+              color="#C7C2B8"
+              anchorX="center"
+              anchorY="middle"
+            >
+              {presenterState.screenMode === 'tab-stream'
+                ? 'LIVE WEBRTC STREAM'
+                : `${formatClock(localCurrentTime)} / ${formatClock(localDuration)}`}
+            </Text>
+          </group>
+        </>
+      )}
 
       {/* Third Row: Mic Mute, Cinema vs Voice Audio Mixers, Chat & Recenter Seat */}
       <DockButton

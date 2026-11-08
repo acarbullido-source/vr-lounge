@@ -624,7 +624,7 @@ export function CinemaRoom({
               <planeGeometry args={[2.32, 1.26]} />
               {isShowingVideo ? (
                 <meshBasicMaterial
-                  key="back-mirror-live-video"
+                  key={`back-mirror-${videoTexture.uuid}`}
                   map={videoTexture}
                   color="#ffffff"
                   toneMapped={false}
@@ -1012,7 +1012,11 @@ export function CinemaRoom({
           }}
         >
           {isShowingVideo ? (
-            <meshBasicMaterial map={videoTexture} toneMapped={false} />
+            <meshBasicMaterial
+              key={`main-screen-${videoTexture.uuid}`}
+              map={videoTexture}
+              toneMapped={false}
+            />
           ) : (
             <meshStandardMaterial
               color={screenHovered && !presenterState.activePresenterId ? '#1C2536' : '#141B28'}

@@ -3,15 +3,32 @@ import {
   NES_LIBRARY_CARTRIDGES,
   arrayBufferToBinaryString,
   getNesEmulator,
+  parseNesCartridgeIdFromUrl,
   type NesButtonId,
   type NesCartridgeMeta,
 } from '../../services/nesEmulator'
+import {
+  exportFullLoungeVaultBundle,
+  hasAnyNesSaveForCartridge,
+  importFullLoungeVaultBundle,
+  subscribeVaultStatus,
+} from '../../services/persistentVault'
+import type {
+  NesMultiplayerState,
+  NesSaveSlotId,
+  NesSaveSlotMeta,
+} from '../../types/lounge'
 
 export interface NesConsoleModalProps {
   open: boolean
   activeMediaUrl: string
+  localUserId?: string
+  nesMultiplayerState?: NesMultiplayerState
   onClose: () => void
   onLaunchNesToMainScreen: (nesUrl: string, title: string) => void
+  onClaimNesPlayerSlot?: (slot: 1 | 2 | null) => void
+  onShareNesCheckpoint?: () => void
+  onShareNesSaveSlot?: (slot: NesSaveSlotMeta) => void
 }
 
 const GENRE_FILTERS = [
@@ -27,8 +44,13 @@ const GENRE_FILTERS = [
 export function NesConsoleModal({
   open,
   activeMediaUrl,
+  localUserId,
+  nesMultiplayerState,
   onClose,
   onLaunchNesToMainScreen,
+  onClaimNesPlayerSlot,
+  onShareNesCheckpoint,
+  onShareNesSaveSlot,
 }: NesConsoleModalProps) {
   const nes = useMemo(() => getNesEmulator(), [])
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -42,6 +64,35 @@ export function NesConsoleModal({
   const [customRomTitle, setCustomRomTitle] = useState<string | null>(() =>
     nes.getCustomRomName(),
   )
+  const [localPlayerNum, setLocalPlayerNum] = useState<1 | 2>(() =>
+    nes.getLocalInputPlayer(),
+  )
+  const [saveFeedback, setSaveFeedback] = useState<string | null>(null)
+  const [, setVaultTick] = useState(0)
+
+  useEffect(() => {
+    const unsubNes = nes.onSaveSlotsChanged(() => {
+      setSelectedCartridge(nes.getActiveCartridge())
+      setCustomRomTitle(nes.getCustomRomName())
+      setLocalPlayerNum(nes.getLocalInputPlayer())
+      setVaultTick((t) => t + 1)
+    })
+    const unsubVault = subscribeVaultStatus(() => {
+      setVaultTick((t) => t + 1)
+    })
+    return () => {
+      unsubNes()
+      unsubVault()
+    }
+  }, [nes])
+
+  useEffect(() => {
+    const cartId = parseNesCartridgeIdFromUrl(activeMediaUrl)
+    if (cartId) {
+      const found = NES_LIBRARY_CARTRIDGES.find((c) => c.id === cartId)
+      if (found) setSelectedCartridge(found)
+    }
+  }, [activeMediaUrl])
 
   const filteredCartridges = useMemo(() => {
     return NES_LIBRARY_CARTRIDGES.filter((c) => {
@@ -63,10 +114,10 @@ export function NesConsoleModal({
     .toLowerCase()
     .startsWith('nes://')
 
-  // Mirror the real JSNES PPU canvas into the modal's preview monitor while open
+  // Mirror the real JSNES PPU canvas into the modal's preview monitor ONLY while open
   useEffect(() => {
-    nes.setConsumerActive('modal', open)
     if (!open) return
+    nes.setConsumerActive('modal', true)
     let raf = 0
     const copyFrame = () => {
       const dst = previewCanvasRef.current
@@ -86,9 +137,9 @@ export function NesConsoleModal({
     }
   }, [nes, open])
 
-  // Global keyboard controls whenever NES is playing on Main Screen or Modal is open
+  // Keyboard controls when Modal is open and NES is not already handled by main screen
   useEffect(() => {
-    if (!open && !isNesCurrentlyOnScreen) return
+    if (!open || isNesCurrentlyOnScreen) return
 
     const mapKeyToNes = (code: string): NesButtonId | null => {
       if (code === 'ArrowUp' || code === 'KeyI') return 'up'
@@ -113,14 +164,14 @@ export function NesConsoleModal({
       const btn = mapKeyToNes(e.code)
       if (btn) {
         e.preventDefault()
-        nes.setButtonState(btn, true)
+        nes.setButtonState(btn, true, localPlayerNum)
       }
     }
 
     const onKeyUp = (e: KeyboardEvent) => {
       const btn = mapKeyToNes(e.code)
       if (btn) {
-        nes.setButtonState(btn, false)
+        nes.setButtonState(btn, false, localPlayerNum)
       }
     }
 
@@ -130,9 +181,19 @@ export function NesConsoleModal({
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [isNesCurrentlyOnScreen, nes, open])
+  }, [isNesCurrentlyOnScreen, localPlayerNum, nes, open])
 
   if (!open) return null
+
+  const activeCartId = customRomTitle ? 'custom-rom' : selectedCartridge.id
+  const saveSlots = nes.getSaveSlotsForCartridge(activeCartId)
+
+  const showNotice = (msg: string) => {
+    setSaveFeedback(msg)
+    window.setTimeout(() => {
+      setSaveFeedback((prev) => (prev === msg ? null : prev))
+    }, 3200)
+  }
 
   const handleSelectAndPlay = (cart: NesCartridgeMeta) => {
     setSelectedCartridge(cart)
@@ -153,17 +214,70 @@ export function NesConsoleModal({
         if (ok) {
           setCustomRomTitle(file.name)
           onLaunchNesToMainScreen(`nes://custom-rom`, `🕹 NES ROM: ${file.name}`)
+          showNotice(`Loaded custom ROM: ${file.name}`)
         }
       }
     }
     reader.readAsArrayBuffer(file)
   }
 
+  const handleSaveSlot = async (slot: NesSaveSlotId) => {
+    const meta = await nes.saveSlot(slot)
+    if (meta) {
+      onShareNesSaveSlot?.(meta)
+      setVaultTick((t) => t + 1)
+      showNotice(`💾 Saved ${meta.cartridgeTitle} to ${slot.toUpperCase()} (Synced to Vault)`)
+    } else {
+      showNotice('⚠️ Wait for ROM to finish booting before saving.')
+    }
+  }
+
+  const handleLoadSlot = async (slot: NesSaveSlotId) => {
+    const ok = await nes.loadSlot(slot)
+    if (ok) {
+      onShareNesCheckpoint?.()
+      showNotice(`📂 Restored ${slot.toUpperCase()} state!`)
+    } else {
+      showNotice(`No save found in ${slot.toUpperCase()} yet.`)
+    }
+  }
+
+  const handleExportVault = () => {
+    const json = exportFullLoungeVaultBundle()
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `vr-lounge-vault-${new Date().toISOString().slice(0, 10)}.vrlounge.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    showNotice('📦 Exported Full Persistent Vault (.vrlounge.json)')
+  }
+
+  const handleImportVault = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        void importFullLoungeVaultBundle(reader.result).then((res) => {
+          if (res.ok) {
+            showNotice(`✅ Imported Vault (${res.restoredSaves} NES saves restored)`)
+            setVaultTick((t) => t + 1)
+          } else {
+            showNotice('⚠️ Vault import failed: Invalid backup file')
+          }
+        })
+      }
+    }
+    reader.readAsText(file)
+  }
+
   const bindPadHold = (btn: NesButtonId) => ({
-    onPointerDown: () => nes.setButtonState(btn, true),
-    onPointerUp: () => nes.setButtonState(btn, false),
-    onPointerLeave: () => nes.setButtonState(btn, false),
-    onClick: () => nes.tapButton(btn),
+    onPointerDown: () => nes.setButtonState(btn, true, localPlayerNum),
+    onPointerUp: () => nes.setButtonState(btn, false, localPlayerNum),
+    onPointerLeave: () => nes.setButtonState(btn, false, localPlayerNum),
+    onClick: () => nes.tapButton(btn, localPlayerNum),
   })
 
   return (
@@ -227,7 +341,36 @@ export function NesConsoleModal({
             </strong>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              id="btn-nes-export-vault"
+              type="button"
+              className="secondary-btn"
+              style={{ fontSize: '0.76rem', padding: '5px 10px' }}
+              onClick={handleExportVault}
+              title="Export all NES Save States, Battery SRAM, Room Blueprints, and Profiles to a .vrlounge.json file"
+            >
+              📦 Export Vault
+            </button>
+            <label
+              className="secondary-btn"
+              style={{
+                fontSize: '0.76rem',
+                padding: '5px 10px',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+              }}
+              title="Import a .vrlounge.json Vault backup"
+            >
+              📥 Import Vault
+              <input
+                type="file"
+                accept=".json,.vrlounge.json"
+                style={{ display: 'none' }}
+                onChange={handleImportVault}
+              />
+            </label>
             <button
               type="button"
               className="secondary-btn"
@@ -256,6 +399,22 @@ export function NesConsoleModal({
           </div>
         </div>
 
+        {saveFeedback && (
+          <div
+            style={{
+              background: 'rgba(16, 185, 129, 0.18)',
+              borderBottom: '1px solid rgba(16, 185, 129, 0.45)',
+              color: '#A7F3D0',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+              padding: '7px 20px',
+              textAlign: 'center',
+            }}
+          >
+            {saveFeedback}
+          </div>
+        )}
+
         {/* Main Two-Column Body */}
         <div
           style={{
@@ -266,8 +425,8 @@ export function NesConsoleModal({
             overflowY: 'auto',
           }}
         >
-          {/* Left Column: Live NES CRT Monitor, Controller Pad & Quest Controller Guide */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {/* Left Column: Live NES CRT Monitor, Save States, 1P/2P Co-Op, Controller Pad & Quest Guide */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             <div
               style={{
                 background: '#020617',
@@ -337,6 +496,192 @@ export function NesConsoleModal({
                 ? '📺 Live on Main Screen & All Mirrored Lounge Screens (Click to Re-Sync)'
                 : '📺 Cast NES Live to Main Screen & All Mirrored Lounge Screens'}
             </button>
+
+            {/* Persistent Save States (Slots 1-3 + Auto) & 8KB Battery SRAM Panel */}
+            <div
+              data-testid="nes-save-states-panel"
+              style={{
+                background: 'rgba(15, 23, 42, 0.92)',
+                border: '1px solid rgba(250, 204, 21, 0.35)',
+                borderRadius: '10px',
+                padding: '10px 12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  fontSize: '0.76rem',
+                }}
+              >
+                <strong style={{ color: '#FACC15' }}>
+                  💾 Persistent Save States &amp; 8KB Battery SRAM
+                </strong>
+                <button
+                  id="btn-nes-resume-latest"
+                  type="button"
+                  className="secondary-btn"
+                  style={{ fontSize: '0.72rem', padding: '3px 8px' }}
+                  onClick={() => {
+                    void nes.resumeMostRecentSave().then((restored) => {
+                      if (restored) {
+                        onShareNesCheckpoint?.()
+                        showNotice('⚡ Resumed latest saved state!')
+                      } else {
+                        showNotice('No saved state found for this cartridge yet.')
+                      }
+                    })
+                  }}
+                >
+                  ⚡ Resume Latest Save
+                </button>
+              </div>
+
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(3, 1fr)',
+                  gap: '6px',
+                }}
+              >
+                {(['slot-1', 'slot-2', 'slot-3'] as const).map((slotId, idx) => {
+                  const existing = saveSlots.find((s) => s.slotId === slotId)
+                  return (
+                    <div
+                      key={slotId}
+                      style={{
+                        background: '#090D1A',
+                        border: `1px solid ${existing ? 'rgba(74, 222, 128, 0.45)' : '#334155'}`,
+                        borderRadius: '8px',
+                        padding: '6px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '4px',
+                        fontSize: '0.72rem',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          color: existing ? '#4ADE80' : '#94A3B8',
+                          fontWeight: 700,
+                        }}
+                      >
+                        <span>Slot {idx + 1}</span>
+                        <span>
+                          {existing
+                            ? new Date(existing.savedAt).toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })
+                            : 'Empty'}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <button
+                          id={`btn-nes-save-${slotId}`}
+                          type="button"
+                          className="secondary-btn"
+                          style={{ flex: 1, fontSize: '0.68rem', padding: '3px 4px' }}
+                          onClick={() => void handleSaveSlot(slotId)}
+                        >
+                          💾 Save
+                        </button>
+                        <button
+                          id={`btn-nes-load-${slotId}`}
+                          type="button"
+                          className="secondary-btn"
+                          disabled={!existing}
+                          style={{
+                            flex: 1,
+                            fontSize: '0.68rem',
+                            padding: '3px 4px',
+                            opacity: existing ? 1 : 0.45,
+                          }}
+                          onClick={() => void handleLoadSlot(slotId)}
+                        >
+                          📂 Load
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* 1P / 2P Multiplayer Co-Op Controller Selector */}
+            <div
+              style={{
+                background: 'rgba(15, 23, 42, 0.92)',
+                border: '1px solid rgba(56, 189, 248, 0.35)',
+                borderRadius: '10px',
+                padding: '8px 12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px',
+                flexWrap: 'wrap',
+                fontSize: '0.75rem',
+              }}
+            >
+              <span style={{ color: '#7DD3FC', fontWeight: 700 }}>
+                🎮 Active Controller Port:
+              </span>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button
+                  id="btn-nes-claim-p1"
+                  type="button"
+                  className={localPlayerNum === 1 ? 'primary-btn' : 'secondary-btn'}
+                  style={{ fontSize: '0.72rem', padding: '4px 10px' }}
+                  onClick={() => {
+                    nes.setLocalInputPlayer(1)
+                    setLocalPlayerNum(1)
+                    onClaimNesPlayerSlot?.(1)
+                  }}
+                >
+                  🕹 Player 1
+                  {nesMultiplayerState?.player1Name
+                    ? ` (${nesMultiplayerState.player1Id === localUserId ? 'You' : nesMultiplayerState.player1Name.slice(0, 8)})`
+                    : ''}
+                </button>
+                <button
+                  id="btn-nes-claim-p2"
+                  type="button"
+                  className={localPlayerNum === 2 ? 'primary-btn' : 'secondary-btn'}
+                  style={{ fontSize: '0.72rem', padding: '4px 10px' }}
+                  onClick={() => {
+                    nes.setLocalInputPlayer(2)
+                    setLocalPlayerNum(2)
+                    onClaimNesPlayerSlot?.(2)
+                  }}
+                >
+                  🕹 Player 2 (Co-Op)
+                  {nesMultiplayerState?.player2Name
+                    ? ` (${nesMultiplayerState.player2Id === localUserId ? 'You' : nesMultiplayerState.player2Name.slice(0, 8)})`
+                    : ''}
+                </button>
+                {onShareNesCheckpoint && (
+                  <button
+                    id="btn-nes-sync-room"
+                    type="button"
+                    className="secondary-btn"
+                    style={{ fontSize: '0.72rem', padding: '4px 8px' }}
+                    onClick={() => {
+                      onShareNesCheckpoint()
+                      showNotice('📡 Synced live NES state to all players in the room!')
+                    }}
+                    title="Broadcast exact NES CPU/PPU state to all room members"
+                  >
+                    📡 Sync Room
+                  </button>
+                )}
+              </div>
+            </div>
 
             {/* Interactive NES Controller Deck */}
             <div
@@ -484,7 +829,7 @@ export function NesConsoleModal({
               }}
             >
               <div style={{ color: '#38BDF8', fontWeight: 700, marginBottom: '4px' }}>
-                🥽 Meta Quest VR Controller & Keyboard Mapping:
+                🥽 Meta Quest VR Controller &amp; Keyboard Mapping:
               </div>
               <div>
                 • <strong>Quest Left Stick:</strong> NES D-Pad (Up / Down / Left / Right)
@@ -571,7 +916,7 @@ export function NesConsoleModal({
                 display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fill, minmax(195px, 1fr))',
                 gap: '10px',
-                maxHeight: '445px',
+                maxHeight: '530px',
                 overflowY: 'auto',
                 paddingRight: '4px',
               }}
@@ -579,6 +924,7 @@ export function NesConsoleModal({
               {filteredCartridges.map((cart) => {
                 const isSelected =
                   selectedCartridge.id === cart.id && !customRomTitle
+                const hasSave = hasAnyNesSaveForCartridge(cart.id)
                 return (
                   <button
                     key={cart.id}
@@ -620,11 +966,15 @@ export function NesConsoleModal({
                       >
                         {cart.genre.toUpperCase()} · {cart.year}
                       </span>
-                      {isSelected && (
+                      {isSelected ? (
                         <span style={{ fontSize: '0.7rem', color: '#4ADE80' }}>
                           ● ACTIVE ROM
                         </span>
-                      )}
+                      ) : hasSave ? (
+                        <span style={{ fontSize: '0.68rem', color: '#FACC15' }}>
+                          💾 SAVED
+                        </span>
+                      ) : null}
                     </div>
                     <strong style={{ fontSize: '0.88rem' }}>{cart.title}</strong>
                     <span

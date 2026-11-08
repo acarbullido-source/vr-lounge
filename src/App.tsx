@@ -381,12 +381,12 @@ function SeatCameraAndOriginRig({
   // Desktop WASD / Arrow-Key Walk + Fly Listener + Global NES Controller Keyboard Listener
   useEffect(() => {
     const mapNesKeyCode = (code: string) => {
-      if (code === 'ArrowUp') return 'up' as const
-      if (code === 'ArrowDown') return 'down' as const
-      if (code === 'ArrowLeft') return 'left' as const
-      if (code === 'ArrowRight') return 'right' as const
+      if (code === 'ArrowUp' || code === 'KeyI') return 'up' as const
+      if (code === 'ArrowDown' || code === 'KeyK') return 'down' as const
+      if (code === 'ArrowLeft' || code === 'KeyJ') return 'left' as const
+      if (code === 'ArrowRight' || code === 'KeyL') return 'right' as const
       if (code === 'KeyX' || code === 'Space') return 'a' as const
-      if (code === 'KeyZ') return 'b' as const
+      if (code === 'KeyZ' || code === 'ShiftLeft') return 'b' as const
       if (code === 'Enter') return 'start' as const
       if (code === 'ShiftRight' || code === 'Backspace') return 'select' as const
       return null
@@ -679,6 +679,11 @@ function SeatCameraAndOriginRig({
       rightController,
       Boolean(nesActiveOnScreen && joined && !keyboardOpen),
     )
+    // Step the NES 6502/PPU hardware emulator directly from R3F/WebXR useFrame
+    // so Meta Quest immersive XR sessions (where window.requestAnimationFrame pauses) run at 60fps
+    if (nesActiveOnScreen) {
+      getNesEmulator().stepFromRenderLoop(dt)
+    }
 
     if (inVR) {
       // 1. Quest B/Y button toggles the floating Lounge Controls dock
@@ -2504,6 +2509,10 @@ export function App() {
           clubhouseOpen={clubhouseOpen}
           onToggleClubhouse={(open) => handleToggleClubhouse(open)}
           openYouTubeAccountNonce={openYouTubeAccountNonce}
+          nesMultiplayerState={room.nesMultiplayerState}
+          onClaimNesPlayerSlot={room.claimNesPlayerSlot}
+          onShareNesCheckpoint={room.shareNesCheckpointWithRoom}
+          onShareNesSaveSlot={room.shareNesSaveSlotWithRoom}
         />
       )}
 

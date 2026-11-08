@@ -995,7 +995,7 @@ export function GameRoom3D({
           <planeGeometry args={[4.2, 2.15]} />
           {hasMainVideoFrames ? (
             <meshBasicMaterial
-              key="gameroom-main-video"
+              key={`gameroom-main-${mainVideoTexture.uuid}`}
               map={mainVideoTexture}
               color="#ffffff"
               toneMapped={false}

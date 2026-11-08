@@ -311,4 +311,56 @@ export interface ComputedSeat {
   roomWing?: LoungeWingId
 }
 
+// ============================================================================
+// NES Save States, Two-Player Headset Co-Op & Persistent Cloud Vault Types
+// ============================================================================
 
+export type NesSaveSlotId = 'auto' | 'slot-1' | 'slot-2' | 'slot-3'
+
+export interface NesSaveSlotMeta {
+  slotId: NesSaveSlotId
+  cartridgeId: string
+  cartridgeTitle: string
+  savedAt: number
+  savedBy: string
+  label: string
+  compressedState: string
+  thumbnailDataUrl?: string
+}
+
+export interface NesMultiplayerState {
+  cartridgeId: string
+  cartridgeTitle: string
+  player1Id: string | null
+  player1Name: string | null
+  player2Id: string | null
+  player2Name: string | null
+  revision: number
+  updatedAt: number
+}
+
+export type NesWireEvent =
+  | {
+      kind: 'nes-multiplayer-state'
+      state: NesMultiplayerState
+    }
+  | {
+      kind: 'nes-input'
+      cartridgeId: string
+      player: 1 | 2
+      senderId: string
+      buttonsMask: number
+      seq: number
+      timestamp: number
+    }
+  | {
+      kind: 'nes-state-checkpoint'
+      cartridgeId: string
+      senderId: string
+      compressedState: string
+      timestamp: number
+    }
+  | {
+      kind: 'nes-save-slot-shared'
+      slot: NesSaveSlotMeta
+    }

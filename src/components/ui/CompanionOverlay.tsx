@@ -74,6 +74,13 @@ import {
   triggerEnterVRFromGesture,
   type VRSupportKind,
 } from '../../store/xrStore'
+import {
+  NES_LIBRARY_CARTRIDGES,
+  getNesEmulator,
+  isNesMediaUrl,
+  parseNesCartridgeIdFromUrl,
+  type NesButtonId,
+} from '../../services/nesEmulator'
 import type {
   AvatarCustomization,
   AvatarStyleId,
@@ -81,6 +88,8 @@ import type {
   ComputedSeat,
   FurnitureCatalogId,
   LightingPresetId,
+  NesMultiplayerState,
+  NesSaveSlotMeta,
   ParticipantProfile,
   PlacedFurnitureItem,
   PresenterState,
@@ -192,6 +201,10 @@ export interface CompanionOverlayProps {
   onToggleFlyMode?: () => void
   onDropToFloor?: () => void
   onOpenMobileMode?: (mode: 'pocket-2d' | 'touch-3d') => void
+  nesMultiplayerState?: NesMultiplayerState
+  onClaimNesPlayerSlot?: (slot: 1 | 2 | null) => void
+  onShareNesCheckpoint?: () => void
+  onShareNesSaveSlot?: (slot: NesSaveSlotMeta) => void
 }
 
 export function CompanionOverlay({
@@ -274,6 +287,10 @@ export function CompanionOverlay({
   onToggleFlyMode,
   onDropToFloor,
   onOpenMobileMode,
+  nesMultiplayerState,
+  onClaimNesPlayerSlot,
+  onShareNesCheckpoint,
+  onShareNesSaveSlot,
 }: CompanionOverlayProps) {
   // Pre-join lobby form state hydrated from saved avatar preferences
   const [savedAvatarPrefs] = useState(() => loadSavedAvatarPreferences())
@@ -1987,39 +2004,187 @@ export function CompanionOverlay({
               <span>Avatar</span>
             </button>
           )}
+
+          <button
+            id="btn-dock-open-nes-console"
+            type="button"
+            onClick={() => setNesModalOpen(true)}
+            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+              isNesMediaUrl(presenterState.mediaUrl) || nesModalOpen
+                ? 'border-red-500 bg-red-600/25 text-red-100 shadow-sm shadow-red-500/20'
+                : 'border-red-500/40 bg-[#141922] text-red-200 hover:border-red-400 hover:bg-red-950/35'
+            }`}
+          >
+            <span>🕹</span>
+            <span>NES Console (36 ROMs)</span>
+          </button>
         </div>
 
-        {/* Center: Mode 2 Synchronized Transport Controls */}
-        {presenterState.screenMode === 'url-sync' && presenterState.activePresenterId && (
-          <div className="flex flex-1 items-center gap-2.5 px-2 min-w-[200px]">
-            <button
-              id="btn-companion-play-pause"
-              type="button"
-              disabled={!isLocalPresenter}
-              onClick={onTogglePlayPause}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#f4f1ea]/10 text-[#f4f1ea] transition hover:bg-[#e5a93c] hover:text-[#080a0d] disabled:opacity-40"
+        {/* Center: Live NES Controller & Cartridge Bar when NES is Active, or Synchronized Video Transport */}
+        {isNesMediaUrl(presenterState.mediaUrl) ? (
+          <div
+            data-testid="companion-nes-live-controller-bar"
+            className="flex flex-1 flex-wrap items-center justify-center gap-1.5 rounded-xl border border-red-500/40 bg-[#0c111d] px-2.5 py-1.5 min-w-[280px]"
+          >
+            {/* Cartridge Switcher Dropdown */}
+            <select
+              aria-label="Active NES Cartridge"
+              value={
+                parseNesCartridgeIdFromUrl(presenterState.mediaUrl) ??
+                getNesEmulator().getActiveCartridge().id
+              }
+              onChange={(e) => {
+                const nextId = e.target.value
+                const nextCart = NES_LIBRARY_CARTRIDGES.find((c) => c.id === nextId)
+                if (!nextCart) return
+                if (!isLocalPresenter && canTakeControl) {
+                  onTakeControl()
+                }
+                getNesEmulator().loadLibraryCartridge(nextCart.id)
+                onLoadStreamUrl(
+                  `nes://${nextCart.id}`,
+                  `🕹 NES: ${nextCart.title}`,
+                  false,
+                )
+              }}
+              className="max-w-[165px] rounded-lg border border-red-500/40 bg-[#141c2e] px-2 py-1 text-[11px] font-semibold text-amber-300 focus:outline-none"
             >
-              {presenterState.isPlaying ? (
-                <Pause className="h-3.5 w-3.5" />
-              ) : (
-                <Play className="h-3.5 w-3.5" />
-              )}
+              {NES_LIBRARY_CARTRIDGES.map((c) => (
+                <option key={c.id} value={c.id}>
+                  🕹 {c.title}
+                </option>
+              ))}
+            </select>
+
+            {/* Live D-Pad Buttons */}
+            {(
+              [
+                ['left', '◀'],
+                ['up', '▲'],
+                ['down', '▼'],
+                ['right', '▶'],
+              ] as const
+            ).map(([btnId, label]) => (
+              <button
+                key={btnId}
+                type="button"
+                onPointerDown={() => getNesEmulator().setButtonState(btnId as NesButtonId, true)}
+                onPointerUp={() => getNesEmulator().setButtonState(btnId as NesButtonId, false)}
+                onPointerLeave={() => getNesEmulator().setButtonState(btnId as NesButtonId, false)}
+                onClick={() => getNesEmulator().tapButton(btnId as NesButtonId)}
+                className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-600 bg-slate-800 text-xs font-bold text-slate-100 hover:bg-slate-700 active:scale-95"
+              >
+                {label}
+              </button>
+            ))}
+
+            {/* SELECT & START */}
+            <button
+              type="button"
+              onPointerDown={() => getNesEmulator().setButtonState('select', true)}
+              onPointerUp={() => getNesEmulator().setButtonState('select', false)}
+              onPointerLeave={() => getNesEmulator().setButtonState('select', false)}
+              onClick={() => getNesEmulator().tapButton('select')}
+              className="rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-[10px] font-bold text-slate-200 hover:bg-slate-700"
+            >
+              SEL
             </button>
-            <input
-              id="slider-timeline-scrub"
-              type="range"
-              min={0}
-              max={Math.max(1, localDuration)}
-              step={0.5}
-              disabled={!isLocalPresenter}
-              value={Math.min(localCurrentTime, Math.max(1, localDuration))}
-              onChange={(e) => onSeekTo(Number(e.target.value))}
-              className="cinema-slider w-full disabled:opacity-50"
-            />
-            <span className="shrink-0 font-mono text-[11px] text-[#c7c2b8]">
-              {formatDuration(localCurrentTime)} / {formatDuration(localDuration)}
-            </span>
+            <button
+              type="button"
+              onPointerDown={() => getNesEmulator().setButtonState('start', true)}
+              onPointerUp={() => getNesEmulator().setButtonState('start', false)}
+              onPointerLeave={() => getNesEmulator().setButtonState('start', false)}
+              onClick={() => getNesEmulator().tapButton('start')}
+              className="rounded-md border border-amber-400 bg-amber-500/20 px-2 py-1 text-[10px] font-extrabold text-amber-300 hover:bg-amber-500/35"
+            >
+              START
+            </button>
+
+            {/* B & A Action Buttons */}
+            <button
+              type="button"
+              onPointerDown={() => getNesEmulator().setButtonState('b', true)}
+              onPointerUp={() => getNesEmulator().setButtonState('b', false)}
+              onPointerLeave={() => getNesEmulator().setButtonState('b', false)}
+              onClick={() => getNesEmulator().tapButton('b')}
+              className="flex h-7 w-7 items-center justify-center rounded-full border border-red-300 bg-red-600 text-xs font-extrabold text-white shadow hover:bg-red-500 active:scale-95"
+            >
+              B
+            </button>
+            <button
+              type="button"
+              onPointerDown={() => getNesEmulator().setButtonState('a', true)}
+              onPointerUp={() => getNesEmulator().setButtonState('a', false)}
+              onPointerLeave={() => getNesEmulator().setButtonState('a', false)}
+              onClick={() => getNesEmulator().tapButton('a')}
+              className="flex h-7 w-7 items-center justify-center rounded-full border border-red-300 bg-red-600 text-xs font-extrabold text-white shadow hover:bg-red-500 active:scale-95"
+            >
+              A
+            </button>
+
+            {/* Quick Save & Resume Buttons */}
+            <button
+              type="button"
+              title="Quick Save NES State (Slot 1 + Cloud Vault)"
+              onClick={() => {
+                void getNesEmulator()
+                  .saveSlot('slot-1')
+                  .then((saved) => {
+                    if (saved) onShareNesSaveSlot?.(saved)
+                  })
+              }}
+              className="rounded-md border border-emerald-500/45 bg-emerald-950/50 px-2 py-1 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-900/60"
+            >
+              💾 Save
+            </button>
+            <button
+              type="button"
+              title="Resume Latest Saved NES State"
+              onClick={() => {
+                void getNesEmulator()
+                  .resumeMostRecentSave()
+                  .then((restored) => {
+                    if (restored) onShareNesCheckpoint?.()
+                  })
+              }}
+              className="rounded-md border border-sky-500/45 bg-sky-950/50 px-2 py-1 text-[10px] font-semibold text-sky-200 hover:bg-sky-900/60"
+            >
+              📂 Load
+            </button>
           </div>
+        ) : (
+          presenterState.screenMode === 'url-sync' &&
+          presenterState.activePresenterId && (
+            <div className="flex flex-1 items-center gap-2.5 px-2 min-w-[200px]">
+              <button
+                id="btn-companion-play-pause"
+                type="button"
+                disabled={!isLocalPresenter}
+                onClick={onTogglePlayPause}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#f4f1ea]/10 text-[#f4f1ea] transition hover:bg-[#e5a93c] hover:text-[#080a0d] disabled:opacity-40"
+              >
+                {presenterState.isPlaying ? (
+                  <Pause className="h-3.5 w-3.5" />
+                ) : (
+                  <Play className="h-3.5 w-3.5" />
+                )}
+              </button>
+              <input
+                id="slider-timeline-scrub"
+                type="range"
+                min={0}
+                max={Math.max(1, localDuration)}
+                step={0.5}
+                disabled={!isLocalPresenter}
+                value={Math.min(localCurrentTime, Math.max(1, localDuration))}
+                onChange={(e) => onSeekTo(Number(e.target.value))}
+                className="cinema-slider w-full disabled:opacity-50"
+              />
+              <span className="shrink-0 font-mono text-[11px] text-[#c7c2b8]">
+                {formatDuration(localCurrentTime)} / {formatDuration(localDuration)}
+              </span>
+            </div>
+          )
         )}
 
         {/* Right: Mic + Mixers + Quick Reactions + Chat */}
@@ -2094,10 +2259,18 @@ export function CompanionOverlay({
         <NesConsoleModal
           open={nesModalOpen}
           activeMediaUrl={presenterState.mediaUrl}
+          localUserId={localProfile.userId}
+          nesMultiplayerState={nesMultiplayerState}
           onClose={() => setNesModalOpen(false)}
           onLaunchNesToMainScreen={(nesUrl, title) => {
+            if (!isLocalPresenter && canTakeControl) {
+              onTakeControl()
+            }
             onLoadStreamUrl(nesUrl, title, false)
           }}
+          onClaimNesPlayerSlot={onClaimNesPlayerSlot}
+          onShareNesCheckpoint={onShareNesCheckpoint}
+          onShareNesSaveSlot={onShareNesSaveSlot}
         />
       </div>
     </div>
