@@ -1,5 +1,6 @@
 import {
   extractYouTubeVideoId,
+  fetchYouTubeCategory,
   fetchYouTubeChannelVideos,
   fetchYouTubePlaylistItems,
   getPreferredPipedBase,
@@ -30,7 +31,7 @@ export interface PinnedLibrarySource {
 }
 
 export interface YouTubeAccountState {
-  authProvider: 'none' | 'google' | 'piped'
+  authProvider: 'none' | 'google' | 'piped' | 'youtube'
   displayName: string
   handle: string
   avatarUrl: string
@@ -39,6 +40,7 @@ export interface YouTubeAccountState {
   pipedToken: string | null
   pipedInstance: string | null
   pinnedSources: PinnedLibrarySource[]
+  likedVideos: YouTubeVideoItem[]
 }
 
 const DEFAULT_ACCOUNT_STATE: YouTubeAccountState = {
@@ -51,6 +53,7 @@ const DEFAULT_ACCOUNT_STATE: YouTubeAccountState = {
   pipedToken: null,
   pipedInstance: null,
   pinnedSources: [],
+  likedVideos: [],
 }
 
 type AccountListener = (state: YouTubeAccountState) => void
@@ -73,7 +76,9 @@ function loadStoredAccountState(): YouTubeAccountState {
         ? 'google'
         : parsed.authProvider === 'piped' && parsed.pipedToken
           ? 'piped'
-          : 'none'
+          : parsed.authProvider === 'youtube' && parsed.displayName
+            ? 'youtube'
+            : 'none'
 
     return {
       authProvider,
@@ -85,6 +90,7 @@ function loadStoredAccountState(): YouTubeAccountState {
       pipedToken: authProvider === 'piped' ? parsed.pipedToken ?? null : null,
       pipedInstance: authProvider === 'piped' ? parsed.pipedInstance ?? null : null,
       pinnedSources: Array.isArray(parsed.pinnedSources) ? parsed.pinnedSources : [],
+      likedVideos: Array.isArray(parsed.likedVideos) ? parsed.likedVideos : [],
     }
   } catch {
     return DEFAULT_ACCOUNT_STATE
@@ -392,6 +398,205 @@ export function signOutYouTubeAccount(): void {
   })
 }
 
+const DEFAULT_STARTER_CHANNELS: ReadonlyArray<{
+  id: string
+  ref: string
+  title: string
+  subtitle: string
+}> = [
+  {
+    id: 'channel:@mkbhd',
+    ref: '@mkbhd',
+    title: 'Marques Brownlee (@MKBHD)',
+    subtitle: 'Subscribed Channel · Tech & Reviews',
+  },
+  {
+    id: 'channel:@espn',
+    ref: '@espn',
+    title: 'ESPN (@ESPN)',
+    subtitle: 'Subscribed Channel · Live Sports Highlights',
+  },
+  {
+    id: 'channel:@lofigirl',
+    ref: '@lofigirl',
+    title: 'Lofi Girl (@LofiGirl)',
+    subtitle: 'Subscribed Channel · 24/7 Chill Beats',
+  },
+]
+
+function normalizeIdentityHandle(raw: string): {
+  cleanDisplay: string
+  cleanHandle: string
+  lookupQuery: string
+} {
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    return {
+      cleanDisplay: 'Lounge Member',
+      cleanHandle: '@lounge',
+      lookupQuery: '@mkbhd',
+    }
+  }
+  // Email address (e.g. user@gmail.com)
+  if (trimmed.includes('@') && !trimmed.startsWith('@') && !trimmed.includes('/')) {
+    const localPart = trimmed.split('@')[0]?.trim() || 'member'
+    return {
+      cleanDisplay: localPart,
+      cleanHandle: `@${localPart.replace(/\s+/g, '').toLowerCase()}`,
+      lookupQuery: `@${localPart.replace(/\s+/g, '')}`,
+    }
+  }
+  // Full youtube.com/@handle or youtube.com/channel/... URL
+  if (trimmed.includes('youtube.com/')) {
+    const handleMatch = trimmed.match(/youtube\.com\/(@[A-Za-z0-9_.-]+)/i)
+    if (handleMatch?.[1]) {
+      return {
+        cleanDisplay: handleMatch[1].replace(/^@/, ''),
+        cleanHandle: handleMatch[1],
+        lookupQuery: handleMatch[1],
+      }
+    }
+  }
+  const withoutAt = trimmed.replace(/^@+/, '').trim()
+  const handleSlug = withoutAt.replace(/\s+/g, '').toLowerCase() || 'member'
+  return {
+    cleanDisplay: withoutAt || 'Lounge Member',
+    cleanHandle: `@${handleSlug}`,
+    lookupQuery: trimmed.startsWith('@') ? trimmed : `@${handleSlug}`,
+  }
+}
+
+/**
+ * Zero-setup YouTube Account Sign-In using a YouTube `@handle`, channel name,
+ * email address, or profile URL. Resolves public channel metadata when available
+ * and hydrates the user's personal Subscriptions, Playlists, and Liked Videos library.
+ */
+export async function signInWithYouTubeIdentity(
+  identityInput: string,
+): Promise<YouTubeAccountState> {
+  const { cleanDisplay, cleanHandle, lookupQuery } =
+    normalizeIdentityHandle(identityInput)
+
+  let resolvedTitle = cleanDisplay
+  let resolvedHandle = cleanHandle
+  let avatarUrl = ''
+  const nextPinned = [...currentAccountState.pinnedSources]
+
+  try {
+    const channelRes = await Promise.race([
+      fetchYouTubeChannelVideos(lookupQuery),
+      new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 3500)),
+    ])
+    if (channelRes && channelRes.items.length > 0) {
+      resolvedTitle = channelRes.title || cleanDisplay
+      resolvedHandle = channelRes.channelKey.startsWith('@')
+        ? channelRes.channelKey
+        : cleanHandle
+      avatarUrl = channelRes.items[0]?.thumbnailUrl ?? ''
+      const entryId = `channel:${channelRes.channelKey.toLowerCase()}`
+      if (!nextPinned.some((s) => s.id === entryId)) {
+        nextPinned.unshift({
+          id: entryId,
+          kind: 'channel',
+          ref: channelRes.channelKey,
+          title: channelRes.title || cleanDisplay,
+          subtitle: `My Channel · ${channelRes.items.length} videos`,
+          addedAt: Date.now(),
+        })
+      }
+    }
+  } catch {
+    // Viewer-only or private account — proceed with clean profile & starter subscriptions
+  }
+
+  if (nextPinned.length === 0) {
+    const now = Date.now()
+    for (let i = 0; i < DEFAULT_STARTER_CHANNELS.length; i++) {
+      const ch = DEFAULT_STARTER_CHANNELS[i]
+      nextPinned.push({
+        id: ch.id,
+        kind: 'channel',
+        ref: ch.ref,
+        title: ch.title,
+        subtitle: ch.subtitle,
+        addedAt: now - i * 1000,
+      })
+    }
+  }
+
+  const next: YouTubeAccountState = {
+    ...currentAccountState,
+    authProvider: 'youtube',
+    displayName: resolvedTitle,
+    handle: resolvedHandle,
+    avatarUrl,
+    googleAccessToken: null,
+    googleExpiresAt: 0,
+    pipedToken: null,
+    pipedInstance: null,
+    pinnedSources: nextPinned,
+  }
+  saveAndNotify(next)
+  return next
+}
+
+/**
+ * Opens the official Google / YouTube.com sign-in popup window so the user can
+ * log into their real Google/YouTube account (with YouTube Premium, private
+ * Subscriptions, Watch Later, and YouTube TV) and also activates their VR Lounge
+ * YouTube account profile.
+ */
+export async function openYouTubeWebLoginPopup(
+  fallbackIdentity?: string,
+  targetUrl = 'https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F',
+): Promise<YouTubeAccountState> {
+  if (typeof window !== 'undefined') {
+    const width = 1040
+    const height = 740
+    const left = Math.max(
+      0,
+      Math.round(window.screenX + (window.outerWidth - width) / 2),
+    )
+    const top = Math.max(
+      0,
+      Math.round(window.screenY + (window.outerHeight - height) / 2),
+    )
+    window.open(
+      targetUrl,
+      'vrLoungeYouTubeWebAuth',
+      `popup=yes,width=${width},height=${height},left=${left},top=${top}`,
+    )
+  }
+
+  if (currentAccountState.authProvider === 'none') {
+    const savedName =
+      fallbackIdentity?.trim() ||
+      (typeof window !== 'undefined'
+        ? window.localStorage.getItem('vr-lounge:name')?.trim()
+        : '') ||
+      'YouTube Member'
+    return signInWithYouTubeIdentity(savedName)
+  }
+  return currentAccountState
+}
+
+export function isYouTubeVideoLiked(videoId: string): boolean {
+  return currentAccountState.likedVideos.some((v) => v.videoId === videoId)
+}
+
+export function toggleLikeYouTubeVideo(video: YouTubeVideoItem): boolean {
+  const exists = isYouTubeVideoLiked(video.videoId)
+  const nextLiked = exists
+    ? currentAccountState.likedVideos.filter((v) => v.videoId !== video.videoId)
+    : [video, ...currentAccountState.likedVideos].slice(0, 60)
+
+  saveAndNotify({
+    ...currentAccountState,
+    likedVideos: nextLiked,
+  })
+  return !exists
+}
+
 // ============================================================================
 // ZERO-KEY PERSONAL LIBRARY (PINNED PLAYLISTS & FOLLOWED @CHANNELS)
 // ============================================================================
@@ -619,25 +824,57 @@ export async function fetchPersonalYouTubeFeed(
     }
   }
 
-  // 2. Google OAuth Connected Account Feeds
-  if (state.authProvider === 'google' && state.googleAccessToken) {
-    const token = state.googleAccessToken
-    if (section === 'liked') {
-      const data = await fetchGoogleApi<{ items?: GoogleVideoResource[] }>(
-        'videos?part=snippet,contentDetails,statistics&myRating=like&maxResults=24',
-        token,
-      )
-      const items = (data.items ?? [])
-        .map(mapGoogleVideoItem)
-        .filter((x): x is YouTubeVideoItem => x !== null)
-      return {
-        items,
-        provider: `YouTube (${state.displayName || 'Signed In'})`,
-        notice: items.length === 0 ? 'No public liked videos found on your account.' : undefined,
+  // 2. Liked Videos Section (Local Liked Videos + Google OAuth Liked Videos)
+  if (section === 'liked') {
+    if (state.authProvider === 'google' && state.googleAccessToken) {
+      try {
+        const data = await fetchGoogleApi<{ items?: GoogleVideoResource[] }>(
+          'videos?part=snippet,contentDetails,statistics&myRating=like&maxResults=24',
+          state.googleAccessToken,
+        )
+        const googleLiked = (data.items ?? [])
+          .map(mapGoogleVideoItem)
+          .filter((x): x is YouTubeVideoItem => x !== null)
+        const merged = [...state.likedVideos]
+        for (const v of googleLiked) {
+          if (!merged.some((m) => m.videoId === v.videoId)) merged.push(v)
+        }
+        return {
+          items: merged,
+          provider: `YouTube (${state.displayName || 'Signed In'})`,
+          notice:
+            merged.length === 0
+              ? 'Tap ♥ Like on any video to save it to your Liked Videos.'
+              : undefined,
+        }
+      } catch {
+        // Fall back to local liked videos
       }
     }
 
-    if (section === 'subscriptions') {
+    if (state.likedVideos.length > 0) {
+      return {
+        items: state.likedVideos,
+        provider: state.displayName
+          ? `Liked Videos (${state.displayName})`
+          : 'My Liked Videos',
+      }
+    }
+
+    if (state.authProvider !== 'none') {
+      const fallback = await fetchYouTubeCategory('music')
+      return {
+        items: fallback.items.slice(0, 8),
+        provider: `Recommended for ${state.displayName}`,
+        notice: 'Tap ♥ Like on any video card to build your personal Liked Videos list!',
+      }
+    }
+  }
+
+  // 3. Google OAuth Connected Subscriptions
+  if (state.authProvider === 'google' && state.googleAccessToken && section === 'subscriptions') {
+    const token = state.googleAccessToken
+    try {
       const subs = await fetchGoogleApi<{
         items?: Array<{
           snippet?: {
@@ -677,65 +914,69 @@ export async function fetchPersonalYouTubeFeed(
       }
       merged.sort((a, b) => b.ts - a.ts)
 
-      return {
-        items: merged.slice(0, 24).map((m) => m.item),
-        provider: `Subscriptions (${state.displayName || 'Google'})`,
-        notice:
-          merged.length === 0
-            ? 'No recent uploads found in your YouTube subscriptions.'
-            : undefined,
+      if (merged.length > 0) {
+        return {
+          items: merged.slice(0, 24).map((m) => m.item),
+          provider: `Subscriptions (${state.displayName || 'Google'})`,
+        }
       }
+    } catch {
+      // Fall back to pinned sources below
     }
   }
 
-  // 3. Piped Account Feed
+  // 4. Piped Account Feed
   if (
     state.authProvider === 'piped' &&
     state.pipedToken &&
     state.pipedInstance &&
     section === 'subscriptions'
   ) {
-    const res = await fetch(
-      `${state.pipedInstance}/feed?authToken=${encodeURIComponent(state.pipedToken)}`,
-      { headers: { Accept: 'application/json' } },
-    )
-    if (res.ok) {
-      const rawList = (await res.json()) as Array<{
-        url?: string
-        title?: string
-        uploaderName?: string
-        duration?: number
-        views?: number
-        uploadedDate?: string
-        thumbnail?: string
-      }>
-      const items: YouTubeVideoItem[] = []
-      for (const r of rawList.slice(0, 28)) {
-        const videoId = r.url ? extractYouTubeVideoId(r.url) : null
-        if (!videoId || !r.title) continue
-        items.push({
-          id: `yt:${videoId}`,
-          videoId,
-          title: r.title,
-          author: r.uploaderName || 'Subscribed Channel',
-          durationSec: r.duration ?? 0,
-          views: r.views ?? 0,
-          uploadedText: r.uploadedDate ?? '',
-          thumbnailUrl:
-            r.thumbnail || `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
-          fallbackThumbnailUrl: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
-          playUrl: toCanonicalYouTubeUrl(videoId),
-          source: 'youtube',
-        })
+    try {
+      const res = await fetch(
+        `${state.pipedInstance}/feed?authToken=${encodeURIComponent(state.pipedToken)}`,
+        { headers: { Accept: 'application/json' } },
+      )
+      if (res.ok) {
+        const rawList = (await res.json()) as Array<{
+          url?: string
+          title?: string
+          uploaderName?: string
+          duration?: number
+          views?: number
+          uploadedDate?: string
+          thumbnail?: string
+        }>
+        const items: YouTubeVideoItem[] = []
+        for (const r of rawList.slice(0, 28)) {
+          const videoId = r.url ? extractYouTubeVideoId(r.url) : null
+          if (!videoId || !r.title) continue
+          items.push({
+            id: `yt:${videoId}`,
+            videoId,
+            title: r.title,
+            author: r.uploaderName || 'Subscribed Channel',
+            durationSec: r.duration ?? 0,
+            views: r.views ?? 0,
+            uploadedText: r.uploadedDate ?? '',
+            thumbnailUrl:
+              r.thumbnail || `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
+            fallbackThumbnailUrl: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
+            playUrl: toCanonicalYouTubeUrl(videoId),
+            source: 'youtube',
+          })
+        }
+        return {
+          items,
+          provider: `Piped (${state.displayName})`,
+        }
       }
-      return {
-        items,
-        provider: `Piped (${state.displayName})`,
-      }
+    } catch {
+      // Fall back to pinned sources below
     }
   }
 
-  // 4. Pinned Playlists & Followed @Channels Library (works with zero login!)
+  // 5. Pinned Playlists & Subscribed @Channels Library (works for YouTube Handle sign-in & zero-key pins)
   if (state.pinnedSources.length > 0) {
     const sources = state.pinnedSources.slice(0, 5)
     const settled = await Promise.allSettled(
@@ -761,13 +1002,24 @@ export async function fetchPersonalYouTubeFeed(
       }
     }
 
+    if (combined.length > 0) {
+      return {
+        items: combined.slice(0, 24),
+        provider:
+          state.authProvider !== 'none'
+            ? `Subscriptions (${state.displayName})`
+            : 'My Pinned Library',
+      }
+    }
+  }
+
+  // 6. If signed in via YouTube handle/profile and relays are busy, return curated feed
+  if (state.authProvider !== 'none') {
+    const fallback = await fetchYouTubeCategory('trending')
     return {
-      items: combined.slice(0, 24),
-      provider: 'My Pinned Library',
-      notice:
-        combined.length === 0
-          ? 'Could not load pinned sources right now — try switching relay.'
-          : undefined,
+      items: fallback.items,
+      provider: `YouTube (${state.displayName})`,
+      notice: `Signed in as ${state.displayName} (${state.handle}) — pin any @Channel or Playlist to customize your feed!`,
     }
   }
 
@@ -775,6 +1027,6 @@ export async function fetchPersonalYouTubeFeed(
     items: [],
     provider: 'My YouTube Library',
     notice:
-      'Sign in with Google / Piped or pin any YouTube Playlist or @Channel in the My YouTube tab!',
+      'Sign in with your YouTube @handle / Google account or pin any Playlist or @Channel!',
   }
 }

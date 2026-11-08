@@ -966,6 +966,7 @@ export function App() {
   const [youtubeBrowserOpen, setYoutubeBrowserOpen] = useState(false)
   const [youtubeSearchQuery, setYoutubeSearchQuery] = useState('')
   const [youtubeSearchTrigger, setYoutubeSearchTrigger] = useState(0)
+  const [openYouTubeAccountNonce, setOpenYouTubeAccountNonce] = useState(0)
   const [buildMode, setBuildMode] = useState(false)
   const [barGamesOpen, setBarGamesOpen] = useState(false)
   const [barGamesTab, setBarGamesTab] = useState<BarGamesTabId>('play')
@@ -1694,10 +1695,14 @@ export function App() {
                       searchTrigger={youtubeSearchTrigger}
                       activeMediaUrl={room.presenterState.mediaUrl}
                       relatedVideos={media.relatedVideos}
+                      localDisplayName={room.localProfile.displayName}
                       onOpenSearchKeyboard={handleOpenYouTubeSearchKeyboard}
                       onVoiceSearchQuery={handleSubmitYouTubeSearch}
                       onClearSearch={handleClearYouTubeSearch}
                       onSelectVideo={handleSelectYouTubeVideo}
+                      onOpen2DAccountLogin={() => {
+                        setOpenYouTubeAccountNonce((n) => n + 1)
+                      }}
                       onClose={handleCloseYouTubeBrowser}
                     />
                   </SceneSectionBoundary>
@@ -2072,6 +2077,7 @@ export function App() {
           onToggleWardrobe={handleToggleWardrobe}
           clubhouseOpen={clubhouseOpen}
           onToggleClubhouse={(open) => handleToggleClubhouse(open)}
+          openYouTubeAccountNonce={openYouTubeAccountNonce}
         />
       )}
 

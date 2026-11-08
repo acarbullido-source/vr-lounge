@@ -11,6 +11,7 @@ import {
   Headphones,
   Link2,
   Lock,
+  LogIn,
   LogOut,
   MessageSquare,
   Mic,
@@ -58,6 +59,14 @@ import {
   type YouTubeCategory,
   type YouTubeVideoItem,
 } from '../../services/youtube'
+import {
+  getYouTubeAccountState,
+  openYouTubeWebLoginPopup,
+  signInWithYouTubeIdentity,
+  signOutYouTubeAccount,
+  subscribeYouTubeAccount,
+  type YouTubeAccountState,
+} from '../../services/youtubeAccount'
 import {
   getVRSupportKind,
   subscribeVRSupport,
@@ -175,6 +184,7 @@ export interface CompanionOverlayProps {
   onToggleWardrobe?: (open?: boolean) => void
   clubhouseOpen?: boolean
   onToggleClubhouse?: (open?: boolean) => void
+  openYouTubeAccountNonce?: number
 }
 
 export function CompanionOverlay({
@@ -252,6 +262,7 @@ export function CompanionOverlay({
   onToggleWardrobe,
   clubhouseOpen = false,
   onToggleClubhouse,
+  openYouTubeAccountNonce = 0,
 }: CompanionOverlayProps) {
   // Pre-join lobby form state hydrated from saved avatar preferences
   const [savedAvatarPrefs] = useState(() => loadSavedAvatarPreferences())
@@ -274,6 +285,17 @@ export function CompanionOverlay({
   )
   const [startMuted, setStartMuted] = useState(false)
   const [joining, setJoining] = useState(false)
+
+  // YouTube Account Sign-In state
+  const [accountState, setAccountState] = useState<YouTubeAccountState>(() =>
+    getYouTubeAccountState(),
+  )
+  const [lobbyYtIdentity, setLobbyYtIdentity] = useState('')
+  const [lobbyYtSigningIn, setLobbyYtSigningIn] = useState(false)
+
+  useEffect(() => {
+    return subscribeYouTubeAccount(setAccountState)
+  }, [])
 
   // In-room companion drawers
   const [urlDrawerOpen, setUrlDrawerOpen] = useState(false)
@@ -304,6 +326,21 @@ export function CompanionOverlay({
   const [unreadCount, setUnreadCount] = useState(0)
   const lastSeenMsgCountRef = useRef(0)
   const chatScrollRef = useRef<HTMLDivElement>(null)
+  const handledOpenYtNonceRef = useRef(0)
+
+  useEffect(() => {
+    if (
+      openYouTubeAccountNonce > 0 &&
+      openYouTubeAccountNonce !== handledOpenYtNonceRef.current
+    ) {
+      handledOpenYtNonceRef.current = openYouTubeAccountNonce
+      setBuildDrawerOpen(false)
+      onToggleWardrobe?.(false)
+      onToggleClubhouse?.(false)
+      setDrawerTab('my-youtube')
+      setUrlDrawerOpen(true)
+    }
+  }, [onToggleClubhouse, onToggleWardrobe, openYouTubeAccountNonce])
 
   useEffect(() => {
     setUrlInput(presenterState.mediaUrl)
@@ -654,19 +691,101 @@ export function CompanionOverlay({
                   </select>
                 </div>
 
-                <div className="rounded-lg border border-[#f4f1ea]/8 bg-[#0d1118] p-3 text-xs leading-relaxed text-[#8a867e]">
-                  <strong className="font-medium text-[#c7c2b8]">
-                    PC-Free YouTube in VR:
-                  </strong>{' '}
-                  Tap <span className="text-[#f4f1ea]">▶ YouTube</span> right inside your
-                  Quest 3 3D dock to search and watch together without a PC — or join in{' '}
-                  <span className="text-[#f4f1ea]">Companion Mode</span> to stream Netflix/DRM
-                  tabs.
+                {/* Pre-Join YouTube Account Sign-In Card */}
+                <div
+                  id="lobby-youtube-login-box"
+                  className="rounded-xl border border-[#e05a47]/30 bg-gradient-to-br from-[#191114] to-[#0d1118] p-3"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#f4f1ea]">
+                      <LogIn className="h-3.5 w-3.5 text-[#e05a47]" />
+                      <span>YouTube Account Login</span>
+                    </span>
+                    {accountState.authProvider !== 'none' && (
+                      <span className="rounded-full bg-[#49b384]/20 px-2 py-0.5 text-[10px] font-semibold text-[#49b384]">
+                        Signed In
+                      </span>
+                    )}
+                  </div>
+
+                  {accountState.authProvider !== 'none' ? (
+                    <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-[#49b384]/30 bg-[#080a0d]/70 px-2.5 py-2 text-xs">
+                      <div className="min-w-0">
+                        <div className="truncate font-semibold text-[#f4f1ea]">
+                          {accountState.displayName}
+                        </div>
+                        <div className="truncate text-[11px] text-[#8a867e]">
+                          {accountState.handle || 'YouTube Connected'}
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <button
+                          id="btn-lobby-yt-popup"
+                          type="button"
+                          onClick={() => openYouTubeWebLoginPopup(accountState.handle)}
+                          className="rounded-lg border border-[#f4f1ea]/15 bg-[#141922] px-2 py-1 text-[11px] text-[#f4f1ea] hover:border-[#e5a93c]/50"
+                        >
+                          YouTube.com
+                        </button>
+                        <button
+                          id="btn-lobby-yt-signout"
+                          type="button"
+                          onClick={() => signOutYouTubeAccount()}
+                          className="rounded-lg border border-[#f4f1ea]/12 bg-[#141922] px-2 py-1 text-[11px] text-[#c7c2b8] hover:text-[#e05a47]"
+                        >
+                          Sign Out
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-2 space-y-2">
+                      <div className="flex gap-1.5">
+                        <input
+                          id="input-lobby-yt-identity"
+                          type="text"
+                          value={lobbyYtIdentity}
+                          onChange={(e) => setLobbyYtIdentity(e.target.value)}
+                          placeholder="@handle, channel, or email (e.g. @dingbaum)"
+                          className="lounge-input flex-1 rounded-lg px-2.5 py-1.5 text-xs"
+                        />
+                        <button
+                          id="btn-lobby-yt-signin"
+                          type="button"
+                          disabled={lobbyYtSigningIn}
+                          onClick={() => {
+                            setLobbyYtSigningIn(true)
+                            void signInWithYouTubeIdentity(
+                              lobbyYtIdentity.trim() || displayName.trim() || '@dingbaum',
+                            ).finally(() => {
+                              setLobbyYtSigningIn(false)
+                              setLobbyYtIdentity('')
+                            })
+                          }}
+                          className="shrink-0 rounded-lg bg-[#e05a47] px-3 py-1.5 text-xs font-semibold text-[#f4f1ea] transition hover:bg-[#ea6b58] disabled:opacity-50"
+                        >
+                          {lobbyYtSigningIn ? 'Signing In…' : 'Sign In'}
+                        </button>
+                      </div>
+                      <button
+                        id="btn-lobby-yt-popup"
+                        type="button"
+                        onClick={() =>
+                          openYouTubeWebLoginPopup(
+                            lobbyYtIdentity.trim() || displayName.trim() || '@dingbaum',
+                          )
+                        }
+                        className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[#f4f1ea]/12 bg-[#141922] px-2.5 py-1.5 text-[11px] font-medium text-[#c7c2b8] transition hover:border-[#38bdf8]/50 hover:text-[#f4f1ea]"
+                      >
+                        <Globe className="h-3 w-3 text-[#38bdf8]" />
+                        <span>Sign In on YouTube.com (Popup Window)</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
 
               {/* Dual Primary Entry Buttons */}
-              <div className="mt-6 space-y-2.5">
+              <div className="mt-5 space-y-2.5">
                 <button
                   id="btn-enter-vr"
                   type="button"
@@ -751,6 +870,33 @@ export function CompanionOverlay({
           >
             <Users className="h-3.5 w-3.5 text-[#e5a93c]" />
             <span>{participants.length}</span>
+          </button>
+
+          <div className="h-4 w-px bg-[#f4f1ea]/12" />
+
+          <button
+            id="btn-hud-youtube-login"
+            type="button"
+            onClick={() => {
+              setBuildDrawerOpen(false)
+              onToggleWardrobe?.(false)
+              onToggleClubhouse?.(false)
+              setDrawerTab('my-youtube')
+              setUrlDrawerOpen(true)
+            }}
+            title="Sign in to your YouTube account or open My YouTube feed"
+            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+              accountState.authProvider !== 'none'
+                ? 'border border-[#49b384]/45 bg-[#49b384]/15 text-[#49b384] hover:bg-[#49b384]/25'
+                : 'border border-[#e05a47]/50 bg-[#e05a47]/20 text-[#f4f1ea] hover:bg-[#e05a47]/35'
+            }`}
+          >
+            <LogIn className="h-3.5 w-3.5" />
+            <span>
+              {accountState.authProvider !== 'none'
+                ? `YT: ${accountState.handle || accountState.displayName}`
+                : 'YouTube Login'}
+            </span>
           </button>
         </div>
 
@@ -1027,11 +1173,17 @@ export function CompanionOverlay({
                 className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
                   drawerTab === 'my-youtube'
                     ? 'bg-[#38bdf8] text-[#080a0d]'
-                    : 'bg-[#141922] text-[#c7c2b8] hover:text-[#f4f1ea]'
+                    : accountState.authProvider !== 'none'
+                      ? 'border border-[#49b384]/40 bg-[#49b384]/15 text-[#49b384] hover:bg-[#49b384]/25'
+                      : 'border border-[#e05a47]/45 bg-[#141922] text-[#f4f1ea] hover:bg-[#1e2634]'
                 }`}
               >
                 <User className="h-3.5 w-3.5" />
-                <span>My YouTube</span>
+                <span>
+                  {accountState.authProvider !== 'none'
+                    ? `My YouTube (${accountState.handle || accountState.displayName})`
+                    : '🔑 YouTube Login / My Account'}
+                </span>
               </button>
 
               <button
@@ -1064,6 +1216,25 @@ export function CompanionOverlay({
             </div>
 
             <div className="flex items-center gap-2">
+              {drawerTab !== 'my-youtube' && (
+                <button
+                  id="btn-drawer-header-yt-login"
+                  type="button"
+                  onClick={() => setDrawerTab('my-youtube')}
+                  className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${
+                    accountState.authProvider !== 'none'
+                      ? 'border border-[#49b384]/45 bg-[#49b384]/15 text-[#49b384] hover:bg-[#49b384]/25'
+                      : 'bg-[#e05a47] text-[#f4f1ea] hover:bg-[#ea6b58]'
+                  }`}
+                >
+                  <LogIn className="h-3 w-3" />
+                  <span>
+                    {accountState.authProvider !== 'none'
+                      ? `Signed In: ${accountState.handle || accountState.displayName}`
+                      : 'Sign In to YouTube'}
+                  </span>
+                </button>
+              )}
               {drawerTab === 'youtube' && (
                 <button
                   type="button"
@@ -1565,7 +1736,6 @@ export function CompanionOverlay({
           <button
             id="btn-open-url-player"
             type="button"
-            disabled={!isLocalPresenter && !canTakeControl}
             onClick={() => {
               setUrlDrawerOpen((v) => {
                 const next = !v
@@ -1580,7 +1750,7 @@ export function CompanionOverlay({
             className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition ${
               urlDrawerOpen
                 ? 'border-[#e5a93c] bg-[#e5a93c]/15 text-[#f4f1ea]'
-                : 'border-[#f4f1ea]/12 bg-[#141922] text-[#f4f1ea] hover:border-[#e5a93c]/50 disabled:opacity-45'
+                : 'border-[#f4f1ea]/12 bg-[#141922] text-[#f4f1ea] hover:border-[#e5a93c]/50'
             }`}
           >
             <Tv className="h-3.5 w-3.5 text-[#e5a93c]" />

@@ -13,6 +13,9 @@ import {
 import {
   fetchPersonalYouTubeFeed,
   getYouTubeAccountState,
+  openYouTubeWebLoginPopup,
+  signInWithYouTubeIdentity,
+  signOutYouTubeAccount,
   subscribeYouTubeAccount,
   type PersonalFeedSection,
   type YouTubeAccountState,
@@ -404,10 +407,12 @@ export interface YouTubeBrowser3DProps {
   searchTrigger: number
   activeMediaUrl: string
   relatedVideos: YouTubeVideoItem[]
+  localDisplayName?: string
   onOpenSearchKeyboard: () => void
   onVoiceSearchQuery: (query: string) => void
   onClearSearch: () => void
   onSelectVideo: (video: YouTubeVideoItem, keepOpen: boolean) => void
+  onOpen2DAccountLogin?: () => void
   onClose: () => void
 }
 
@@ -431,10 +436,12 @@ export function YouTubeBrowser3D({
   searchTrigger,
   activeMediaUrl,
   relatedVideos,
+  localDisplayName,
   onOpenSearchKeyboard,
   onVoiceSearchQuery,
   onClearSearch,
   onSelectVideo,
+  onOpen2DAccountLogin,
   onClose,
 }: YouTubeBrowser3DProps) {
   const [activeTab, setActiveTab] = useState<BrowserTabId>('trending')
@@ -604,6 +611,8 @@ export function YouTubeBrowser3D({
   const tabSpan = tabCount >= 9 ? 1.5 : 1.48
   const tabFontSize = tabCount >= 9 ? 0.0168 : 0.0185
   const tabStep = tabCount > 1 ? tabSpan / (tabCount - 1) : 0
+  const fallbackHandle =
+    searchQuery.trim() || localDisplayName?.trim() || '@dingbaum'
 
   return (
     <group
@@ -626,7 +635,7 @@ export function YouTubeBrowser3D({
         <meshBasicMaterial color="#E5A93C" />
       </mesh>
 
-      {/* Row 1: Header & Relay / Personal Feed Switcher */}
+      {/* Row 1: Header & YouTube Account Login / Relay Controls */}
       <group position={[0, 0.462, 0.015]}>
         {/* Play icon badge */}
         <RoundedBox
@@ -651,17 +660,38 @@ export function YouTubeBrowser3D({
           </Text>
           <Text
             position={[-0.72, 0, 0.006]}
-            fontSize={0.027}
-            maxWidth={0.72}
+            fontSize={0.024}
+            maxWidth={0.55}
             color="#F4F1EA"
             anchorX="left"
             anchorY="middle"
           >
             {accountState.authProvider !== 'none'
-              ? `YOUTUBE DECK · ${truncateLabel(accountState.displayName, 20)}`
-              : 'YOUTUBE & VR VIDEO DECK'}
+              ? `YT · ${truncateLabel(accountState.handle || accountState.displayName, 16)}`
+              : 'YOUTUBE & VR DECK'}
           </Text>
         </Suspense>
+
+        {/* Dedicated 3D YouTube Login / Account Button */}
+        <PillButton3D
+          label={
+            accountState.authProvider !== 'none'
+              ? `✅ ${truncateLabel(accountState.handle || accountState.displayName, 12)}`
+              : '🔑 YouTube Login'
+          }
+          position={[-0.08, 0, 0]}
+          width={0.25}
+          height={0.052}
+          fontSize={0.0185}
+          variant={accountState.authProvider !== 'none' ? 'active' : 'crimson'}
+          onClick={() => {
+            if (searchQuery.trim()) {
+              onClearSearch()
+            }
+            setActiveTab('my-library')
+            setPage(0)
+          }}
+        />
 
         {activeTab === 'my-library' && !searchQuery.trim() ? (
           <PillButton3D
@@ -672,10 +702,10 @@ export function YouTubeBrowser3D({
                   ? '👍 Feed: Liked ↻'
                   : '📌 Feed: Pinned ↻'
             }
-            position={[0.16, 0, 0]}
-            width={0.24}
+            position={[0.19, 0, 0]}
+            width={0.23}
             height={0.052}
-            fontSize={0.0185}
+            fontSize={0.018}
             variant="active"
             onClick={() => {
               setVrPersonalSection((prev) =>
@@ -691,10 +721,10 @@ export function YouTubeBrowser3D({
         ) : (
           <PillButton3D
             label="↻ Switch Relay"
-            position={[0.16, 0, 0]}
-            width={0.23}
+            position={[0.19, 0, 0]}
+            width={0.22}
             height={0.052}
-            fontSize={0.019}
+            fontSize={0.018}
             onClick={() => {
               resetInstanceCooldowns()
               setRefreshNonce((n) => n + 1)
@@ -703,11 +733,11 @@ export function YouTubeBrowser3D({
         )}
 
         <PillButton3D
-          label={keepPinned ? '📌 Pinned Open' : 'Auto-Hide: On'}
+          label={keepPinned ? '📌 Pinned' : 'Auto-Hide'}
           position={[0.45, 0, 0]}
-          width={0.25}
+          width={0.21}
           height={0.052}
-          fontSize={0.019}
+          fontSize={0.018}
           variant={keepPinned ? 'active' : 'default'}
           onClick={() => setKeepPinned((p) => !p)}
         />
@@ -759,7 +789,7 @@ export function YouTubeBrowser3D({
             >
               {searchQuery
                 ? `🔍 ${truncateLabel(searchQuery, 48)}`
-                : '🔍 Search YouTube videos, playlists, or paste link (opens 3D Keyboard)…'}
+                : '🔍 Search YouTube videos, @handle, or paste link (opens 3D Keyboard)…'}
             </Text>
           </Suspense>
         </group>
@@ -822,7 +852,7 @@ export function YouTubeBrowser3D({
         })}
       </group>
 
-      {/* Rows 4 & 5: 3x2 Paginated Spatial Video Cards */}
+      {/* Rows 4 & 5: 3x2 Paginated Spatial Video Cards OR 3D YouTube Login Panel */}
       {loading ? (
         <group position={[0, -0.07, 0.016]}>
           <RoundedBox args={[0.92, 0.22, 0.012]} radius={0.024} smoothness={2}>
@@ -846,6 +876,96 @@ export function YouTubeBrowser3D({
               anchorY="middle"
             >
               Connecting to fastest CORS-enabled cinema relay
+            </Text>
+          </Suspense>
+        </group>
+      ) : activeTab === 'my-library' &&
+        !searchQuery.trim() &&
+        accountState.authProvider === 'none' &&
+        visibleSlice.length === 0 ? (
+        <group name="youtube-3d-login-panel" position={[0, -0.075, 0.016]}>
+          <RoundedBox args={[1.54, 0.56, 0.014]} radius={0.024} smoothness={2}>
+            <meshBasicMaterial color="#121824" />
+          </RoundedBox>
+          <Suspense fallback={null}>
+            <Text
+              position={[0, 0.21, 0.01]}
+              fontSize={0.028}
+              color="#F4F1EA"
+              anchorX="center"
+              anchorY="middle"
+            >
+              🔑 Sign In to Your YouTube Account
+            </Text>
+            <Text
+              position={[0, 0.145, 0.01]}
+              fontSize={0.018}
+              maxWidth={1.38}
+              color="#9CA3AF"
+              anchorX="center"
+              anchorY="middle"
+            >
+              Sign in instantly with your YouTube @handle, channel, or Google account to load your personal Subscriptions, Liked Videos &amp; Pinned Channels.
+            </Text>
+          </Suspense>
+
+          <PillButton3D
+            label={`🔑 1-Click Sign In (${truncateLabel(fallbackHandle, 22)})`}
+            position={[-0.36, 0.03, 0.01]}
+            width={0.68}
+            height={0.074}
+            fontSize={0.02}
+            variant="crimson"
+            onClick={() => {
+              void signInWithYouTubeIdentity(fallbackHandle)
+            }}
+          />
+
+          <PillButton3D
+            label="🌐 Sign In on YouTube.com (Popup)"
+            position={[0.36, 0.03, 0.01]}
+            width={0.68}
+            height={0.074}
+            fontSize={0.02}
+            variant="amber"
+            onClick={() => {
+              openYouTubeWebLoginPopup(fallbackHandle)
+            }}
+          />
+
+          <PillButton3D
+            label="⌨ Type Custom @Handle / Email"
+            position={[-0.36, -0.075, 0.01]}
+            width={0.68}
+            height={0.068}
+            fontSize={0.019}
+            variant="active"
+            onClick={() => {
+              onOpenSearchKeyboard()
+            }}
+          />
+
+          <PillButton3D
+            label="🖥 Open Full 2D Account & YouTube TV"
+            position={[0.36, -0.075, 0.01]}
+            width={0.68}
+            height={0.068}
+            fontSize={0.019}
+            variant="default"
+            onClick={() => {
+              onOpen2DAccountLogin?.()
+            }}
+          />
+
+          <Suspense fallback={null}>
+            <Text
+              position={[0, -0.19, 0.01]}
+              fontSize={0.0165}
+              color="#E5A93C"
+              anchorX="center"
+              anchorY="middle"
+            >
+              Tip: You can also click "🔑 YouTube Login" in the top-left bar at any time.
             </Text>
           </Suspense>
         </group>
@@ -903,18 +1023,39 @@ export function YouTubeBrowser3D({
           onClick={() => setPage((p) => Math.max(0, p - 1))}
         />
 
+        {activeTab === 'my-library' && accountState.authProvider !== 'none' ? (
+          <PillButton3D
+            label="Sign Out YT"
+            position={[-0.44, 0, 0]}
+            width={0.2}
+            height={0.052}
+            fontSize={0.0175}
+            onClick={() => signOutYouTubeAccount()}
+          />
+        ) : null}
+
         <Suspense fallback={null}>
           <Text
-            position={[0, 0, 0.008]}
-            fontSize={0.019}
-            maxWidth={1.06}
+            position={[
+              activeTab === 'my-library' && accountState.authProvider !== 'none'
+                ? 0.08
+                : 0,
+              0,
+              0.008,
+            ]}
+            fontSize={0.018}
+            maxWidth={
+              activeTab === 'my-library' && accountState.authProvider !== 'none'
+                ? 0.88
+                : 1.06
+            }
             color={notice ? '#E5A93C' : '#9CA3AF'}
             anchorX="center"
             anchorY="middle"
           >
             {notice
-              ? truncateLabel(notice, 74)
-              : `Page ${safePage + 1} of ${totalPages} · ${items.length} videos · Source: ${providerName} · Tap any card to play on big screen`}
+              ? truncateLabel(notice, 64)
+              : `Page ${safePage + 1} of ${totalPages} · ${items.length} videos · Source: ${providerName}`}
           </Text>
         </Suspense>
 

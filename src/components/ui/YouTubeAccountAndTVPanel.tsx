@@ -36,13 +36,17 @@ import {
   getConfiguredGoogleClientId,
   getGoogleOAuthRedirectUri,
   getYouTubeAccountState,
+  isYouTubeVideoLiked,
+  openYouTubeWebLoginPopup,
   pinYouTubePlaylist,
   removePinnedLibrarySource,
   setConfiguredGoogleClientId,
   signInWithPipedAccount,
+  signInWithYouTubeIdentity,
   signOutYouTubeAccount,
   startGoogleYouTubeSignIn,
   subscribeYouTubeAccount,
+  toggleLikeYouTubeVideo,
   type PersonalFeedSection,
   type PinnedLibrarySource,
   type YouTubeAccountState,
@@ -89,7 +93,8 @@ export function YouTubeAccountAndTVPanel({
   const [loading, setLoading] = useState<boolean>(false)
   const [refreshNonce, setRefreshNonce] = useState<number>(0)
 
-  // OAuth & Piped sign-in UI state
+  // Direct / OAuth / Piped sign-in UI state
+  const [identityDraft, setIdentityDraft] = useState<string>('')
   const [oauthSetupOpen, setOauthSetupOpen] = useState<boolean>(false)
   const [clientIdDraft, setClientIdDraft] = useState<string>(() =>
     getConfiguredGoogleClientId(),
@@ -200,17 +205,49 @@ export function YouTubeAccountAndTVPanel({
     selectedPlaylistId,
   ])
 
-  const handleGoogleSignInClick = () => {
+  const handleDirectSignInSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (authBusy) return
+    setAuthError(null)
+    setAuthBusy(true)
+    try {
+      const targetIdentity =
+        identityDraft.trim() ||
+        (typeof window !== 'undefined'
+          ? window.localStorage.getItem('vr-lounge:name')?.trim()
+          : '') ||
+        '@dingbaum'
+      await signInWithYouTubeIdentity(targetIdentity)
+      setSelectedPinnedChannel(null)
+      setSection('subscriptions')
+    } catch (err) {
+      setAuthError(
+        err instanceof Error ? err.message : 'Could not sign into YouTube account.',
+      )
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  const handleGoogleSignInClick = async () => {
     setAuthError(null)
     const configured = clientIdDraft.trim() || getConfiguredGoogleClientId()
-    if (!configured) {
-      setOauthSetupOpen(true)
+    if (configured) {
+      const res = startGoogleYouTubeSignIn({ clientId: configured })
+      if (!res.ok && res.error) {
+        setAuthError(res.error)
+        setOauthSetupOpen(true)
+      }
       return
     }
-    const res = startGoogleYouTubeSignIn({ clientId: configured })
-    if (!res.ok && res.error) {
-      setAuthError(res.error)
-      setOauthSetupOpen(true)
+    // Zero-setup Google / YouTube.com Sign-In Popup + Instant Profile Activation
+    setAuthBusy(true)
+    try {
+      await openYouTubeWebLoginPopup(identityDraft.trim() || undefined)
+      setSelectedPinnedChannel(null)
+      setSection('subscriptions')
+    } finally {
+      setAuthBusy(false)
     }
   }
 
@@ -555,7 +592,11 @@ export function YouTubeAccountAndTVPanel({
                   {accountState.displayName}
                 </span>
                 <span className="rounded-md bg-[#49b384]/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#49b384]">
-                  {accountState.authProvider === 'google' ? 'Google OAuth' : 'Piped Sync'}
+                  {accountState.authProvider === 'google'
+                    ? 'Google OAuth'
+                    : accountState.authProvider === 'piped'
+                      ? 'Piped Sync'
+                      : 'YouTube Connected'}
                 </span>
               </div>
               {accountState.handle && (
@@ -566,7 +607,40 @@ export function YouTubeAccountAndTVPanel({
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              id="btn-yt-open-web-popup"
+              type="button"
+              onClick={() =>
+                void openYouTubeWebLoginPopup(
+                  accountState.handle || accountState.displayName,
+                  'https://www.youtube.com/feed/subscriptions',
+                )
+              }
+              className="inline-flex items-center gap-1 rounded-lg border border-[#f4f1ea]/12 bg-[#141922] px-2.5 py-1.5 text-xs text-[#c7c2b8] hover:border-[#e5a93c]/50 hover:text-[#f4f1ea]"
+            >
+              <ExternalLink className="h-3.5 w-3.5 text-[#e5a93c]" />
+              <span>Open YouTube.com</span>
+            </button>
+            <button
+              id="btn-yt-stream-signedin-tab"
+              type="button"
+              onClick={() => {
+                if (isSharingTab) {
+                  onStopTabShare()
+                } else {
+                  void onStartTabShare(screenShareQuality, 'YouTube Account Stream')
+                }
+              }}
+              className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition ${
+                isSharingTab
+                  ? 'border-[#e05a47] bg-[#e05a47]/20 text-[#f4f1ea]'
+                  : 'border-[#38bdf8]/40 bg-[#38bdf8]/15 text-[#7dd3fc] hover:bg-[#38bdf8]/25'
+              }`}
+            >
+              <MonitorUp className="h-3.5 w-3.5" />
+              <span>{isSharingTab ? 'Stop Tab Stream' : 'Stream Signed-In Tab'}</span>
+            </button>
             <button
               id="btn-yt-account-refresh"
               type="button"
@@ -591,14 +665,18 @@ export function YouTubeAccountAndTVPanel({
           </div>
         </div>
       ) : (
-        <div className="rounded-xl border border-[#f4f1ea]/10 bg-[#080a0d]/75 p-3 space-y-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+        <div
+          id="yt-account-login-card"
+          className="rounded-xl border border-[#e5a93c]/30 bg-gradient-to-br from-[#141a26] via-[#0d121c] to-[#171219] p-3.5 space-y-3"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="space-y-0.5">
-              <div className="text-xs font-semibold text-[#f4f1ea]">
-                Connect Your Personal YouTube Feed &amp; Playlists
+              <div className="flex items-center gap-2 text-xs font-semibold text-[#f4f1ea]">
+                <LogIn className="h-4 w-4 text-[#e05a47]" />
+                <span>Sign In to Your YouTube Account</span>
               </div>
-              <div className="text-[11px] text-[#9ca3af]">
-                Sign in with Google OAuth (Subscriptions, Playlists &amp; Liked Videos), Piped sync, or pin any Playlist / <code className="text-[#e5a93c]">@Channel</code> below with zero API keys.
+              <div className="text-[11px] text-[#c7c2b8]">
+                Enter your YouTube <code className="text-[#e5a93c]">@handle</code>, channel name, or Google email for instant library sync — or sign in directly on <code className="text-[#f4f1ea]">youtube.com</code> in a popup window.
               </div>
             </div>
 
@@ -606,11 +684,12 @@ export function YouTubeAccountAndTVPanel({
               <button
                 id="btn-yt-google-signin"
                 type="button"
-                onClick={handleGoogleSignInClick}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[#e05a47] px-3.5 py-1.5 text-xs font-semibold text-[#f4f1ea] transition hover:bg-[#ea6b58]"
+                disabled={authBusy}
+                onClick={() => void handleGoogleSignInClick()}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#f4f1ea]/20 bg-[#1b2333] px-3 py-1.5 text-xs font-semibold text-[#f4f1ea] transition hover:border-[#e5a93c]/60 hover:bg-[#232d42]"
               >
-                <LogIn className="h-3.5 w-3.5" />
-                <span>Sign in with Google</span>
+                <ExternalLink className="h-3.5 w-3.5 text-[#e5a93c]" />
+                <span>Sign In on YouTube.com (Popup)</span>
               </button>
 
               <button
@@ -623,7 +702,7 @@ export function YouTubeAccountAndTVPanel({
                 className="inline-flex items-center gap-1 rounded-xl border border-[#f4f1ea]/12 bg-[#141922] px-2.5 py-1.5 text-xs text-[#c7c2b8] hover:text-[#f4f1ea]"
               >
                 <KeyRound className="h-3.5 w-3.5 text-[#e5a93c]" />
-                <span>OAuth Client ID</span>
+                <span>OAuth Key</span>
               </button>
 
               <button
@@ -641,16 +720,41 @@ export function YouTubeAccountAndTVPanel({
             </div>
           </div>
 
+          {/* Primary Instant Sign-In Form */}
+          <form
+            id="form-yt-direct-login"
+            onSubmit={(e) => void handleDirectSignInSubmit(e)}
+            className="flex flex-col gap-2 sm:flex-row"
+          >
+            <input
+              id="input-yt-login-identity"
+              type="text"
+              value={identityDraft}
+              onChange={(e) => setIdentityDraft(e.target.value)}
+              placeholder="Your YouTube @handle (e.g. @dingbaum), email, or youtube.com/@channel..."
+              className="lounge-input flex-1 rounded-xl px-3.5 py-2 text-xs"
+            />
+            <button
+              id="btn-yt-direct-signin"
+              type="submit"
+              disabled={authBusy}
+              className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#e05a47] px-4 py-2 text-xs font-semibold text-[#f4f1ea] shadow-md transition hover:bg-[#ea6b58] disabled:opacity-50"
+            >
+              <LogIn className="h-3.5 w-3.5" />
+              <span>{authBusy ? 'Signing In…' : 'Sign In to YouTube'}</span>
+            </button>
+          </form>
+
           {oauthSetupOpen && (
             <div
               id="panel-yt-oauth-setup"
               className="space-y-2 rounded-xl border border-[#e5a93c]/35 bg-[#111622] p-3 text-xs"
             >
               <div className="font-semibold text-[#e5a93c]">
-                Google Cloud OAuth 2.0 Web Client ID (Read-Only YouTube Scope)
+                Optional Google Cloud OAuth 2.0 Web Client ID (Read-Only YouTube API)
               </div>
               <p className="text-[11px] text-[#c7c2b8]">
-                Create a free <strong>OAuth 2.0 Web Client ID</strong> in Google Cloud Console with the <strong>YouTube Data API v3</strong> enabled, authorize the URL below, and paste your Client ID once (saved locally on this device or via <code className="text-[#f4f1ea]">VITE_GOOGLE_CLIENT_ID</code>):
+                If you have a <strong>Google Cloud OAuth 2.0 Web Client ID</strong> with the <strong>YouTube Data API v3</strong> enabled, authorize the URL below and paste your Client ID here:
               </p>
               <div className="flex flex-wrap gap-2 text-[11px]">
                 <button
@@ -941,49 +1045,66 @@ export function YouTubeAccountAndTVPanel({
           </div>
         ) : items.length === 0 ? (
           <div className="py-8 text-center text-xs text-[#8a867e]">
-            {section === 'liked' && accountState.authProvider !== 'google'
-              ? 'Sign in with Google above to load your private Liked Videos playlist.'
-              : 'No videos found yet — sign in above or pin a YouTube playlist / @Channel!'}
+            No videos found yet — sign in above with your YouTube <code className="text-[#e5a93c]">@handle</code> or pin any YouTube playlist / <code className="text-[#e5a93c]">@Channel</code>!
           </div>
         ) : (
           <div id="yt-personal-video-grid" className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-            {items.slice(0, 16).map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => onPlayVideo(item.playUrl, item.title)}
-                className="group flex items-center gap-3 rounded-xl border border-[#f4f1ea]/10 bg-[#080a0d]/75 p-2 text-left transition hover:border-[#e5a93c]/60 hover:bg-[#121824]"
-              >
-                <div className="relative h-16 w-28 shrink-0 overflow-hidden rounded-lg bg-[#161e2e]">
-                  {item.thumbnailUrl && (
-                    <img
-                      src={item.thumbnailUrl}
-                      alt=""
-                      loading="lazy"
-                      className="h-full w-full object-cover"
-                    />
-                  )}
-                  {item.durationSec > 0 && (
-                    <span className="absolute bottom-1 right-1 rounded bg-[#080a0d]/90 px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
-                      {formatVideoDurationBadge(item.durationSec)}
-                    </span>
-                  )}
+            {items.slice(0, 16).map((item) => {
+              const liked = isYouTubeVideoLiked(item.videoId)
+              return (
+                <div
+                  key={item.id}
+                  className="group flex items-center gap-3 rounded-xl border border-[#f4f1ea]/10 bg-[#080a0d]/75 p-2 text-left transition hover:border-[#e5a93c]/60 hover:bg-[#121824]"
+                >
+                  <button
+                    type="button"
+                    onClick={() => onPlayVideo(item.playUrl, item.title)}
+                    className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                  >
+                    <div className="relative h-16 w-28 shrink-0 overflow-hidden rounded-lg bg-[#161e2e]">
+                      {item.thumbnailUrl && (
+                        <img
+                          src={item.thumbnailUrl}
+                          alt=""
+                          loading="lazy"
+                          className="h-full w-full object-cover"
+                        />
+                      )}
+                      {item.durationSec > 0 && (
+                        <span className="absolute bottom-1 right-1 rounded bg-[#080a0d]/90 px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
+                          {formatVideoDurationBadge(item.durationSec)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="line-clamp-2 text-xs font-medium leading-snug text-[#f4f1ea] group-hover:text-[#e5a93c]">
+                        {item.title}
+                      </div>
+                      <div className="mt-1 truncate text-[11px] text-[#8a867e]">
+                        {[
+                          item.author,
+                          item.views > 0 ? formatCompactViews(item.views) : item.uploadedText,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </div>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    title={liked ? 'Remove from Liked Videos' : 'Save to Liked Videos'}
+                    onClick={() => toggleLikeYouTubeVideo(item)}
+                    className={`shrink-0 rounded-lg p-1.5 text-xs transition ${
+                      liked
+                        ? 'bg-[#e05a47]/20 text-[#e05a47]'
+                        : 'text-[#8a867e] hover:bg-[#f4f1ea]/10 hover:text-[#f4f1ea]'
+                    }`}
+                  >
+                    <ThumbsUp className="h-3.5 w-3.5" />
+                  </button>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <div className="line-clamp-2 text-xs font-medium leading-snug text-[#f4f1ea] group-hover:text-[#e5a93c]">
-                    {item.title}
-                  </div>
-                  <div className="mt-1 truncate text-[11px] text-[#8a867e]">
-                    {[
-                      item.author,
-                      item.views > 0 ? formatCompactViews(item.views) : item.uploadedText,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </div>
-                </div>
-              </button>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>
