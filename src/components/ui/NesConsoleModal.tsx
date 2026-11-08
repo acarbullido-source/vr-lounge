@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   NES_LIBRARY_CARTRIDGES,
+  arrayBufferToBinaryString,
   getNesEmulator,
   type NesButtonId,
   type NesCartridgeMeta,
@@ -31,14 +32,16 @@ export function NesConsoleModal({
 }: NesConsoleModalProps) {
   const nes = useMemo(() => getNesEmulator(), [])
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const [genreFilter, setGenreFilter] = useState<(typeof GENRE_FILTERS)[number]>('All')
+  const [genreFilter, setGenreFilter] =
+    useState<(typeof GENRE_FILTERS)[number]>('All')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCartridge, setSelectedCartridge] = useState<NesCartridgeMeta>(
-    NES_LIBRARY_CARTRIDGES[0],
+    () => nes.getActiveCartridge(),
   )
-  const [soundOn, setSoundOn] = useState(true)
-  const [customRomTitle, setCustomRomTitle] = useState<string | null>(null)
-  const [liveScore, setLiveScore] = useState(0)
+  const [soundOn, setSoundOn] = useState(() => nes.isSoundEnabled())
+  const [customRomTitle, setCustomRomTitle] = useState<string | null>(() =>
+    nes.getCustomRomName(),
+  )
 
   const filteredCartridges = useMemo(() => {
     return NES_LIBRARY_CARTRIDGES.filter((c) => {
@@ -46,6 +49,7 @@ export function NesConsoleModal({
       if (
         searchQuery.trim() &&
         !c.title.toLowerCase().includes(searchQuery.trim().toLowerCase()) &&
+        !c.publisher.toLowerCase().includes(searchQuery.trim().toLowerCase()) &&
         !c.description.toLowerCase().includes(searchQuery.trim().toLowerCase())
       ) {
         return false
@@ -54,10 +58,15 @@ export function NesConsoleModal({
     })
   }, [genreFilter, searchQuery])
 
-  // Mirror the NES emulator canvas into the modal's local preview canvas while open
+  const isNesCurrentlyOnScreen = activeMediaUrl
+    .trim()
+    .toLowerCase()
+    .startsWith('nes://')
+
+  // Mirror the real JSNES PPU canvas into the modal's preview monitor while open
   useEffect(() => {
     if (!open) return
-    nes.ensureLoopRunning()
+    nes.getStream()
     let raf = 0
     const copyFrame = () => {
       const dst = previewCanvasRef.current
@@ -68,7 +77,6 @@ export function NesConsoleModal({
           ctx.drawImage(nes.canvas, 0, 0, dst.width, dst.height)
         }
       }
-      setLiveScore(nes.getStateSummary().score)
       raf = window.requestAnimationFrame(copyFrame)
     }
     raf = window.requestAnimationFrame(copyFrame)
@@ -76,7 +84,6 @@ export function NesConsoleModal({
   }, [nes, open])
 
   // Global keyboard controls whenever NES is playing on Main Screen or Modal is open
-  const isNesCurrentlyOnScreen = activeMediaUrl.trim().toLowerCase().startsWith('nes://')
   useEffect(() => {
     if (!open && !isNesCurrentlyOnScreen) return
 
@@ -86,9 +93,9 @@ export function NesConsoleModal({
       if (code === 'ArrowLeft' || code === 'KeyJ') return 'left'
       if (code === 'ArrowRight' || code === 'KeyL') return 'right'
       if (code === 'KeyX' || code === 'Space') return 'a'
-      if (code === 'KeyZ' || code === 'ShiftLeft' || code === 'ShiftRight') return 'b'
+      if (code === 'KeyZ' || code === 'ShiftLeft') return 'b'
       if (code === 'Enter') return 'start'
-      if (code === 'Backspace') return 'select'
+      if (code === 'ShiftRight' || code === 'Backspace') return 'select'
       return null
     }
 
@@ -102,6 +109,7 @@ export function NesConsoleModal({
       }
       const btn = mapKeyToNes(e.code)
       if (btn) {
+        e.preventDefault()
         nes.setButtonState(btn, true)
       }
     }
@@ -136,19 +144,28 @@ export function NesConsoleModal({
     const reader = new FileReader()
     reader.onload = () => {
       const result = reader.result
-      if (typeof result === 'string') {
-        const ok = nes.loadBinaryNesRom(result, file.name)
+      if (result instanceof ArrayBuffer) {
+        const binStr = arrayBufferToBinaryString(result)
+        const ok = nes.loadBinaryNesRom(binStr, file.name)
         if (ok) {
           setCustomRomTitle(file.name)
           onLaunchNesToMainScreen(`nes://custom-rom`, `🕹 NES ROM: ${file.name}`)
         }
       }
     }
-    reader.readAsBinaryString(file)
+    reader.readAsArrayBuffer(file)
   }
+
+  const bindPadHold = (btn: NesButtonId) => ({
+    onPointerDown: () => nes.setButtonState(btn, true),
+    onPointerUp: () => nes.setButtonState(btn, false),
+    onPointerLeave: () => nes.setButtonState(btn, false),
+    onClick: () => nes.tapButton(btn),
+  })
 
   return (
     <div
+      id="modal-nes-console"
       className="nes-console-modal-backdrop"
       style={{
         position: 'fixed',
@@ -165,8 +182,8 @@ export function NesConsoleModal({
       <div
         className="nes-console-modal"
         style={{
-          width: 'min(1080px, 96vw)',
-          maxHeight: '90vh',
+          width: 'min(1140px, 96vw)',
+          maxHeight: '92vh',
           background: 'linear-gradient(165deg, #0F172A 0%, #090D1A 100%)',
           border: '1px solid rgba(239, 68, 68, 0.45)',
           borderRadius: '18px',
@@ -200,10 +217,10 @@ export function NesConsoleModal({
                 letterSpacing: '0.06em',
               }}
             >
-              NINTENDO 8-BIT ENTERTAINMENT SYSTEM
+              JSNES 6502 HARDWARE EMULATOR
             </span>
-            <strong style={{ fontSize: '1.05rem' }}>
-              🕹 NES Emulator & 24-Cartridge Library (Mirrored to Main & Secondary Screens)
+            <strong style={{ fontSize: '1.02rem' }}>
+              🕹 Authentic NES Console · 36 Verified .NES ROMs (Main Screen + All Mirrors + Quest Controllers)
             </strong>
           </div>
 
@@ -211,31 +228,42 @@ export function NesConsoleModal({
             <button
               type="button"
               className="secondary-btn"
+              onClick={() => nes.resetCartridge()}
+            >
+              ↺ Reset ROM
+            </button>
+            <button
+              type="button"
+              className="secondary-btn"
               onClick={() => {
-                const next = !soundOn
+                const next = nes.toggleSound()
                 setSoundOn(next)
-                nes.setSoundEnabled(next)
               }}
             >
-              {soundOn ? '🔊 8-Bit Audio ON' : '🔇 8-Bit Audio Muted'}
+              {soundOn ? '🔊 APU Audio ON' : '🔇 APU Muted'}
             </button>
-            <button type="button" className="secondary-btn" onClick={onClose}>
-              ✕ Close Deck
+            <button
+              id="btn-close-nes-modal"
+              type="button"
+              className="secondary-btn"
+              onClick={onClose}
+            >
+              ✕ Close (Keep Playing on Screen)
             </button>
           </div>
         </div>
 
-        {/* Main Two-Column Body: Left = Live NES Monitor & Controller, Right = 24-Game Library + .NES Upload */}
+        {/* Main Two-Column Body */}
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'minmax(340px, 430px) 1fr',
+            gridTemplateColumns: 'minmax(350px, 440px) 1fr',
             gap: '18px',
             padding: '18px',
             overflowY: 'auto',
           }}
         >
-          {/* Left Column: Live NES CRT Monitor & Interactive NES Controller Pad */}
+          {/* Left Column: Live NES CRT Monitor, Controller Pad & Quest Controller Guide */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div
               style={{
@@ -248,8 +276,8 @@ export function NesConsoleModal({
             >
               <canvas
                 ref={previewCanvasRef}
-                width={384}
-                height={360}
+                width={512}
+                height={480}
                 style={{
                   width: '100%',
                   height: 'auto',
@@ -269,24 +297,29 @@ export function NesConsoleModal({
                 }}
               >
                 <span>
-                  Playing:{' '}
+                  ROM:{' '}
                   <strong style={{ color: '#FACC15' }}>
                     {customRomTitle || selectedCartridge.title}
                   </strong>
                 </span>
-                <span>
-                  SCORE: <strong style={{ color: '#38BDF8' }}>{liveScore}</strong>
+                <span style={{ color: isNesCurrentlyOnScreen ? '#4ADE80' : '#38BDF8' }}>
+                  {isNesCurrentlyOnScreen
+                    ? '● LIVE ON ALL LOUNGE SCREENS'
+                    : 'Ready to Cast'}
                 </span>
               </div>
             </div>
 
             {/* Cast to Main Theater Screen Button */}
             <button
+              id="btn-nes-cast-to-screen"
               type="button"
               className="primary-btn"
               data-testid="nes-cast-to-main-screen-btn"
               style={{
-                background: 'linear-gradient(90deg, #DC2626 0%, #EA580C 100%)',
+                background: isNesCurrentlyOnScreen
+                  ? 'linear-gradient(90deg, #059669 0%, #10B981 100%)'
+                  : 'linear-gradient(90deg, #DC2626 0%, #EA580C 100%)',
                 padding: '10px 14px',
                 fontWeight: 700,
               }}
@@ -297,7 +330,9 @@ export function NesConsoleModal({
                 )
               }
             >
-              📺 Cast NES Live to Main Screen & All Mirrored Lounge Screens
+              {isNesCurrentlyOnScreen
+                ? '📺 Live on Main Screen & All Mirrored Lounge Screens (Click to Re-Sync)'
+                : '📺 Cast NES Live to Main Screen & All Mirrored Lounge Screens'}
             </button>
 
             {/* Interactive NES Controller Deck */}
@@ -311,6 +346,7 @@ export function NesConsoleModal({
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 gap: '10px',
+                userSelect: 'none',
               }}
             >
               {/* D-Pad */}
@@ -327,7 +363,7 @@ export function NesConsoleModal({
                   type="button"
                   className="secondary-btn"
                   data-testid="nes-btn-up"
-                  onClick={() => nes.tapButton('up')}
+                  {...bindPadHold('up')}
                 >
                   ▲
                 </button>
@@ -336,7 +372,7 @@ export function NesConsoleModal({
                   type="button"
                   className="secondary-btn"
                   data-testid="nes-btn-left"
-                  onClick={() => nes.tapButton('left')}
+                  {...bindPadHold('left')}
                 >
                   ◀
                 </button>
@@ -350,7 +386,7 @@ export function NesConsoleModal({
                   type="button"
                   className="secondary-btn"
                   data-testid="nes-btn-right"
-                  onClick={() => nes.tapButton('right')}
+                  {...bindPadHold('right')}
                 >
                   ▶
                 </button>
@@ -359,7 +395,7 @@ export function NesConsoleModal({
                   type="button"
                   className="secondary-btn"
                   data-testid="nes-btn-down"
-                  onClick={() => nes.tapButton('down')}
+                  {...bindPadHold('down')}
                 >
                   ▼
                 </button>
@@ -373,7 +409,7 @@ export function NesConsoleModal({
                   className="secondary-btn"
                   data-testid="nes-btn-select"
                   style={{ fontSize: '0.72rem', padding: '6px 10px' }}
-                  onClick={() => nes.tapButton('select')}
+                  {...bindPadHold('select')}
                 >
                   SELECT
                 </button>
@@ -381,8 +417,13 @@ export function NesConsoleModal({
                   type="button"
                   className="secondary-btn"
                   data-testid="nes-btn-start"
-                  style={{ fontSize: '0.72rem', padding: '6px 10px' }}
-                  onClick={() => nes.tapButton('start')}
+                  style={{
+                    fontSize: '0.72rem',
+                    padding: '6px 10px',
+                    border: '1px solid #FACC15',
+                    color: '#FACC15',
+                  }}
+                  {...bindPadHold('start')}
                 >
                   START
                 </button>
@@ -403,7 +444,7 @@ export function NesConsoleModal({
                     border: '2px solid #FCA5A5',
                     cursor: 'pointer',
                   }}
-                  onClick={() => nes.tapButton('b')}
+                  {...bindPadHold('b')}
                 >
                   B
                 </button>
@@ -420,17 +461,47 @@ export function NesConsoleModal({
                     border: '2px solid #FCA5A5',
                     cursor: 'pointer',
                   }}
-                  onClick={() => nes.tapButton('a')}
+                  {...bindPadHold('a')}
                 >
                   A
                 </button>
               </div>
             </div>
+
+            {/* Meta Quest VR Controller & Keyboard Mapping Box */}
+            <div
+              style={{
+                background: 'rgba(15, 23, 42, 0.9)',
+                border: '1px solid rgba(56, 189, 248, 0.35)',
+                borderRadius: '10px',
+                padding: '10px 12px',
+                fontSize: '0.76rem',
+                color: '#CBD5E1',
+                lineHeight: 1.45,
+              }}
+            >
+              <div style={{ color: '#38BDF8', fontWeight: 700, marginBottom: '4px' }}>
+                🥽 Meta Quest VR Controller & Keyboard Mapping:
+              </div>
+              <div>
+                • <strong>Quest Left Stick:</strong> NES D-Pad (Up / Down / Left / Right)
+              </div>
+              <div>
+                • <strong>Quest A / Right Trigger:</strong> NES <strong>A</strong> (Jump / Confirm) ·{' '}
+                <strong>B / X / Left Trigger:</strong> NES <strong>B</strong> (Fire / Run)
+              </div>
+              <div>
+                • <strong>Quest Y / Right Grip:</strong> NES <strong>START</strong> ·{' '}
+                <strong>Left Grip:</strong> NES <strong>SELECT</strong>
+              </div>
+              <div>
+                • <strong>Keyboard:</strong> Arrow Keys / IJKL = D-Pad · Space/X = A · Z = B · Enter = START · R-Shift = SELECT
+              </div>
+            </div>
           </div>
 
-          {/* Right Column: 24-Cartridge Library & Custom .NES File Loader */}
+          {/* Right Column: 36-Cartridge Verified .NES ROM Library & Custom .NES File Loader */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {/* Filter & ROM Upload Row */}
             <div
               style={{
                 display: 'flex',
@@ -477,7 +548,7 @@ export function NesConsoleModal({
 
             <input
               type="text"
-              placeholder="Search 24 NES cartridges (e.g. Super Plumber, Zelda, Pac-Maze, Contra, Tetra-Blocks)..."
+              placeholder="Search 36 authentic .NES ROMs (Super Mario Bros. 1/2/3, Zelda, Contra, Pac-Man, Metroid, Mega Man, Punch-Out!!, Tetris)..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               style={{
@@ -490,23 +561,25 @@ export function NesConsoleModal({
               }}
             />
 
-            {/* 24-Cartridge Grid */}
+            {/* 36-Cartridge Grid */}
             <div
               data-testid="nes-cartridge-grid"
               style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fill, minmax(195px, 1fr))',
                 gap: '10px',
-                maxHeight: '410px',
+                maxHeight: '445px',
                 overflowY: 'auto',
                 paddingRight: '4px',
               }}
             >
               {filteredCartridges.map((cart) => {
-                const isSelected = selectedCartridge.id === cart.id && !customRomTitle
+                const isSelected =
+                  selectedCartridge.id === cart.id && !customRomTitle
                 return (
                   <button
                     key={cart.id}
+                    id={`btn-nes-cart-${cart.id}`}
                     type="button"
                     data-testid={`nes-cart-${cart.id}`}
                     onClick={() => handleSelectAndPlay(cart)}
@@ -534,7 +607,7 @@ export function NesConsoleModal({
                     >
                       <span
                         style={{
-                          fontSize: '0.68rem',
+                          fontSize: '0.66rem',
                           fontWeight: 700,
                           padding: '2px 6px',
                           borderRadius: '4px',
@@ -545,17 +618,26 @@ export function NesConsoleModal({
                         {cart.genre.toUpperCase()} · {cart.year}
                       </span>
                       {isSelected && (
-                        <span style={{ fontSize: '0.72rem', color: '#4ADE80' }}>
-                          ● PLAYING
+                        <span style={{ fontSize: '0.7rem', color: '#4ADE80' }}>
+                          ● ACTIVE ROM
                         </span>
                       )}
                     </div>
                     <strong style={{ fontSize: '0.88rem' }}>{cart.title}</strong>
                     <span
                       style={{
-                        fontSize: '0.73rem',
+                        fontSize: '0.68rem',
+                        color: '#38BDF8',
+                        fontWeight: 600,
+                      }}
+                    >
+                      {cart.publisher} · /{cart.romFile}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: '0.72rem',
                         color: '#94A3B8',
-                        lineHeight: 1.3,
+                        lineHeight: 1.28,
                       }}
                     >
                       {cart.description}

@@ -904,12 +904,21 @@ export function CompanionOverlay({
           <button
             id="btn-hud-nes-console"
             type="button"
-            onClick={() => setNesModalOpen(true)}
-            title="Launch 8-Bit NES Emulator & 24-Game Library on Main Screen & Mirrored Screens"
+            onClick={() => {
+              setNesModalOpen(true)
+              if (!presenterState.mediaUrl.startsWith('nes://')) {
+                onLoadStreamUrl(
+                  'nes://super-mario-bros',
+                  '🕹 NES: Super Mario Bros.',
+                  false,
+                )
+              }
+            }}
+            title="Launch Real 6502/PPU NES Emulator & 36-ROM Library on Main Screen & Mirrored Screens"
             className="flex items-center gap-1.5 rounded-lg border border-[#ef4444]/60 bg-[#dc2626]/22 px-2.5 py-1 text-xs font-semibold text-[#f8fafc] transition hover:bg-[#dc2626]/35"
           >
             <Dices className="h-3.5 w-3.5 text-[#facc15]" />
-            <span>🕹 NES Console (24 Games)</span>
+            <span>🕹 NES Console (36 ROMs)</span>
           </button>
         </div>
 

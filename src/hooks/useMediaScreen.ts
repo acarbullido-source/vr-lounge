@@ -172,6 +172,7 @@ export function useMediaScreen({
       videoElement.volume = 0
       companionAudioElement.muted = true
       companionAudioElement.volume = 0
+      getNesEmulator().setMasterVolume(0)
     } else if (!needsAudioUnlock) {
       const muted = cinemaVolume <= 0.001
       const clampedVol = Math.max(0, Math.min(1, cinemaVolume))
@@ -179,12 +180,18 @@ export function useMediaScreen({
       videoElement.volume = clampedVol
       companionAudioElement.muted = muted
       companionAudioElement.volume = clampedVol
+      getNesEmulator().setMasterVolume(
+        presenterState.screenMode === 'url-sync' && isNesMediaUrl(presenterState.mediaUrl)
+          ? clampedVol
+          : 0,
+      )
     }
   }, [
     cinemaVolume,
     companionAudioElement,
     isLocalPresenter,
     needsAudioUnlock,
+    presenterState.mediaUrl,
     presenterState.screenMode,
     videoElement,
   ])
@@ -552,7 +559,8 @@ export function useMediaScreen({
     if (
       presenterState.screenMode !== 'url-sync' ||
       !presenterState.activePresenterId ||
-      isResolvingMedia
+      isResolvingMedia ||
+      isNesMediaUrl(presenterState.mediaUrl)
     ) {
       return
     }
@@ -603,6 +611,7 @@ export function useMediaScreen({
     presenterState.activePresenterId,
     presenterState.currentTime,
     presenterState.isPlaying,
+    presenterState.mediaUrl,
     presenterState.revision,
     presenterState.screenMode,
     presenterState.updatedAt,
@@ -617,6 +626,7 @@ export function useMediaScreen({
       const { currentTime, isPlaying } = latestPlaybackRef.current
       if (
         presenterState.screenMode === 'url-sync' &&
+        !isNesMediaUrl(presenterState.mediaUrl) &&
         currentTime > 0.5 &&
         Math.abs(videoElement.currentTime - currentTime) > 0.6
       ) {
@@ -688,7 +698,12 @@ export function useMediaScreen({
     }
 
     const onError = () => {
-      if (presenterState.screenMode !== 'url-sync') return
+      if (
+        presenterState.screenMode !== 'url-sync' ||
+        isNesMediaUrl(presenterState.mediaUrl)
+      ) {
+        return
+      }
 
       // Try next resolved stream candidate first!
       const nextIdx = candidateIndexRef.current + 1
@@ -729,6 +744,7 @@ export function useMediaScreen({
       if (
         isLocalPresenter &&
         presenterState.screenMode === 'url-sync' &&
+        !isNesMediaUrl(presenterState.mediaUrl) &&
         !videoElement.paused &&
         videoElement.readyState >= 2
       ) {
@@ -811,17 +827,24 @@ export function useMediaScreen({
     }
   }, [clearCompanionAudio, destroyHls, videoElement])
 
+  const isNesStreamActive =
+    presenterState.screenMode === 'url-sync' &&
+    Boolean(presenterState.activePresenterId) &&
+    isNesMediaUrl(presenterState.mediaUrl)
+
   return {
     videoElement,
-    videoTexture,
-    hasVideoFrames,
-    isResolvingMedia,
-    activeStreamQuality,
+    videoTexture: isNesStreamActive
+      ? (getNesEmulator().texture as unknown as THREE.VideoTexture)
+      : videoTexture,
+    hasVideoFrames: isNesStreamActive ? true : hasVideoFrames,
+    isResolvingMedia: isNesStreamActive ? false : isResolvingMedia,
+    activeStreamQuality: isNesStreamActive ? '60fps JSNES Hardware' : activeStreamQuality,
     relatedVideos,
     localCurrentTime,
     localDuration,
-    mediaError,
-    needsAudioUnlock,
+    mediaError: isNesStreamActive ? null : mediaError,
+    needsAudioUnlock: isNesStreamActive ? false : needsAudioUnlock,
     unlockAudio,
     seekLocalVideo,
   }

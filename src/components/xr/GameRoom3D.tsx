@@ -499,8 +499,22 @@ export function GameRoom3D({
     return map
   }, [onRecordArcadeScore])
 
+  const [, setCabinetRomRev] = useState(0)
+
   // Keyboard listener for active arcade cabinet when player is in Game Room
   useEffect(() => {
+    const mapKey = (code: string) => {
+      if (code === 'ArrowUp' || code === 'KeyI') return 'up' as const
+      if (code === 'ArrowDown' || code === 'KeyK') return 'down' as const
+      if (code === 'ArrowLeft' || code === 'KeyJ') return 'left' as const
+      if (code === 'ArrowRight' || code === 'KeyL') return 'right' as const
+      if (code === 'Space' || code === 'KeyX') return 'a' as const
+      if (code === 'KeyZ' || code === 'ShiftLeft') return 'b' as const
+      if (code === 'Enter') return 'start' as const
+      if (code === 'ShiftRight' || code === 'Backspace') return 'select' as const
+      return null
+    }
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (
         document.activeElement &&
@@ -510,15 +524,24 @@ export function GameRoom3D({
         return
       }
       const eng = arcadeEngines[activeCabinetId]
-      if (!eng) return
-      if (e.code === 'ArrowUp' || e.code === 'KeyI') eng.sendInput('up')
-      else if (e.code === 'ArrowDown' || e.code === 'KeyK') eng.sendInput('down')
-      else if (e.code === 'ArrowLeft' || e.code === 'KeyJ') eng.sendInput('left')
-      else if (e.code === 'ArrowRight' || e.code === 'KeyL') eng.sendInput('right')
-      else if (e.code === 'Space') eng.sendInput('action')
+      const btn = mapKey(e.code)
+      if (!eng || !btn) return
+      eng.setButtonHeld(btn, true)
     }
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      const eng = arcadeEngines[activeCabinetId]
+      const btn = mapKey(e.code)
+      if (!eng || !btn) return
+      eng.setButtonHeld(btn, false)
+    }
+
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
   }, [activeCabinetId, arcadeEngines])
 
   // Pop-A-Shot 3D Flying Basketball & Skee-Ball 3D Rolling Ball Physics State
@@ -552,11 +575,11 @@ export function GameRoom3D({
       holoRingRef.current.rotation.z += dt * 0.28
     }
 
-    // Step all 4 classic arcade CRT engines
-    arcadeEngines['pac-maze'].step(dt)
-    arcadeEngines.galaxia.step(dt)
-    arcadeEngines.frogger.step(dt)
-    arcadeEngines.arkanoid.step(dt)
+    // Step all 4 classic arcade CRT engines (focused cabinet @ 60fps, others @ 20fps attract)
+    arcadeEngines['pac-maze'].step(dt, activeCabinetId === 'pac-maze')
+    arcadeEngines.galaxia.step(dt, activeCabinetId === 'galaxia')
+    arcadeEngines.frogger.step(dt, activeCabinetId === 'frogger')
+    arcadeEngines.arkanoid.step(dt, activeCabinetId === 'arkanoid')
 
     scoreSyncTickRef.current += dt
     if (scoreSyncTickRef.current >= 0.4) {
@@ -1093,15 +1116,15 @@ export function GameRoom3D({
               />
             </mesh>
 
-            {/* Interactive 3D Joystick & Arcade Buttons Deck */}
+            {/* Interactive 3D Joystick & Real ROM Arcade Buttons Deck */}
             <group position={[0, 0.96, 0.43]}>
               <HoloButton3D
                 name={`btn-arcade-${slot.id}-left`}
                 label="◀"
-                position={[-0.38, 0.04, 0]}
-                width={0.18}
-                height={0.08}
-                fontSize={0.034}
+                position={[-0.4, 0.04, 0]}
+                width={0.16}
+                height={0.078}
+                fontSize={0.032}
                 accent={eng.accentColor}
                 onClick={() => {
                   setActiveCabinetId(slot.id)
@@ -1111,10 +1134,10 @@ export function GameRoom3D({
               <HoloButton3D
                 name={`btn-arcade-${slot.id}-up`}
                 label="▲"
-                position={[-0.18, 0.08, 0]}
-                width={0.18}
-                height={0.072}
-                fontSize={0.03}
+                position={[-0.22, 0.08, 0]}
+                width={0.16}
+                height={0.07}
+                fontSize={0.028}
                 accent={eng.accentColor}
                 onClick={() => {
                   setActiveCabinetId(slot.id)
@@ -1124,10 +1147,10 @@ export function GameRoom3D({
               <HoloButton3D
                 name={`btn-arcade-${slot.id}-down`}
                 label="▼"
-                position={[-0.18, 0.0, 0]}
-                width={0.18}
-                height={0.072}
-                fontSize={0.03}
+                position={[-0.22, 0.0, 0]}
+                width={0.16}
+                height={0.07}
+                fontSize={0.028}
                 accent={eng.accentColor}
                 onClick={() => {
                   setActiveCabinetId(slot.id)
@@ -1137,10 +1160,10 @@ export function GameRoom3D({
               <HoloButton3D
                 name={`btn-arcade-${slot.id}-right`}
                 label="▶"
-                position={[0.02, 0.04, 0]}
-                width={0.18}
-                height={0.08}
-                fontSize={0.034}
+                position={[-0.04, 0.04, 0]}
+                width={0.16}
+                height={0.078}
+                fontSize={0.032}
                 accent={eng.accentColor}
                 onClick={() => {
                   setActiveCabinetId(slot.id)
@@ -1148,12 +1171,25 @@ export function GameRoom3D({
                 }}
               />
               <HoloButton3D
+                name={`btn-arcade-${slot.id}-action-b`}
+                label="🅱 B-ACT"
+                position={[0.16, 0.04, 0]}
+                width={0.2}
+                height={0.08}
+                fontSize={0.025}
+                accent="#EF4444"
+                onClick={() => {
+                  setActiveCabinetId(slot.id)
+                  eng.sendInput('actionB')
+                }}
+              />
+              <HoloButton3D
                 name={`btn-arcade-${slot.id}-action`}
-                label="⚡ FIRE/ACT"
-                position={[0.31, 0.04, 0]}
-                width={0.34}
-                height={0.085}
-                fontSize={0.028}
+                label="🅰 JUMP/FIRE"
+                position={[0.38, 0.04, 0]}
+                width={0.22}
+                height={0.08}
+                fontSize={0.025}
                 active
                 accent={eng.accentColor}
                 onClick={() => {
@@ -1162,26 +1198,42 @@ export function GameRoom3D({
                 }}
               />
 
-              {/* Bottom Row: New Game & Post High Score */}
+              {/* Bottom Row: Start/Coin, Swap Real ROM (10 Games) & Save Score */}
               <HoloButton3D
                 name={`btn-arcade-play-${slot.id}`}
-                label="🔄 New Game"
-                position={[-0.24, -0.075, 0]}
-                width={0.44}
-                height={0.072}
-                fontSize={0.025}
+                label="🪙 START"
+                position={[-0.34, -0.075, 0]}
+                width={0.28}
+                height={0.07}
+                fontSize={0.024}
+                active
+                accent="#FACC15"
                 onClick={() => {
                   setActiveCabinetId(slot.id)
                   eng.sendInput('start')
                 }}
               />
               <HoloButton3D
+                name={`btn-arcade-swap-${slot.id}`}
+                label="🔀 Swap ROM"
+                position={[0.0, -0.075, 0]}
+                width={0.34}
+                height={0.07}
+                fontSize={0.023}
+                accent="#38BDF8"
+                onClick={() => {
+                  setActiveCabinetId(slot.id)
+                  eng.cycleArcadeRom()
+                  setCabinetRomRev((r) => r + 1)
+                }}
+              />
+              <HoloButton3D
                 name={`btn-arcade-save-${slot.id}`}
                 label={`🏆 Save (${curScore})`}
-                position={[0.24, -0.075, 0]}
-                width={0.46}
-                height={0.072}
-                fontSize={0.025}
+                position={[0.34, -0.075, 0]}
+                width={0.3}
+                height={0.07}
+                fontSize={0.022}
                 accent="#10B981"
                 onClick={() =>
                   onRecordArcadeScore(
@@ -1400,12 +1452,12 @@ export function GameRoom3D({
 
       {/* =================================================================== */}
       {/* 3. CENTERPIECE: TACTICAL HOLOTABLE & CLASSIC BOARD GAMES SANCTUM    */}
-      {/*    Modes: ⚔️ Adventure RPG · 🔴 Checkers · ♟️ Chess · 🟡 Connect-4   */}
+      {/*    All controls mounted flush into the angled perimeter table rails */}
       {/* =================================================================== */}
       <group name="tactical-holotable-sanctum" position={[centerX, 0, gameRoomZ]}>
-        {/* Illuminated Octagonal Sanctum Pedestal & Rim */}
+        {/* Illuminated Sanctum Pedestal & Broad Recessed Tabletop Apron */}
         <mesh position={[0, 0.41, 0]}>
-          <cylinderGeometry args={[1.05, 1.22, 0.82, 8]} />
+          <cylinderGeometry args={[1.08, 1.25, 0.82, 8]} />
           <meshStandardMaterial
             color="#1E1B4B"
             metalness={0.58}
@@ -1414,35 +1466,39 @@ export function GameRoom3D({
             emissiveIntensity={0.35 * brightnessScale}
           />
         </mesh>
-        <mesh position={[0, 0.83, 0]}>
-          <cylinderGeometry args={[1.38, 1.32, 0.05, 16]} />
-          <meshStandardMaterial color="#0F172A" metalness={0.65} roughness={0.28} />
-        </mesh>
-        {/* Rotating Holographic Outer Rim Halo */}
+        <RoundedBox
+          args={[2.46, 0.055, 2.46]}
+          position={[0, 0.83, 0]}
+          radius={0.024}
+          smoothness={2}
+        >
+          <meshStandardMaterial color="#0F172A" metalness={0.62} roughness={0.28} />
+        </RoundedBox>
+        {/* Rotating Holographic Inner Rim Halo */}
         <mesh
           ref={holoRingRef}
-          position={[0, 0.858, 0]}
+          position={[0, 0.859, 0]}
           rotation={[-Math.PI / 2, 0, 0]}
           raycast={() => null}
         >
-          <ringGeometry args={[1.22, 1.33, 36]} />
+          <ringGeometry args={[1.12, 1.18, 36]} />
           <meshBasicMaterial color={activeTerrainSpec.accentColor} />
         </mesh>
 
         {/* ================================================================= */}
-        {/* FLOATING NORTH RIM GAME MODE SWITCHER BAR                         */}
+        {/* SOUTH TABLE APRON RAIL (Flush on Front Edge — Game Mode Switcher) */}
         {/* ================================================================= */}
         <group
           name="holotable-mode-switcher"
-          position={[0, 1.24, -1.16]}
-          rotation={[0.25, 0, 0]}
+          position={[0, 0.868, 1.04]}
+          rotation={[-Math.PI / 2 + 0.18, 0, 0]}
         >
-          <RoundedBox args={[1.92, 0.24, 0.02]} radius={0.02}>
+          <RoundedBox args={[1.92, 0.24, 0.016]} radius={0.012}>
             <meshBasicMaterial color="#090D1A" />
           </RoundedBox>
           <Text
-            position={[0, 0.068, 0.014]}
-            fontSize={0.03}
+            position={[0, 0.068, 0.011]}
+            fontSize={0.028}
             color="#FDE68A"
             anchorX="center"
             anchorY="middle"
@@ -1458,7 +1514,7 @@ export function GameRoom3D({
           <HoloButton3D
             name="btn-holo-mode-adventure-rpg"
             label="⚔️ Adventure RPG"
-            position={[-0.68, -0.04, 0.014]}
+            position={[-0.68, -0.04, 0.011]}
             width={0.42}
             height={0.08}
             fontSize={0.025}
@@ -1469,7 +1525,7 @@ export function GameRoom3D({
           <HoloButton3D
             name="btn-holo-mode-checkers"
             label="🔴 Checkers 8×8"
-            position={[-0.22, -0.04, 0.014]}
+            position={[-0.22, -0.04, 0.011]}
             width={0.42}
             height={0.08}
             fontSize={0.025}
@@ -1480,7 +1536,7 @@ export function GameRoom3D({
           <HoloButton3D
             name="btn-holo-mode-chess"
             label="♟️ Chess 8×8"
-            position={[0.24, -0.04, 0.014]}
+            position={[0.24, -0.04, 0.011]}
             width={0.42}
             height={0.08}
             fontSize={0.025}
@@ -1491,7 +1547,7 @@ export function GameRoom3D({
           <HoloButton3D
             name="btn-holo-mode-connect4"
             label="🟡 Connect-4"
-            position={[0.7, -0.04, 0.014]}
+            position={[0.7, -0.04, 0.011]}
             width={0.42}
             height={0.08}
             fontSize={0.025}
@@ -1522,7 +1578,7 @@ export function GameRoom3D({
                 onUpdateHolotableMini(selectedMini.id, { localPos: [lx, lz] })
               }}
             >
-              <planeGeometry args={[1.76, 1.76]} />
+              <planeGeometry args={[1.72, 1.72]} />
               <meshStandardMaterial
                 color={activeTerrainSpec.baseColor}
                 roughness={0.42}
@@ -1538,7 +1594,7 @@ export function GameRoom3D({
                   rotation={[-Math.PI / 2, 0, 0]}
                   raycast={() => null}
                 >
-                  <planeGeometry args={[0.008, 1.72]} />
+                  <planeGeometry args={[0.008, 1.68]} />
                   <meshBasicMaterial
                     color={activeTerrainSpec.gridColor}
                     transparent
@@ -1550,7 +1606,7 @@ export function GameRoom3D({
                   rotation={[-Math.PI / 2, 0, 0]}
                   raycast={() => null}
                 >
-                  <planeGeometry args={[1.72, 0.008]} />
+                  <planeGeometry args={[1.68, 0.008]} />
                   <meshBasicMaterial
                     color={activeTerrainSpec.gridColor}
                     transparent
@@ -1744,22 +1800,24 @@ export function GameRoom3D({
                 </group>
               )
             })}
-            <HoloButton3D
-              name="btn-checkers-reset"
-              label="↺ Reset Checkers"
-              position={[0, 0.04, 0.88]}
-              width={0.44}
-              height={0.075}
-              fontSize={0.026}
-              accent="#EF4444"
-              onClick={() => {
-                setCheckersBoard(createInitialCheckersBoard())
-                setCheckersTurn('red')
-                setCheckersSelected(null)
-                setCheckersWinner(null)
-                setCheckersBanner('Fresh Checkers match — RED moves first!')
-              }}
-            />
+            <group position={[0, 0.015, 0.82]} rotation={[-Math.PI / 2, 0, 0]}>
+              <HoloButton3D
+                name="btn-checkers-reset"
+                label="↺ Reset Checkers"
+                position={[0, 0, 0]}
+                width={0.44}
+                height={0.075}
+                fontSize={0.026}
+                accent="#EF4444"
+                onClick={() => {
+                  setCheckersBoard(createInitialCheckersBoard())
+                  setCheckersTurn('red')
+                  setCheckersSelected(null)
+                  setCheckersWinner(null)
+                  setCheckersBanner('Fresh Checkers match — RED moves first!')
+                }}
+              />
+            </group>
           </group>
         )}
 
@@ -1837,55 +1895,59 @@ export function GameRoom3D({
                 </group>
               )
             })}
-            <HoloButton3D
-              name="btn-chess-reset"
-              label="↺ Reset Chess Board"
-              position={[0, 0.04, 0.88]}
-              width={0.46}
-              height={0.075}
-              fontSize={0.026}
-              accent="#38BDF8"
-              onClick={() => {
-                setChessBoard(createInitialChessBoard())
-                setChessTurn('w')
-                setChessSelected(null)
-                setChessWinner(null)
-                setChessBanner('Fresh Chess match — GOLD (White) moves first!')
-              }}
-            />
+            <group position={[0, 0.015, 0.82]} rotation={[-Math.PI / 2, 0, 0]}>
+              <HoloButton3D
+                name="btn-chess-reset"
+                label="↺ Reset Chess Board"
+                position={[0, 0, 0]}
+                width={0.46}
+                height={0.075}
+                fontSize={0.026}
+                accent="#38BDF8"
+                onClick={() => {
+                  setChessBoard(createInitialChessBoard())
+                  setChessTurn('w')
+                  setChessSelected(null)
+                  setChessWinner(null)
+                  setChessBanner('Fresh Chess match — GOLD (White) moves first!')
+                }}
+              />
+            </group>
           </group>
         )}
 
         {/* ================================================================= */}
-        {/* MODE 4: CONNECT-4 STRATEGY GRID (6x7 3D VERTICAL FRAME & DISCS)   */}
+        {/* MODE 4: CONNECT-4 STRATEGY GRID (Compact Tabletop Frame + Base)   */}
         {/* ================================================================= */}
         {tableMode === 'connect4' && (
           <group name="holotable-connect4-board" position={[0, 0.87, 0]}>
-            {/* 7 Clickable Column Drop Buttons along the Top */}
-            {Array.from({ length: 7 }).map((_, col) => {
-              const cx = -0.54 + col * 0.18
-              return (
-                <HoloButton3D
-                  key={`c4-drop-${col}`}
-                  name={`btn-connect4-col-${col}`}
-                  label={`▼ C${col + 1}`}
-                  position={[cx, 0.94, 0]}
-                  width={0.16}
-                  height={0.075}
-                  fontSize={0.026}
-                  active
-                  accent={connect4Turn === 1 ? '#FACC15' : '#22D3EE'}
-                  onClick={() => handleConnect4Drop(col)}
-                />
-              )
-            })}
+            {/* 7 Column Drop Buttons Mounted Flush on the Tabletop Base */}
+            <group position={[0, 0.012, 0.28]} rotation={[-Math.PI / 2, 0, 0]}>
+              {Array.from({ length: 7 }).map((_, col) => {
+                const cx = -0.45 + col * 0.15
+                return (
+                  <HoloButton3D
+                    key={`c4-drop-${col}`}
+                    name={`btn-connect4-col-${col}`}
+                    label={`▼ C${col + 1}`}
+                    position={[cx, 0, 0]}
+                    width={0.135}
+                    height={0.075}
+                    fontSize={0.024}
+                    active
+                    accent={connect4Turn === 1 ? '#FACC15' : '#22D3EE'}
+                    onClick={() => handleConnect4Drop(col)}
+                  />
+                )
+              })}
+            </group>
 
-            {/* 6x7 Vertical Grid Slots & Placed 3D Discs */}
+            {/* Compact Tabletop 6x7 Grid Slots & Placed 3D Discs */}
             {connect4Grid.map((cell, idx) => {
               const r = Math.floor(idx / 7)
               const c = idx % 7
-              const cx = -0.54 + c * 0.18
-              const cy = 0.78 - r * 0.135
+              const cx = -0.45 + c * 0.15
+              const cy = 0.56 - r * 0.095
               return (
                 <group
                   key={idx}
@@ -1896,12 +1958,12 @@ export function GameRoom3D({
                   }}
                 >
                   <mesh>
-                    <ringGeometry args={[0.052, 0.068, 20]} />
+                    <ringGeometry args={[0.038, 0.05, 20]} />
                     <meshBasicMaterial color="#1D4ED8" side={THREE.DoubleSide} />
                   </mesh>
                   {cell !== 0 && (
                     <mesh rotation={[Math.PI / 2, 0, 0]}>
-                      <cylinderGeometry args={[0.052, 0.052, 0.025, 20]} />
+                      <cylinderGeometry args={[0.038, 0.038, 0.022, 20]} />
                       <meshStandardMaterial
                         color={cell === 1 ? '#FACC15' : '#22D3EE'}
                         emissive={cell === 1 ? '#CA8A04' : '#0891B2'}
@@ -1915,65 +1977,40 @@ export function GameRoom3D({
               )
             })}
 
-            <HoloButton3D
-              name="btn-connect4-reset"
-              label="↺ Reset Connect-4"
-              position={[0, 0.04, 0.55]}
-              width={0.44}
-              height={0.075}
-              fontSize={0.026}
-              accent="#FACC15"
-              onClick={() => {
-                setConnect4Grid(createInitialConnect4Grid())
-                setConnect4Turn(1)
-                setConnect4Winner(null)
-                setConnect4Banner('Fresh Connect-4 match — GOLD drops first!')
-              }}
-            />
+            <group position={[0, 0.012, 0.44]} rotation={[-Math.PI / 2, 0, 0]}>
+              <HoloButton3D
+                name="btn-connect4-reset"
+                label="↺ Reset Connect-4"
+                position={[0, 0, 0]}
+                width={0.44}
+                height={0.072}
+                fontSize={0.025}
+                accent="#FACC15"
+                onClick={() => {
+                  setConnect4Grid(createInitialConnect4Grid())
+                  setConnect4Turn(1)
+                  setConnect4Winner(null)
+                  setConnect4Banner('Fresh Connect-4 match — GOLD drops first!')
+                }}
+              />
+            </group>
           </group>
         )}
 
         {/* ================================================================= */}
-        {/* HOLOTABLE SANCTUM COMMAND CONSOLE PANEL (West Rim)                */}
+        {/* FLUSH PERIMETER TABLE APRON RAILS (West, North & East Table Edges)*/}
+        {/* Mounted directly on the table surface rim (y = 0.868m)            */}
         {/* ================================================================= */}
         <group
           name="holotable-control-console"
-          position={[-1.28, 0.98, 0]}
-          rotation={[0, -Math.PI / 2, -0.42]}
+          position={[-1.04, 0.868, 0]}
+          rotation={[-Math.PI / 2, 0, Math.PI / 2]}
         >
-          <RoundedBox args={[1.76, 0.74, 0.025]} radius={0.02}>
+          <RoundedBox args={[1.76, 0.34, 0.016]} radius={0.012}>
             <meshBasicMaterial color="#090D1A" />
           </RoundedBox>
-          <Text
-            position={[0, 0.31, 0.016]}
-            fontSize={0.034}
-            color="#C084FC"
-            anchorX="center"
-            anchorY="middle"
-          >
-            {`⚔️ SANCTUM COMMAND · ${activeTerrainSpec.title.toUpperCase()}`}
-          </Text>
 
-          {/* Row 1: 5 Terrain Presets */}
-          {TERRAIN_SPECS.map((t, idx) => (
-            <HoloButton3D
-              key={t.id}
-              name={`btn-holo-terrain-${t.id}`}
-              label={t.shortLabel}
-              position={[-0.64 + idx * 0.32, 0.2, 0.016]}
-              width={0.29}
-              height={0.072}
-              fontSize={0.023}
-              active={holotableState.terrain === t.id}
-              accent={t.accentColor}
-              onClick={() => {
-                setTableMode('adventure-rpg')
-                onSetHolotableTerrain(t.id)
-              }}
-            />
-          ))}
-
-          {/* Row 2: Spawn Miniatures */}
+          {/* Row 1: Spawn Miniatures (Flush on West Table Rail) */}
           {(
             [
               { kind: 'hero-paladin', label: '+Paladin', color: '#F59E0B' },
@@ -1988,7 +2025,7 @@ export function GameRoom3D({
               key={sp.kind}
               name={`btn-holo-spawn-${sp.kind}`}
               label={sp.label}
-              position={[-0.65 + idx * 0.26, 0.09, 0.016]}
+              position={[-0.65 + idx * 0.26, 0.09, 0.011]}
               width={0.24}
               height={0.068}
               fontSize={0.022}
@@ -2000,53 +2037,16 @@ export function GameRoom3D({
             />
           ))}
 
-          {/* Row 3: D20 RPG Combat Actions (Melee, Spell, Heal) */}
-          <group position={[0, -0.01, 0.016]}>
-            <HoloButton3D
-              name="btn-holo-rpg-melee"
-              label="⚔️ Roll Melee (D20)"
-              position={[-0.54, 0, 0]}
-              width={0.5}
-              height={0.072}
-              fontSize={0.023}
-              active
-              accent="#EF4444"
-              onClick={() => handleRpgAction('melee')}
-            />
-            <HoloButton3D
-              name="btn-holo-rpg-spell"
-              label="🔥 Cast Spell (D20)"
-              position={[0.0, 0, 0]}
-              width={0.5}
-              height={0.072}
-              fontSize={0.023}
-              active
-              accent="#38BDF8"
-              onClick={() => handleRpgAction('spell')}
-            />
-            <HoloButton3D
-              name="btn-holo-rpg-heal"
-              label="✨ Divine Heal"
-              position={[0.54, 0, 0]}
-              width={0.48}
-              height={0.072}
-              fontSize={0.023}
-              active
-              accent="#10B981"
-              onClick={() => handleRpgAction('heal')}
-            />
-          </group>
-
-          {/* Row 4: Selected Miniature Transform */}
+          {/* Row 2: Selected Miniature Transform Controls (Flush on West Table Rail) */}
           {selectedMini && (
-            <group position={[0, -0.12, 0.016]}>
+            <group position={[0, -0.01, 0.011]}>
               <HoloButton3D
                 name="btn-holo-mini-rotate"
                 label="↻ Rot 45°"
                 position={[-0.64, 0, 0]}
                 width={0.25}
-                height={0.068}
-                fontSize={0.022}
+                height={0.066}
+                fontSize={0.021}
                 onClick={() =>
                   onUpdateHolotableMini(selectedMini.id, {
                     rotationY: Number((selectedMini.rotationY + Math.PI / 4).toFixed(3)),
@@ -2058,8 +2058,8 @@ export function GameRoom3D({
                 label="+ Scale"
                 position={[-0.36, 0, 0]}
                 width={0.22}
-                height={0.068}
-                fontSize={0.022}
+                height={0.066}
+                fontSize={0.021}
                 onClick={() =>
                   onUpdateHolotableMini(selectedMini.id, {
                     scale: selectedMini.scale >= 1.5 ? 0.85 : selectedMini.scale + 0.2,
@@ -2071,8 +2071,8 @@ export function GameRoom3D({
                 label="🎨 Color"
                 position={[-0.1, 0, 0]}
                 width={0.24}
-                height={0.068}
-                fontSize={0.022}
+                height={0.066}
+                fontSize={0.021}
                 accent={selectedMini.color}
                 active
                 onClick={() => {
@@ -2087,8 +2087,8 @@ export function GameRoom3D({
                 label="▶ Step"
                 position={[0.16, 0, 0]}
                 width={0.22}
-                height={0.068}
-                fontSize={0.022}
+                height={0.066}
+                fontSize={0.021}
                 onClick={() =>
                   onUpdateHolotableMini(selectedMini.id, {
                     localPos: [
@@ -2105,8 +2105,8 @@ export function GameRoom3D({
                 label="🗑 Del"
                 position={[0.41, 0, 0]}
                 width={0.2}
-                height={0.068}
-                fontSize={0.022}
+                height={0.066}
+                fontSize={0.021}
                 accent="#EF4444"
                 onClick={() => onDeleteHolotableMini(selectedMini.id)}
               />
@@ -2115,15 +2115,82 @@ export function GameRoom3D({
                 label="↺ Reset"
                 position={[0.64, 0, 0]}
                 width={0.22}
-                height={0.068}
-                fontSize={0.022}
+                height={0.066}
+                fontSize={0.021}
                 onClick={onResetHolotableMinis}
               />
             </group>
           )}
 
-          {/* Row 5: Interactive Fog of War Controls */}
-          <group position={[0, -0.24, 0.016]}>
+          {/* Row 3: D20 RPG Combat Actions (Flush on West Table Rail) */}
+          <group position={[0, -0.11, 0.011]}>
+            <HoloButton3D
+              name="btn-holo-rpg-melee"
+              label="⚔️ Roll Melee (D20)"
+              position={[-0.54, 0, 0]}
+              width={0.5}
+              height={0.068}
+              fontSize={0.022}
+              active
+              accent="#EF4444"
+              onClick={() => handleRpgAction('melee')}
+            />
+            <HoloButton3D
+              name="btn-holo-rpg-spell"
+              label="🔥 Cast Spell (D20)"
+              position={[0.0, 0, 0]}
+              width={0.5}
+              height={0.068}
+              fontSize={0.022}
+              active
+              accent="#38BDF8"
+              onClick={() => handleRpgAction('spell')}
+            />
+            <HoloButton3D
+              name="btn-holo-rpg-heal"
+              label="✨ Divine Heal"
+              position={[0.54, 0, 0]}
+              width={0.48}
+              height={0.068}
+              fontSize={0.022}
+              active
+              accent="#10B981"
+              onClick={() => handleRpgAction('heal')}
+            />
+          </group>
+        </group>
+
+        {/* NORTH TABLE APRON RAIL (Flush on North Edge — Terrain & Fog Controls) */}
+        <group
+          name="holotable-north-rail"
+          position={[0, 0.868, -1.04]}
+          rotation={[-Math.PI / 2, 0, 0]}
+        >
+          <RoundedBox args={[1.76, 0.24, 0.016]} radius={0.012}>
+            <meshBasicMaterial color="#090D1A" />
+          </RoundedBox>
+
+          {/* Row 1: 5 Terrain Presets */}
+          {TERRAIN_SPECS.map((t, idx) => (
+            <HoloButton3D
+              key={t.id}
+              name={`btn-holo-terrain-${t.id}`}
+              label={t.shortLabel}
+              position={[-0.64 + idx * 0.32, 0.055, 0.011]}
+              width={0.29}
+              height={0.07}
+              fontSize={0.022}
+              active={holotableState.terrain === t.id}
+              accent={t.accentColor}
+              onClick={() => {
+                setTableMode('adventure-rpg')
+                onSetHolotableTerrain(t.id)
+              }}
+            />
+          ))}
+
+          {/* Row 2: Interactive Fog of War Controls */}
+          <group position={[0, -0.055, 0.011]}>
             <HoloButton3D
               name="btn-holo-fog-toggle"
               label={
@@ -2131,8 +2198,8 @@ export function GameRoom3D({
               }
               position={[-0.46, 0, 0]}
               width={0.56}
-              height={0.072}
-              fontSize={0.023}
+              height={0.07}
+              fontSize={0.022}
               active={holotableState.fogEnabled}
               accent="#A855F7"
               onClick={() => onToggleHolotableFog()}
@@ -2142,8 +2209,8 @@ export function GameRoom3D({
               label="☀️ Clear All Fog"
               position={[0.12, 0, 0]}
               width={0.48}
-              height={0.072}
-              fontSize={0.023}
+              height={0.07}
+              fontSize={0.022}
               accent="#38BDF8"
               onClick={onRevealAllHolotableFog}
             />
@@ -2152,8 +2219,8 @@ export function GameRoom3D({
               label="🌑 Shroud All"
               position={[0.58, 0, 0]}
               width={0.38}
-              height={0.072}
-              fontSize={0.023}
+              height={0.07}
+              fontSize={0.022}
               accent="#6366F1"
               onClick={onShroudAllHolotableFog}
             />

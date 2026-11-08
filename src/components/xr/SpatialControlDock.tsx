@@ -2,6 +2,12 @@ import { RoundedBox, Text } from '@react-three/drei'
 import { useEffect, useRef, useState } from 'react'
 import { QUICK_REACTIONS } from '../../constants/cinema'
 import { FREE_ROAM_SEAT_ID } from '../../constants/hangout'
+import {
+  NES_LIBRARY_CARTRIDGES,
+  getNesEmulator,
+  isNesMediaUrl,
+  parseNesCartridgeIdFromUrl,
+} from '../../services/nesEmulator'
 import type { PresenterState } from '../../types/lounge'
 import { VRKeyboard3D, type VRKeyboardMode } from './VRKeyboard3D'
 
@@ -588,7 +594,7 @@ export function SpatialControlDock({
             onClick={() => onSelectSeat('station:chalkboard')}
           />
 
-          {/* Clubhouse Expansion Wing Rooms Quick-Hop Strip */}
+          {/* Clubhouse Expansion Wing Rooms + 36-ROM NES Quick-Hop Strip */}
           <RoundedBox
             args={[1.24, 0.084, 0.018]}
             position={[0, -0.096, 0]}
@@ -598,36 +604,71 @@ export function SpatialControlDock({
             <meshBasicMaterial color="#080C13" />
           </RoundedBox>
           <DockButton
-            label="💼 Boardroom"
-            position={[-0.45, -0.096, 0.008]}
-            width={0.275}
+            label="💼 Board"
+            position={[-0.495, -0.096, 0.008]}
+            width={0.185}
             height={0.064}
             variant={localSeatId?.startsWith('wing:boardroom') ? 'primary' : 'default'}
             onClick={() => onSelectSeat('wing:boardroom-head')}
           />
           <DockButton
             label="🔥 Library"
-            position={[-0.15, -0.096, 0.008]}
-            width={0.275}
+            position={[-0.297, -0.096, 0.008]}
+            width={0.185}
             height={0.064}
             variant={localSeatId?.startsWith('wing:library') ? 'primary' : 'default'}
             onClick={() => onSelectSeat('wing:library-chair-1')}
           />
           <DockButton
+            label="🕹 Game Rm"
+            position={[-0.099, -0.096, 0.008]}
+            width={0.185}
+            height={0.064}
+            variant={localSeatId?.startsWith('wing:game-room') ? 'primary' : 'default'}
+            onClick={() => onSelectSeat('wing:game-room-seat-1')}
+          />
+          <DockButton
             label="🛰 Command"
-            position={[0.15, -0.096, 0.008]}
-            width={0.275}
+            position={[0.099, -0.096, 0.008]}
+            width={0.185}
             height={0.064}
             variant={localSeatId?.startsWith('wing:command') ? 'primary' : 'default'}
             onClick={() => onSelectSeat('wing:command-seat-1')}
           />
           <DockButton
-            label="🏔 Lake Deck"
-            position={[0.45, -0.096, 0.008]}
-            width={0.275}
+            label="🏔 Deck"
+            position={[0.297, -0.096, 0.008]}
+            width={0.185}
             height={0.064}
             variant={localSeatId?.startsWith('wing:deck') ? 'primary' : 'default'}
             onClick={() => onSelectSeat('wing:deck-chair-1')}
+          />
+          <DockButton
+            label={isNesMediaUrl(presenterState.mediaUrl) ? '🕹 Next ROM' : '🕹 Play NES'}
+            position={[0.495, -0.096, 0.008]}
+            width={0.185}
+            height={0.064}
+            variant={isNesMediaUrl(presenterState.mediaUrl) ? 'primary' : 'danger'}
+            onClick={() => {
+              if (!isLocalPresenter && canTakeControl) {
+                onTakeControl()
+              }
+              const currentId = isNesMediaUrl(presenterState.mediaUrl)
+                ? parseNesCartridgeIdFromUrl(presenterState.mediaUrl)
+                : null
+              const currentIdx = currentId
+                ? NES_LIBRARY_CARTRIDGES.findIndex((g) => g.id === currentId)
+                : -1
+              const nextGame =
+                currentIdx >= 0
+                  ? NES_LIBRARY_CARTRIDGES[(currentIdx + 1) % NES_LIBRARY_CARTRIDGES.length]
+                  : NES_LIBRARY_CARTRIDGES[0]
+              getNesEmulator().loadLibraryCartridge(nextGame.id)
+              onSelectStreamUrl(
+                `nes://${nextGame.id}`,
+                `🕹 NES: ${nextGame.title}`,
+              )
+            }}
           />
         </group>
       )}

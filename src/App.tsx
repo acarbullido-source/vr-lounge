@@ -61,6 +61,10 @@ import {
   lockDevicePasscode,
 } from './services/passcode'
 import {
+  getNesEmulator,
+  isNesMediaUrl,
+} from './services/nesEmulator'
+import {
   isControllerButtonPressed,
   readControllerThumbstick,
   readXRSpaceWorldPose,
@@ -157,6 +161,7 @@ interface SeatRigProps {
   recenterVersion: number
   keyboardOpen: boolean
   buildMode: boolean
+  nesActiveOnScreen?: boolean
   teleportRequest: TeleportFloorRequest | null
   localRoamPoseRef: React.MutableRefObject<{
     position: [number, number, number]
@@ -173,10 +178,10 @@ interface SeatRigProps {
  * Unified Seated + Free-Roam Locomotion Rig for both Meta Quest 3 and Desktop:
  * 1. Immersive VR:
  *    - Left (or single) thumbstick smooth headset-relative walking clamped to room/alcove walls
- *      with smooth `0.38m` Rear Balcony step-up.
+ *      with smooth `0.38m` Rear Balcony step-up (or 8-way NES D-Pad when an NES game is active).
  *    - Right (or single) thumbstick `45°` comfort snap-turn pivoting around the user's exact
  *      physical `headWorld` position so room-scale walkers are never swung sideways.
- *    - `A` / `X` hold-to-aim & release comfort floor teleport ring.
+ *    - `A` / `X` hold-to-aim & release comfort floor teleport ring (mapped to NES `A` / `B` when playing NES).
  *    - `B` / `Y` press summons or minimizes the floating `SpatialControlDock`.
  * 2. Desktop / Companion:
  *    - `WASD` / Arrow keys smooth walking (`Shift` faster) + floor double-click smooth glide,
@@ -192,6 +197,7 @@ function SeatCameraAndOriginRig({
   recenterVersion,
   keyboardOpen,
   buildMode,
+  nesActiveOnScreen = false,
   teleportRequest,
   localRoamPoseRef,
   onEnterFreeRoam,
@@ -242,6 +248,8 @@ function SeatCameraAndOriginRig({
   const prevIsFreeRoamingRef = useRef(isFreeRoaming)
   const isFreeRoamingRef = useRef(isFreeRoaming)
   isFreeRoamingRef.current = isFreeRoaming
+  const nesActiveOnScreenRef = useRef(nesActiveOnScreen)
+  nesActiveOnScreenRef.current = nesActiveOnScreen
 
   const desiredCamPos = useMemo(() => new THREE.Vector3(), [])
   const desiredLookTarget = useMemo(() => new THREE.Vector3(), [])
@@ -287,10 +295,30 @@ function SeatCameraAndOriginRig({
     onInVRChangeRef.current(inVR)
   }, [inVR])
 
-  // Desktop WASD / Arrow-Key Walk Listener (safely ignores form inputs)
+  // Desktop WASD / Arrow-Key Walk Listener + Global NES Controller Keyboard Listener
   useEffect(() => {
+    const mapNesKeyCode = (code: string) => {
+      if (code === 'ArrowUp') return 'up' as const
+      if (code === 'ArrowDown') return 'down' as const
+      if (code === 'ArrowLeft') return 'left' as const
+      if (code === 'ArrowRight') return 'right' as const
+      if (code === 'KeyX' || code === 'Space') return 'a' as const
+      if (code === 'KeyZ') return 'b' as const
+      if (code === 'Enter') return 'start' as const
+      if (code === 'ShiftRight' || code === 'Backspace') return 'select' as const
+      return null
+    }
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (!joined || isEditableDomElement(document.activeElement)) return
+      if (nesActiveOnScreenRef.current) {
+        const nesBtn = mapNesKeyCode(e.code)
+        if (nesBtn) {
+          e.preventDefault()
+          getNesEmulator().setButtonState(nesBtn, true)
+          return
+        }
+      }
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
         pressedKeysRef.current.add(e.code)
         return
@@ -306,11 +334,26 @@ function SeatCameraAndOriginRig({
     }
 
     const onKeyUp = (e: KeyboardEvent) => {
+      if (nesActiveOnScreenRef.current) {
+        const nesBtn = mapNesKeyCode(e.code)
+        if (nesBtn) {
+          getNesEmulator().setButtonState(nesBtn, false)
+        }
+      }
       pressedKeysRef.current.delete(e.code)
     }
 
     const clearKeys = () => {
       pressedKeysRef.current.clear()
+      const emu = getNesEmulator()
+      emu.setButtonState('up', false)
+      emu.setButtonState('down', false)
+      emu.setButtonState('left', false)
+      emu.setButtonState('right', false)
+      emu.setButtonState('a', false)
+      emu.setButtonState('b', false)
+      emu.setButtonState('start', false)
+      emu.setButtonState('select', false)
     }
 
     window.addEventListener('keydown', onKeyDown)
@@ -536,17 +579,25 @@ function SeatCameraAndOriginRig({
     const dt = Math.min(delta, 0.1)
     const rigAlpha = 1 - Math.exp(-12 * dt)
 
+    // Poll Meta Quest WebXR controllers & HTML5 Gamepads for the NES Emulator
+    getNesEmulator().pollQuestAndStandardGamepads(
+      leftController,
+      rightController,
+      Boolean(nesActiveOnScreen && joined && !keyboardOpen),
+    )
+
     if (inVR) {
       // 1. Quest B/Y button toggles the floating Lounge Controls dock
-      const bOrYPressed =
-        isControllerButtonPressed(rightController, ['b-button', 'y-button'], 5) ||
-        isControllerButtonPressed(leftController, ['y-button', 'b-button'], 5)
+      //    (When NES is active on screen, hold both B+Y together to toggle the dock so B & Y work as NES B / START)
+      const rightBY = isControllerButtonPressed(rightController, ['b-button', 'y-button'], 5)
+      const leftYB = isControllerButtonPressed(leftController, ['y-button', 'b-button'], 5)
+      const bOrYPressed = nesActiveOnScreen ? rightBY && leftYB : rightBY || leftYB
       if (bOrYPressed && !prevBOrYPressedRef.current && joined) {
         onSummonDockToggleRef.current()
       }
       prevBOrYPressedRef.current = bOrYPressed
 
-      // 2. Quest A/X hold-to-aim & release comfort floor teleport
+      // 2. Quest A/X hold-to-aim & release comfort floor teleport (disabled while playing NES on screen so A/X = NES A/B)
       const rightAX = isControllerButtonPressed(
         rightController,
         ['a-button', 'x-button'],
@@ -557,7 +608,8 @@ function SeatCameraAndOriginRig({
         ['x-button', 'a-button'],
         4,
       )
-      const aOrXPressed = (rightAX || leftAX) && joined && !buildMode && !keyboardOpen
+      const aOrXPressed =
+        !nesActiveOnScreen && (rightAX || leftAX) && joined && !buildMode && !keyboardOpen
       if (aOrXPressed) {
         const xrFrame = gl.xr.getFrame?.()
         const refSpace = xrOriginRefSpace ?? gl.xr.getReferenceSpace?.()
@@ -601,6 +653,7 @@ function SeatCameraAndOriginRig({
       prevAOrXPressedRef.current = aOrXPressed
 
       // 3. VR Thumbstick Smooth Walk + Head-Pivoted 45° Snap-Turn (supports 1 or 2 controllers!)
+      //    When an NES game is active on screen, Left Stick drives the NES 8-way D-Pad while Right Stick walks & snap-turns.
       if (joined && !keyboardOpen) {
         const hasBothControllers = Boolean(leftController && rightController)
         let moveX = 0
@@ -610,21 +663,32 @@ function SeatCameraAndOriginRig({
         if (hasBothControllers) {
           const leftStick = readControllerThumbstick(leftController)
           const rightStick = readControllerThumbstick(rightController)
-          moveX = Math.abs(leftStick.x) > 0.18 ? leftStick.x : 0
-          moveY =
-            Math.abs(leftStick.y) > 0.18
-              ? leftStick.y
-              : Math.abs(rightStick.y) > 0.36 && Math.abs(rightStick.x) < 0.42
+          if (nesActiveOnScreen) {
+            moveX = 0
+            moveY =
+              Math.abs(rightStick.y) > 0.36 && Math.abs(rightStick.x) < 0.42
                 ? rightStick.y
                 : 0
-          turnX = rightStick.x
+            turnX = rightStick.x
+          } else {
+            moveX = Math.abs(leftStick.x) > 0.18 ? leftStick.x : 0
+            moveY =
+              Math.abs(leftStick.y) > 0.18
+                ? leftStick.y
+                : Math.abs(rightStick.y) > 0.36 && Math.abs(rightStick.x) < 0.42
+                  ? rightStick.y
+                  : 0
+            turnX = rightStick.x
+          }
         } else {
           const singleStick = readControllerThumbstick(rightController ?? leftController)
-          moveY = Math.abs(singleStick.y) > 0.22 ? singleStick.y : 0
-          turnX =
-            Math.abs(singleStick.x) > 0.58 && Math.abs(singleStick.y) < 0.48
-              ? singleStick.x
-              : 0
+          if (!nesActiveOnScreen) {
+            moveY = Math.abs(singleStick.y) > 0.22 ? singleStick.y : 0
+            turnX =
+              Math.abs(singleStick.x) > 0.58 && Math.abs(singleStick.y) < 0.48
+                ? singleStick.x
+                : 0
+          }
         }
 
         // Head-pivoted 45° comfort snap-turn
@@ -1678,6 +1742,10 @@ export function App() {
               recenterVersion={recenterVersion}
               keyboardOpen={keyboardMode !== null}
               buildMode={buildMode}
+              nesActiveOnScreen={
+                room.presenterState.screenMode === 'url-sync' &&
+                isNesMediaUrl(room.presenterState.mediaUrl)
+              }
               teleportRequest={teleportRequest}
               localRoamPoseRef={localRoamPoseRef}
               onEnterFreeRoam={handleEnterFreeRoam}
