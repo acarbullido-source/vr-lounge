@@ -46,6 +46,7 @@ import {
   SAMPLE_MEDIA_PRESETS,
 } from '../../constants/cinema'
 import { FREE_ROAM_SEAT_ID } from '../../constants/hangout'
+import { isLocalStreamProxyAvailable } from '../../hooks/useMediaScreen'
 import type { JoinRoomOptions } from '../../hooks/useRoomSession'
 import type { ScreenShareQualityMode } from '../../hooks/useWebRTC'
 import {
@@ -739,14 +740,14 @@ export function CompanionOverlay({
                           {accountState.displayName}
                         </div>
                         <div className="truncate text-[11px] text-[#8a867e]">
-                          {accountState.handle || 'YouTube Connected'}
+                          {accountState.handle || 'Public Channel Profile'}
                         </div>
                       </div>
                       <div className="flex shrink-0 items-center gap-1.5">
                         <button
                           id="btn-lobby-yt-popup"
                           type="button"
-                          onClick={() => openYouTubeWebLoginPopup(accountState.handle)}
+                          onClick={() => void openYouTubeWebLoginPopup(accountState.handle)}
                           className="rounded-lg border border-[#f4f1ea]/15 bg-[#141922] px-2 py-1 text-[11px] text-[#f4f1ea] hover:border-[#e5a93c]/50"
                         >
                           YouTube.com
@@ -757,7 +758,7 @@ export function CompanionOverlay({
                           onClick={() => signOutYouTubeAccount()}
                           className="rounded-lg border border-[#f4f1ea]/12 bg-[#141922] px-2 py-1 text-[11px] text-[#c7c2b8] hover:text-[#e05a47]"
                         >
-                          Sign Out
+                          Clear
                         </button>
                       </div>
                     </div>
@@ -769,7 +770,7 @@ export function CompanionOverlay({
                           type="text"
                           value={lobbyYtIdentity}
                           onChange={(e) => setLobbyYtIdentity(e.target.value)}
-                          placeholder="@handle, channel, or email (e.g. @dingbaum)"
+                          placeholder="Public @handle or channel (e.g. @mkbhd)"
                           className="lounge-input flex-1 rounded-lg px-2.5 py-1.5 text-xs"
                         />
                         <button
@@ -779,7 +780,7 @@ export function CompanionOverlay({
                           onClick={() => {
                             setLobbyYtSigningIn(true)
                             void signInWithYouTubeIdentity(
-                              lobbyYtIdentity.trim() || displayName.trim() || '@dingbaum',
+                              lobbyYtIdentity.trim() || displayName.trim() || '@mkbhd',
                             ).finally(() => {
                               setLobbyYtSigningIn(false)
                               setLobbyYtIdentity('')
@@ -787,21 +788,17 @@ export function CompanionOverlay({
                           }}
                           className="shrink-0 rounded-lg bg-[#e05a47] px-3 py-1.5 text-xs font-semibold text-[#f4f1ea] transition hover:bg-[#ea6b58] disabled:opacity-50"
                         >
-                          {lobbyYtSigningIn ? 'Signing In…' : 'Sign In'}
+                          {lobbyYtSigningIn ? 'Loading…' : 'Load Handle'}
                         </button>
                       </div>
                       <button
                         id="btn-lobby-yt-popup"
                         type="button"
-                        onClick={() =>
-                          openYouTubeWebLoginPopup(
-                            lobbyYtIdentity.trim() || displayName.trim() || '@dingbaum',
-                          )
-                        }
+                        onClick={() => void openYouTubeWebLoginPopup()}
                         className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[#f4f1ea]/12 bg-[#141922] px-2.5 py-1.5 text-[11px] font-medium text-[#c7c2b8] transition hover:border-[#38bdf8]/50 hover:text-[#f4f1ea]"
                       >
                         <Globe className="h-3 w-3 text-[#38bdf8]" />
-                        <span>Sign In on YouTube.com (Popup Window)</span>
+                        <span>Open YouTube.com Tab (For Tab Screen-Share)</span>
                       </button>
                     </div>
                   )}
@@ -1249,6 +1246,14 @@ export function CompanionOverlay({
                       {p.displayName}
                       {p.userId === localProfile.userId ? ' (You)' : ''}
                     </span>
+                    {p.verifiedKeyTag && (
+                      <span
+                        title={`Cryptographically verified member identity (#${p.verifiedKeyTag})`}
+                        className="shrink-0 rounded bg-[#49b384]/15 px-1 py-0.5 font-mono text-[9px] text-[#49b384]"
+                      >
+                        🔑#{p.verifiedKeyTag}
+                      </span>
+                    )}
                     {p.isHost && <Crown className="h-3 w-3 shrink-0 text-[#e5a93c]" />}
                   </div>
                   <div className="flex items-center gap-1.5 text-[11px] text-[#8a867e]">
@@ -1566,7 +1571,7 @@ export function CompanionOverlay({
                     onLoadStreamUrl(
                       urlInput.trim(),
                       urlTitleInput.trim() || 'Shared Cinema Stream',
-                      useCorsProxy,
+                      isLocalStreamProxyAvailable() ? useCorsProxy : false,
                     )
                     setUrlDrawerOpen(false)
                   }}
@@ -1577,18 +1582,20 @@ export function CompanionOverlay({
                 </button>
               </div>
 
-              <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-[#c7c2b8]">
-                <input
-                  type="checkbox"
-                  checked={useCorsProxy}
-                  onChange={(e) => setUseCorsProxy(e.target.checked)}
-                  className="accent-[#e5a93c]"
-                />
-                <span>
-                  Route through local CORS Stream Proxy (<code>/api/stream-proxy</code>) for
-                  cross-origin MP4/HLS servers
-                </span>
-              </label>
+              {isLocalStreamProxyAvailable() && (
+                <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-[#c7c2b8]">
+                  <input
+                    type="checkbox"
+                    checked={useCorsProxy}
+                    onChange={(e) => setUseCorsProxy(e.target.checked)}
+                    className="accent-[#e5a93c]"
+                  />
+                  <span>
+                    Route through local dev CORS Stream Proxy (<code>/api/stream-proxy</code>) for
+                    cross-origin MP4/HLS servers
+                  </span>
+                </label>
+              )}
 
               <div>
                 <span className="block text-[11px] font-medium uppercase tracking-wider text-[#8a867e]">

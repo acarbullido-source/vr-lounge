@@ -99,6 +99,7 @@ export interface ParticipantProfile {
   isMuted: boolean
   inVR: boolean
   joinedAt: number
+  verifiedKeyTag?: string
 }
 
 export interface PresenterState {
@@ -124,6 +125,7 @@ export interface ChatMessage {
   text: string
   createdAt: number
   isSystem?: boolean
+  verifiedKeyTag?: string
 }
 
 export interface FloatingReaction {

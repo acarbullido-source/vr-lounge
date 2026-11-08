@@ -8,6 +8,8 @@
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
     "lint": "oxlint",
+    "test": "node --import ./scripts/register-ts-loader.mjs --test src/__tests__/securityAndRooms.test.ts",
+    "hash-passcode": "node ./scripts/hash-passcode.mjs",
     "preview": "vite preview --host"
   },
   "dependencies": {

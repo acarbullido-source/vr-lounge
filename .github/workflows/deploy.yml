@@ -18,10 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Node.js 24
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -29,12 +29,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck & Lint
-        run: npm run typecheck && npm run lint
+      - name: Typecheck, Lint & Regression Tests
+        run: npm run typecheck && npm run lint && npm test
 
       - name: Build production bundle
         env:
-          VITE_LOUNGE_PASSCODE: dingbaum
+          VITE_LOUNGE_PASSCODE_SALT: ${{ secrets.VITE_LOUNGE_PASSCODE_SALT || vars.VITE_LOUNGE_PASSCODE_SALT || 'vr-lounge-auth-v2' }}
+          VITE_LOUNGE_PASSCODE_VERIFIER: ${{ secrets.VITE_LOUNGE_PASSCODE_VERIFIER || vars.VITE_LOUNGE_PASSCODE_VERIFIER || 'e60e4d4aecf6dc515d04b9f044748049abd95ddc76f8e61f3e32775a4a172f53' }}
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || vars.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || vars.VITE_SUPABASE_ANON_KEY }}
           VITE_METERED_API_KEY: ${{ secrets.VITE_METERED_API_KEY || vars.VITE_METERED_API_KEY }}

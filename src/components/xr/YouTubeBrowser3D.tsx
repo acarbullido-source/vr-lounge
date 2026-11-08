@@ -612,7 +612,7 @@ export function YouTubeBrowser3D({
   const tabFontSize = tabCount >= 9 ? 0.0168 : 0.0185
   const tabStep = tabCount > 1 ? tabSpan / (tabCount - 1) : 0
   const fallbackHandle =
-    searchQuery.trim() || localDisplayName?.trim() || '@dingbaum'
+    searchQuery.trim() || localDisplayName?.trim() || '@mkbhd'
 
   return (
     <group

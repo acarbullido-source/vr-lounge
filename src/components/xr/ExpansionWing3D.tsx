@@ -1,6 +1,15 @@
 import { RoundedBox, Text } from '@react-three/drei'
 import { useFrame } from '@react-three/fiber'
-import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  Component,
+  Suspense,
+  lazy,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import * as THREE from 'three'
 import {
   BOARDROOM_STRATEGY_SLIDES,
@@ -31,12 +40,17 @@ import type {
   RoomCustomizationState,
   RoomLightingConfig,
 } from '../../types/lounge'
-import {
-  CommandCenterRoom3D,
-  type LoungeMirrorCamPreset,
-} from './CommandCenterRoom3D'
-import { GameRoom3D } from './GameRoom3D'
-import { OutdoorLakeDeck3D } from './OutdoorLakeDeck3D'
+import type { LoungeMirrorCamPreset } from './CommandCenterRoom3D'
+
+const CommandCenterRoom3D = lazy(() =>
+  import('./CommandCenterRoom3D').then((m) => ({ default: m.CommandCenterRoom3D })),
+)
+const GameRoom3D = lazy(() =>
+  import('./GameRoom3D').then((m) => ({ default: m.GameRoom3D })),
+)
+const OutdoorLakeDeck3D = lazy(() =>
+  import('./OutdoorLakeDeck3D').then((m) => ({ default: m.OutdoorLakeDeck3D })),
+)
 
 const noopRaycast = () => null
 
@@ -510,7 +524,7 @@ export function ExpansionWing3D({
   const [loungeCamPreset, setLoungeCamPreset] =
     useState<LoungeMirrorCamPreset>('wide')
 
-  // Sightline-safe room visibility flags (keeps React state mounted while culling unseen rooms)
+  // Sightline-safe room visibility flags (lazy-loads heavy rear rooms on first approach, then culls via visible)
   const isRearWingZone =
     activeLoungeWing === 'command-center' ||
     activeLoungeWing === 'game-room' ||
@@ -520,6 +534,13 @@ export function ExpansionWing3D({
     activeLoungeWing !== 'main-lounge' &&
     activeLoungeWing !== 'boardroom' &&
     activeLoungeWing !== 'library'
+
+  const [rearRoomsActivated, setRearRoomsActivated] = useState(isRearRoomsVisible)
+  useEffect(() => {
+    if (isRearRoomsVisible && !rearRoomsActivated) {
+      setRearRoomsActivated(true)
+    }
+  }, [isRearRoomsVisible, rearRoomsActivated])
 
   const handleCycleLoungeCamPreset = () => {
     setLoungeCamPreset((prev) =>
@@ -1902,91 +1923,96 @@ export function ExpansionWing3D({
       </WingRoomErrorBoundary>
 
       {/* =================================================================== */}
-      {/* 4. COMMAND & CONTROL CENTER (West Wing Rear)                        */}
+      {/* 4-6. LAZY-LOADED REAR EXPANSION WING ROOMS                          */}
+      {/* (Command Center, The Game Room, Outdoor Lake & Mountain Deck)       */}
       {/* =================================================================== */}
-      <WingRoomErrorBoundary roomName="Command Center">
-      <CommandCenterRoom3D
-        wingLayout={wingLayout}
-        wingState={wingState}
-        lighting={lighting}
-        presenterState={presenterState}
-        mainVideoTexture={mainVideoTexture}
-        hasMainVideoFrames={hasMainVideoFrames}
-        loungeMirrorTexture={loungeMirrorTarget.texture}
-        loungeCamWallTextures={loungeCamWallTextures}
-        loungeCamPreset={loungeCamPreset}
-        onCycleLoungeCamPreset={handleCycleLoungeCamPreset}
-        onSelectLoungeCamPreset={setLoungeCamPreset}
-        computedSeats={computedSeats}
-        localSeatId={localSeatId}
-        participants={participants}
-        cinemaVolume={cinemaVolume}
-        visible={isRearRoomsVisible}
-        isActiveRoom={activeLoungeWing === 'command-center'}
-        onSelectSeat={onSelectSeat}
-        onTeleportToFloor={onTeleportToFloor}
-        onUpdateWingState={onUpdateWingState}
-        onOpenCommandOpsDrawer={onOpenCommandOpsDrawer}
-      />
-      </WingRoomErrorBoundary>
+      {rearRoomsActivated && (
+        <>
+          <WingRoomErrorBoundary roomName="Command Center">
+            <Suspense fallback={null}>
+              <CommandCenterRoom3D
+                wingLayout={wingLayout}
+                wingState={wingState}
+                lighting={lighting}
+                presenterState={presenterState}
+                mainVideoTexture={mainVideoTexture}
+                hasMainVideoFrames={hasMainVideoFrames}
+                loungeMirrorTexture={loungeMirrorTarget.texture}
+                loungeCamWallTextures={loungeCamWallTextures}
+                loungeCamPreset={loungeCamPreset}
+                onCycleLoungeCamPreset={handleCycleLoungeCamPreset}
+                onSelectLoungeCamPreset={setLoungeCamPreset}
+                computedSeats={computedSeats}
+                localSeatId={localSeatId}
+                participants={participants}
+                cinemaVolume={cinemaVolume}
+                visible={isRearRoomsVisible}
+                isActiveRoom={activeLoungeWing === 'command-center'}
+                onSelectSeat={onSelectSeat}
+                onTeleportToFloor={onTeleportToFloor}
+                onUpdateWingState={onUpdateWingState}
+                onOpenCommandOpsDrawer={onOpenCommandOpsDrawer}
+              />
+            </Suspense>
+          </WingRoomErrorBoundary>
 
-      {/* =================================================================== */}
-      {/* 5. THE GAME ROOM (East Wing Rear: Holotable, Arcade & Stream Mirror)*/}
-      {/* =================================================================== */}
-      <WingRoomErrorBoundary roomName="The Game Room">
-      <GameRoom3D
-        wingLayout={wingLayout}
-        lighting={lighting}
-        presenterState={presenterState}
-        mainVideoTexture={mainVideoTexture}
-        hasMainVideoFrames={hasMainVideoFrames}
-        loungeMirrorTexture={loungeMirrorTarget.texture}
-        computedSeats={computedSeats}
-        localSeatId={localSeatId}
-        participants={participants}
-        holotableState={holotableState}
-        gameRoomStreamMuted={gameRoomStreamMuted}
-        visible={isRearRoomsVisible}
-        isActiveRoom={activeLoungeWing === 'game-room'}
-        onToggleGameRoomStreamMute={onToggleGameRoomStreamMute}
-        onSelectSeat={onSelectSeat}
-        onTeleportToFloor={onTeleportToFloor}
-        onSetHolotableTerrain={onSetHolotableTerrain}
-        onSelectHolotableMini={onSelectHolotableMini}
-        onSpawnHolotableMini={onSpawnHolotableMini}
-        onUpdateHolotableMini={onUpdateHolotableMini}
-        onDeleteHolotableMini={onDeleteHolotableMini}
-        onResetHolotableMinis={onResetHolotableMinis}
-        onToggleHolotableFog={onToggleHolotableFog}
-        onToggleHolotableFogCell={onToggleHolotableFogCell}
-        onRevealAllHolotableFog={onRevealAllHolotableFog}
-        onShroudAllHolotableFog={onShroudAllHolotableFog}
-        onRecordArcadeScore={onRecordArcadeScore}
-      />
-      </WingRoomErrorBoundary>
+          <WingRoomErrorBoundary roomName="The Game Room">
+            <Suspense fallback={null}>
+              <GameRoom3D
+                wingLayout={wingLayout}
+                lighting={lighting}
+                presenterState={presenterState}
+                mainVideoTexture={mainVideoTexture}
+                hasMainVideoFrames={hasMainVideoFrames}
+                loungeMirrorTexture={loungeMirrorTarget.texture}
+                computedSeats={computedSeats}
+                localSeatId={localSeatId}
+                participants={participants}
+                holotableState={holotableState}
+                gameRoomStreamMuted={gameRoomStreamMuted}
+                visible={isRearRoomsVisible}
+                isActiveRoom={activeLoungeWing === 'game-room'}
+                onToggleGameRoomStreamMute={onToggleGameRoomStreamMute}
+                onSelectSeat={onSelectSeat}
+                onTeleportToFloor={onTeleportToFloor}
+                onSetHolotableTerrain={onSetHolotableTerrain}
+                onSelectHolotableMini={onSelectHolotableMini}
+                onSpawnHolotableMini={onSpawnHolotableMini}
+                onUpdateHolotableMini={onUpdateHolotableMini}
+                onDeleteHolotableMini={onDeleteHolotableMini}
+                onResetHolotableMinis={onResetHolotableMinis}
+                onToggleHolotableFog={onToggleHolotableFog}
+                onToggleHolotableFogCell={onToggleHolotableFogCell}
+                onRevealAllHolotableFog={onRevealAllHolotableFog}
+                onShroudAllHolotableFog={onShroudAllHolotableFog}
+                onRecordArcadeScore={onRecordArcadeScore}
+              />
+            </Suspense>
+          </WingRoomErrorBoundary>
 
-      {/* =================================================================== */}
-      {/* 6. OUTDOOR LAKE & MOUNTAIN OBSERVATION DECK (South Vista + Cornhole)*/}
-      {/* =================================================================== */}
-      <WingRoomErrorBoundary roomName="Outdoor Lake Deck">
-      <OutdoorLakeDeck3D
-        wingLayout={wingLayout}
-        wingState={wingState}
-        lighting={lighting}
-        computedSeats={computedSeats}
-        localSeatId={localSeatId}
-        participants={participants}
-        cornholeState={cornholeState}
-        localDisplayName={localDisplayName}
-        visible={isRearRoomsVisible}
-        isActiveRoom={activeLoungeWing === 'outdoor-deck'}
-        onRecordCornholeThrow={onRecordCornholeThrow}
-        onResetCornhole={onResetCornhole}
-        onSelectSeat={onSelectSeat}
-        onTeleportToFloor={onTeleportToFloor}
-        onUpdateWingState={onUpdateWingState}
-      />
-      </WingRoomErrorBoundary>
+          <WingRoomErrorBoundary roomName="Outdoor Lake Deck">
+            <Suspense fallback={null}>
+              <OutdoorLakeDeck3D
+                wingLayout={wingLayout}
+                wingState={wingState}
+                lighting={lighting}
+                computedSeats={computedSeats}
+                localSeatId={localSeatId}
+                participants={participants}
+                cornholeState={cornholeState}
+                localDisplayName={localDisplayName}
+                visible={isRearRoomsVisible}
+                isActiveRoom={activeLoungeWing === 'outdoor-deck'}
+                onRecordCornholeThrow={onRecordCornholeThrow}
+                onResetCornhole={onResetCornhole}
+                onSelectSeat={onSelectSeat}
+                onTeleportToFloor={onTeleportToFloor}
+                onUpdateWingState={onUpdateWingState}
+              />
+            </Suspense>
+          </WingRoomErrorBoundary>
+        </>
+      )}
     </group>
   )
 }

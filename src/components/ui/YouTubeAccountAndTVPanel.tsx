@@ -30,6 +30,7 @@ import {
   type YouTubeVideoItem,
 } from '../../services/youtube'
 import {
+  KNOWN_PIPED_AUTH_INSTANCES,
   fetchPersonalYouTubeFeed,
   fetchUserPlaylistsList,
   followYouTubeChannel,
@@ -216,13 +217,13 @@ export function YouTubeAccountAndTVPanel({
         (typeof window !== 'undefined'
           ? window.localStorage.getItem('vr-lounge:name')?.trim()
           : '') ||
-        '@dingbaum'
+        '@mkbhd'
       await signInWithYouTubeIdentity(targetIdentity)
       setSelectedPinnedChannel(null)
       setSection('subscriptions')
     } catch (err) {
       setAuthError(
-        err instanceof Error ? err.message : 'Could not sign into YouTube account.',
+        err instanceof Error ? err.message : 'Could not load public YouTube channel profile.',
       )
     } finally {
       setAuthBusy(false)
@@ -240,15 +241,11 @@ export function YouTubeAccountAndTVPanel({
       }
       return
     }
-    // Zero-setup Google / YouTube.com Sign-In Popup + Instant Profile Activation
-    setAuthBusy(true)
-    try {
-      await openYouTubeWebLoginPopup(identityDraft.trim() || undefined)
-      setSelectedPinnedChannel(null)
-      setSection('subscriptions')
-    } finally {
-      setAuthBusy(false)
-    }
+    // Open external YouTube.com tab/popup for WebRTC browser tab screen-sharing (does NOT fake local login)
+    await openYouTubeWebLoginPopup()
+    setNotice(
+      'Opened YouTube.com in a separate browser window. Sign in there and click "Stream Tab" to broadcast YouTube Premium or private feeds via screen share, or configure an OAuth Client ID / Piped Server below.',
+    )
   }
 
   const handlePipedSubmit = async (e: React.FormEvent) => {
@@ -596,7 +593,7 @@ export function YouTubeAccountAndTVPanel({
                     ? 'Google OAuth'
                     : accountState.authProvider === 'piped'
                       ? 'Piped Sync'
-                      : 'YouTube Connected'}
+                      : 'Public Channel Profile'}
                 </span>
               </div>
               {accountState.handle && (
@@ -620,7 +617,7 @@ export function YouTubeAccountAndTVPanel({
               className="inline-flex items-center gap-1 rounded-lg border border-[#f4f1ea]/12 bg-[#141922] px-2.5 py-1.5 text-xs text-[#c7c2b8] hover:border-[#e5a93c]/50 hover:text-[#f4f1ea]"
             >
               <ExternalLink className="h-3.5 w-3.5 text-[#e5a93c]" />
-              <span>Open YouTube.com</span>
+              <span>Open YouTube.com (For Tab Share)</span>
             </button>
             <button
               id="btn-yt-stream-signedin-tab"
@@ -660,7 +657,7 @@ export function YouTubeAccountAndTVPanel({
               className="inline-flex items-center gap-1 rounded-lg border border-[#e05a47]/35 bg-[#e05a47]/15 px-2.5 py-1.5 text-xs font-medium text-[#e05a47] hover:bg-[#e05a47]/25"
             >
               <LogOut className="h-3.5 w-3.5" />
-              <span>Sign Out</span>
+              <span>Clear Profile</span>
             </button>
           </div>
         </div>
@@ -673,10 +670,10 @@ export function YouTubeAccountAndTVPanel({
             <div className="space-y-0.5">
               <div className="flex items-center gap-2 text-xs font-semibold text-[#f4f1ea]">
                 <LogIn className="h-4 w-4 text-[#e05a47]" />
-                <span>Sign In to Your YouTube Account</span>
+                <span>Public YouTube Profile &amp; Account Connections</span>
               </div>
               <div className="text-[11px] text-[#c7c2b8]">
-                Enter your YouTube <code className="text-[#e5a93c]">@handle</code>, channel name, or Google email for instant library sync — or sign in directly on <code className="text-[#f4f1ea]">youtube.com</code> in a popup window.
+                Enter a public YouTube <code className="text-[#e5a93c]">@handle</code> or channel name to load public uploads &amp; pinned playlists — or use <strong>OAuth Key</strong>, <strong>Piped Login</strong>, or <strong>Tab Screen-Share</strong> for private feeds.
               </div>
             </div>
 
@@ -689,7 +686,7 @@ export function YouTubeAccountAndTVPanel({
                 className="inline-flex items-center gap-1.5 rounded-xl border border-[#f4f1ea]/20 bg-[#1b2333] px-3 py-1.5 text-xs font-semibold text-[#f4f1ea] transition hover:border-[#e5a93c]/60 hover:bg-[#232d42]"
               >
                 <ExternalLink className="h-3.5 w-3.5 text-[#e5a93c]" />
-                <span>Sign In on YouTube.com (Popup)</span>
+                <span>Open YouTube.com (For Tab Share)</span>
               </button>
 
               <button
@@ -720,7 +717,7 @@ export function YouTubeAccountAndTVPanel({
             </div>
           </div>
 
-          {/* Primary Instant Sign-In Form */}
+          {/* Public @Handle / Channel Profile Form */}
           <form
             id="form-yt-direct-login"
             onSubmit={(e) => void handleDirectSignInSubmit(e)}
@@ -731,7 +728,7 @@ export function YouTubeAccountAndTVPanel({
               type="text"
               value={identityDraft}
               onChange={(e) => setIdentityDraft(e.target.value)}
-              placeholder="Your YouTube @handle (e.g. @dingbaum), email, or youtube.com/@channel..."
+              placeholder="Public YouTube @handle (e.g. @mkbhd) or youtube.com/@channel..."
               className="lounge-input flex-1 rounded-xl px-3.5 py-2 text-xs"
             />
             <button
@@ -741,7 +738,7 @@ export function YouTubeAccountAndTVPanel({
               className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#e05a47] px-4 py-2 text-xs font-semibold text-[#f4f1ea] shadow-md transition hover:bg-[#ea6b58] disabled:opacity-50"
             >
               <LogIn className="h-3.5 w-3.5" />
-              <span>{authBusy ? 'Signing In…' : 'Sign In to YouTube'}</span>
+              <span>{authBusy ? 'Loading…' : 'Load Public Profile'}</span>
             </button>
           </form>
 
@@ -832,17 +829,23 @@ export function YouTubeAccountAndTVPanel({
                 placeholder="Piped password"
                 className="lounge-input rounded-lg px-2.5 py-1.5 text-xs"
               />
-              <input
-                type="url"
+              <select
+                id="select-yt-piped-instance"
                 value={pipedInstance}
                 onChange={(e) => setPipedInstance(e.target.value)}
-                placeholder="Optional API URL (auto)"
                 className="lounge-input rounded-lg px-2.5 py-1.5 text-xs"
-              />
+              >
+                <option value="">Select Piped server…</option>
+                {KNOWN_PIPED_AUTH_INSTANCES.map((inst) => (
+                  <option key={inst.url} value={inst.url}>
+                    {inst.label}
+                  </option>
+                ))}
+              </select>
               <button
                 id="btn-yt-piped-submit"
                 type="submit"
-                disabled={authBusy}
+                disabled={authBusy || !pipedInstance}
                 className="rounded-lg bg-[#38bdf8] px-3 py-1.5 text-xs font-semibold text-[#080a0d] disabled:opacity-50"
               >
                 {authBusy ? 'Signing in…' : 'Connect Piped'}

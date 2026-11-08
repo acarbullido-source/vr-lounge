@@ -200,6 +200,9 @@ export default defineConfig(({ command }) => ({
   base: './',
   resolve: {
     dedupe: ['three', 'react', 'react-dom'],
+    alias: {
+      '@iwer/sem': resolve(process.cwd(), 'src/stubs/iwerSemStub.ts'),
+    },
   },
   plugins: [
     ...(command === 'serve' ? [basicSsl()] : []),

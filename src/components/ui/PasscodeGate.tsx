@@ -1,5 +1,6 @@
 import { Delete, Eye, EyeOff, KeyRound, Lock, ShieldCheck } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { ensureMemberIdentity } from '../../services/identityAuth'
 import { isPasscodeNumericOnly, verifyAndUnlockPasscode } from '../../services/passcode'
 
 export interface PasscodeGateProps {
@@ -20,20 +21,32 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
   const [showAlphaPad, setShowAlphaPad] = useState(!numericDefault)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [shake, setShake] = useState(false)
+  const [verifying, setVerifying] = useState(false)
 
-  const attemptUnlock = (candidate: string) => {
+  useEffect(() => {
+    void ensureMemberIdentity()
+  }, [])
+
+  const attemptUnlock = async (candidate: string) => {
+    if (verifying) return
     if (!candidate.trim()) {
       setErrorMsg('Enter the lounge passcode to continue.')
       return
     }
-    if (verifyAndUnlockPasscode(candidate)) {
-      setErrorMsg(null)
-      onUnlocked()
-    } else {
-      setErrorMsg('Incorrect passcode. Ask the lounge host for the invite code.')
-      setShake(true)
-      window.setTimeout(() => setShake(false), 380)
-      setCode('')
+    setVerifying(true)
+    try {
+      const ok = await verifyAndUnlockPasscode(candidate)
+      if (ok) {
+        setErrorMsg(null)
+        onUnlocked()
+      } else {
+        setErrorMsg('Incorrect passcode. Ask the lounge host for the invite code.')
+        setShake(true)
+        window.setTimeout(() => setShake(false), 380)
+        setCode('')
+      }
+    } finally {
+      setVerifying(false)
     }
   }
 
@@ -45,7 +58,7 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
 
       if (e.key === 'Enter') {
         e.preventDefault()
-        attemptUnlock(code)
+        void attemptUnlock(code)
       } else if (e.key === 'Backspace') {
         e.preventDefault()
         setCode((prev) => prev.slice(0, -1))
@@ -113,7 +126,7 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            attemptUnlock(code)
+            void attemptUnlock(code)
           }}
           className="mt-4"
         >
@@ -259,10 +272,15 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
           <button
             id="btn-unlock-lounge"
             type="submit"
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#e5a93c] px-4 py-3.5 text-sm font-semibold text-[#080a0d] shadow-lg transition hover:bg-[#f2be5c] active:scale-[0.99]"
+            disabled={verifying}
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#e5a93c] px-4 py-3.5 text-sm font-semibold text-[#080a0d] shadow-lg transition hover:bg-[#f2be5c] active:scale-[0.99] disabled:opacity-60"
           >
             <ShieldCheck className="h-4 w-4" />
-            <span>Unlock Private Lounge</span>
+            <span>
+              {verifying
+                ? 'Deriving E2EE Room Keys…'
+                : 'Unlock Private Lounge'}
+            </span>
           </button>
         </form>
       </div>

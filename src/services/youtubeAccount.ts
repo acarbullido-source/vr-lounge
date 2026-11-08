@@ -1,9 +1,9 @@
+import { bytesToHex, constantTimeEqualHex } from './cryptoSession'
 import {
   extractYouTubeVideoId,
   fetchYouTubeCategory,
   fetchYouTubeChannelVideos,
   fetchYouTubePlaylistItems,
-  getPreferredPipedBase,
   toCanonicalYouTubeUrl,
   type VideoFeedResult,
   type YouTubeVideoItem,
@@ -11,7 +11,18 @@ import {
 
 const ACCOUNT_STORAGE_KEY = 'vr-lounge:yt-account-v1'
 const GOOGLE_CLIENT_ID_KEY = 'vr-lounge:google-client-id-v1'
-const OAUTH_STATE_TOKEN = 'vr-lounge-yt-oauth'
+const OAUTH_STATE_STORAGE_KEY = 'vr-lounge:yt-oauth-state-v2'
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000
+
+export const KNOWN_PIPED_AUTH_INSTANCES: ReadonlyArray<{
+  label: string
+  url: string
+}> = [
+  { label: 'pipedapi.kavin.rocks (Official)', url: 'https://pipedapi.kavin.rocks' },
+  { label: 'pipedapi-libre.kavin.rocks', url: 'https://pipedapi-libre.kavin.rocks' },
+  { label: 'pipedapi.tokhmi.xyz', url: 'https://pipedapi.tokhmi.xyz' },
+  { label: 'pipedapi.moomoo.me', url: 'https://pipedapi.moomoo.me' },
+]
 
 export interface YouTubeUserPlaylistSummary {
   id: string
@@ -232,6 +243,73 @@ export async function applyGoogleAccessToken(
   return next
 }
 
+interface StoredOAuthStateRecord {
+  nonce: string
+  expiresAt: number
+}
+
+export function generateAndStoreOAuthStateNonce(): string {
+  const bytes = new Uint8Array(24)
+  globalThis.crypto.getRandomValues(bytes)
+  const nonce = bytesToHex(bytes)
+  const record: StoredOAuthStateRecord = {
+    nonce,
+    expiresAt: Date.now() + OAUTH_STATE_TTL_MS,
+  }
+  if (typeof window !== 'undefined') {
+    const serialized = JSON.stringify(record)
+    try {
+      window.sessionStorage.setItem(OAUTH_STATE_STORAGE_KEY, serialized)
+    } catch {
+      // Ignore storage errors
+    }
+    try {
+      window.localStorage.setItem(OAUTH_STATE_STORAGE_KEY, serialized)
+    } catch {
+      // Ignore storage errors
+    }
+  }
+  return nonce
+}
+
+export function verifyAndConsumeOAuthStateNonce(
+  candidate: string | null | undefined,
+): boolean {
+  if (!candidate || typeof window === 'undefined') return false
+  const cleanCandidate = candidate.trim().toLowerCase()
+  if (!/^[0-9a-f]{48}$/.test(cleanCandidate)) return false
+
+  let raw: string | null = null
+  try {
+    raw =
+      window.sessionStorage.getItem(OAUTH_STATE_STORAGE_KEY) ??
+      window.localStorage.getItem(OAUTH_STATE_STORAGE_KEY)
+  } catch {
+    return false
+  }
+  try {
+    window.sessionStorage.removeItem(OAUTH_STATE_STORAGE_KEY)
+    window.localStorage.removeItem(OAUTH_STATE_STORAGE_KEY)
+  } catch {
+    // Ignore removal errors
+  }
+
+  if (!raw) return false
+  try {
+    const parsed = JSON.parse(raw) as Partial<StoredOAuthStateRecord>
+    if (
+      typeof parsed.nonce !== 'string' ||
+      typeof parsed.expiresAt !== 'number' ||
+      Date.now() > parsed.expiresAt
+    ) {
+      return false
+    }
+    return constantTimeEqualHex(cleanCandidate, parsed.nonce)
+  } catch {
+    return false
+  }
+}
+
 /**
  * Checks if the current browser window returned from Google OAuth 2.0 implicit flow.
  * If opened as a popup, relays the token to `window.opener` and closes itself cleanly.
@@ -245,7 +323,7 @@ export function consumeOAuthCallbackFromUrlHash(): void {
   const accessToken = params.get('access_token')
   const state = params.get('state')
   const expiresIn = Number(params.get('expires_in') ?? '3599')
-  if (!accessToken || state !== OAUTH_STATE_TOKEN) return
+  if (!accessToken || !verifyAndConsumeOAuthStateNonce(state)) return
 
   // Clean token out of address bar immediately
   const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`
@@ -305,10 +383,11 @@ export function startGoogleYouTubeSignIn(options?: {
     return {
       ok: false,
       error:
-        'Paste a Google OAuth Web Client ID first (or use Piped Account / Instant Playlist Pinning below with zero setup).',
+        'Paste a Google OAuth Web Client ID first (or use Piped Account / Public Channel Pinning below).',
     }
   }
 
+  const stateNonce = generateAndStoreOAuthStateNonce()
   const redirectUri = getGoogleOAuthRedirectUri()
   const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth')
   authUrl.searchParams.set('client_id', clientId)
@@ -320,7 +399,7 @@ export function startGoogleYouTubeSignIn(options?: {
   )
   authUrl.searchParams.set('include_granted_scopes', 'true')
   authUrl.searchParams.set('prompt', 'select_account')
-  authUrl.searchParams.set('state', OAUTH_STATE_TOKEN)
+  authUrl.searchParams.set('state', stateNonce)
 
   if (options?.preferRedirect) {
     window.location.assign(authUrl.toString())
@@ -354,7 +433,24 @@ export async function signInWithPipedAccount(
     throw new Error('Enter your Piped username and password.')
   }
 
-  const base = (instanceOverride?.trim() || getPreferredPipedBase()).replace(/\/+$/, '')
+  const rawInstance = instanceOverride?.trim() ?? ''
+  if (!rawInstance) {
+    throw new Error(
+      'Select or enter the exact HTTPS Piped server where your Piped account is registered.',
+    )
+  }
+
+  let parsedUrl: URL
+  try {
+    parsedUrl = new URL(rawInstance)
+  } catch {
+    throw new Error('Enter a valid HTTPS Piped API URL (e.g. https://pipedapi.kavin.rocks).')
+  }
+  if (parsedUrl.protocol !== 'https:') {
+    throw new Error('Piped server URL must use HTTPS to protect your credentials.')
+  }
+
+  const base = parsedUrl.toString().replace(/\/+$/, '')
   const res = await fetch(`${base}/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -366,14 +462,14 @@ export async function signInWithPipedAccount(
     error?: string
   }
   if (!res.ok || !data.token) {
-    throw new Error(data.error || `Piped login failed on ${new URL(base).hostname}`)
+    throw new Error(data.error || `Piped login failed on ${parsedUrl.hostname}`)
   }
 
   const next: YouTubeAccountState = {
     ...currentAccountState,
     authProvider: 'piped',
     displayName: cleanUser,
-    handle: `@${new URL(base).hostname}`,
+    handle: `@${parsedUrl.hostname}`,
     avatarUrl: '',
     googleAccessToken: null,
     googleExpiresAt: 0,
@@ -541,14 +637,15 @@ export async function signInWithYouTubeIdentity(
 }
 
 /**
- * Opens the official Google / YouTube.com sign-in popup window so the user can
- * log into their real Google/YouTube account (with YouTube Premium, private
- * Subscriptions, Watch Later, and YouTube TV) and also activates their VR Lounge
- * YouTube account profile.
+ * Opens an external YouTube.com browser window/popup so a desktop presenter can
+ * sign in to YouTube / YouTube Premium and screen-share that browser tab into the lounge.
+ *
+ * NOTE: Because browser cross-origin isolation prevents reading cookies from `youtube.com`,
+ * opening this popup does NOT mark the local app as authenticated.
  */
 export async function openYouTubeWebLoginPopup(
-  fallbackIdentity?: string,
-  targetUrl = 'https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F',
+  _fallbackIdentity?: string,
+  targetUrl = 'https://www.youtube.com/',
 ): Promise<YouTubeAccountState> {
   if (typeof window !== 'undefined') {
     const width = 1040
@@ -563,20 +660,11 @@ export async function openYouTubeWebLoginPopup(
     )
     window.open(
       targetUrl,
-      'vrLoungeYouTubeWebAuth',
+      'vrLoungeYouTubeWebTab',
       `popup=yes,width=${width},height=${height},left=${left},top=${top}`,
     )
   }
 
-  if (currentAccountState.authProvider === 'none') {
-    const savedName =
-      fallbackIdentity?.trim() ||
-      (typeof window !== 'undefined'
-        ? window.localStorage.getItem('vr-lounge:name')?.trim()
-        : '') ||
-      'YouTube Member'
-    return signInWithYouTubeIdentity(savedName)
-  }
   return currentAccountState
 }
 

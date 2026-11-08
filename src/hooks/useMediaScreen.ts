@@ -30,8 +30,8 @@ function isHlsUrl(url: string): boolean {
   return /\.m3u8(\?|#|$)/i.test(url) || url.includes('mpegurl')
 }
 
-function hasLocalDevStreamProxy(): boolean {
-  if (typeof window === 'undefined') return false
+export function isLocalStreamProxyAvailable(): boolean {
+  if (!import.meta.env.DEV || typeof window === 'undefined') return false
   const host = window.location.hostname.toLowerCase()
   return (
     host === 'localhost' ||
@@ -40,6 +40,15 @@ function hasLocalDevStreamProxy(): boolean {
     /^10\./.test(host) ||
     /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
   )
+}
+
+export function resolvePlayableStreamUrl(
+  rawUrl: string,
+  useCorsProxy: boolean,
+  canLocalProxy = isLocalStreamProxyAvailable(),
+): string {
+  if (!canLocalProxy || !useCorsProxy) return rawUrl
+  return `/api/stream-proxy?url=${encodeURIComponent(rawUrl)}`
 }
 
 export interface UseMediaScreenOptions {
@@ -224,19 +233,24 @@ export function useMediaScreen({
           : candidate.qualityLabel,
       )
 
-      const canLocalProxy = hasLocalDevStreamProxy()
+      const canLocalProxy = isLocalStreamProxyAvailable()
       const shouldProxy =
-        presenterState.useCorsProxy ||
-        (canLocalProxy && autoProxiedUrlRef.current === candidate.streamUrl)
-      const finalUrl = shouldProxy
-        ? `/api/stream-proxy?url=${encodeURIComponent(candidate.streamUrl)}`
-        : candidate.streamUrl
+        canLocalProxy &&
+        (presenterState.useCorsProxy ||
+          autoProxiedUrlRef.current === candidate.streamUrl)
+      const finalUrl = resolvePlayableStreamUrl(
+        candidate.streamUrl,
+        shouldProxy,
+        canLocalProxy,
+      )
 
       if (candidate.audioUrl) {
         hasCompanionAudioRef.current = true
-        const finalAudioUrl = shouldProxy
-          ? `/api/stream-proxy?url=${encodeURIComponent(candidate.audioUrl)}`
-          : candidate.audioUrl
+        const finalAudioUrl = resolvePlayableStreamUrl(
+          candidate.audioUrl,
+          shouldProxy,
+          canLocalProxy,
+        )
         companionAudioElement.src = finalAudioUrl
         companionAudioElement.muted =
           latestPlaybackRef.current.cinemaVolume <= 0.001
@@ -715,13 +729,13 @@ export function useMediaScreen({
       const targetStreamUrl = currentCandidate?.streamUrl || presenterState.mediaUrl.trim()
 
       if (
-        hasLocalDevStreamProxy() &&
+        isLocalStreamProxyAvailable() &&
         targetStreamUrl &&
         autoProxiedUrlRef.current !== targetStreamUrl &&
         !presenterState.useCorsProxy
       ) {
         autoProxiedUrlRef.current = targetStreamUrl
-        videoElement.src = `/api/stream-proxy?url=${encodeURIComponent(targetStreamUrl)}`
+        videoElement.src = resolvePlayableStreamUrl(targetStreamUrl, true, true)
         videoElement.load()
         return
       }

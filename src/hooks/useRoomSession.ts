@@ -16,6 +16,10 @@ import {
   computeRoomSeats,
   createDefaultRoomCustomization,
 } from '../constants/hangout'
+import {
+  ensureMemberIdentity,
+  getInitialMemberUserId,
+} from '../services/identityAuth'
 import { RoomRealtimeService, hasSupabaseCredentials } from '../services/realtime'
 import {
   clearLocalRoomCustomization,
@@ -40,13 +44,6 @@ import type {
   TransportMode,
   WebRTCSignalMessage,
 } from '../types/lounge'
-
-function createSessionUserId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  return `user-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`
-}
 
 export interface JoinRoomOptions {
   roomCode?: string
@@ -86,7 +83,9 @@ export function useRoomSession(
   onWebRTCSignalRef: React.RefObject<((signal: WebRTCSignalMessage) => void) | null>,
 ) {
   const barGamesBridgeRef = useRef<BarGamesTransportBridge | null>(null)
-  const [localUserId] = useState<string>(() => createSessionUserId())
+  const [localUserId, setLocalUserId] = useState<string>(() =>
+    getInitialMemberUserId(),
+  )
   const [joined, setJoined] = useState(false)
   const [connected, setConnected] = useState(false)
   const [roomCode, setRoomCode] = useState(CANONICAL_ROOM_CODE)
@@ -121,8 +120,31 @@ export function useRoomSession(
       isMuted: false,
       inVR: false,
       joinedAt: Date.now(),
+      verifiedKeyTag: localUserId.startsWith('u_')
+        ? localUserId.slice(2, 6).toUpperCase()
+        : undefined,
     }
   })
+
+  useEffect(() => {
+    let cancelled = false
+    void ensureMemberIdentity().then((identity) => {
+      if (cancelled) return
+      setLocalUserId((prev) => (prev === identity.userId ? prev : identity.userId))
+      setLocalProfile((prev) =>
+        prev.userId === identity.userId && prev.verifiedKeyTag === identity.keyTag
+          ? prev
+          : {
+              ...prev,
+              userId: identity.userId,
+              verifiedKeyTag: identity.keyTag,
+            },
+      )
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const [participants, setParticipants] = useState<ParticipantProfile[]>([])
   const [presenterState, setPresenterState] = useState<PresenterState>(() =>
@@ -325,6 +347,10 @@ export function useRoomSession(
       }
       remotePosesRef.current.clear()
 
+      const identity = await ensureMemberIdentity()
+      const activeLocalId = identity.userId
+      setLocalUserId(activeLocalId)
+
       const normalizedCode = CANONICAL_ROOM_CODE
       const diskLayout = loadLocalRoomCustomization(normalizedCode)
       const currentMemLayout = roomCustomizationRef.current
@@ -349,7 +375,7 @@ export function useRoomSession(
       })
 
       const initialProfile: ParticipantProfile = {
-        userId: localUserId,
+        userId: activeLocalId,
         displayName: cleanName,
         avatarColor: opts.avatarColor,
         avatarStyle: opts.avatarStyle,
@@ -360,6 +386,7 @@ export function useRoomSession(
         isMuted: opts.isMuted,
         inVR: opts.inVR,
         joinedAt: Date.now(),
+        verifiedKeyTag: identity.keyTag,
       }
 
       setRoomCode(normalizedCode)
@@ -394,7 +421,7 @@ export function useRoomSession(
               ? a.joinedAt - b.joinedAt
               : a.userId.localeCompare(b.userId),
           )
-          const hostId = sorted[0]?.userId ?? localUserId
+          const hostId = sorted[0]?.userId ?? activeLocalId
           const hydrated = sorted.map((p) => ({
             ...p,
             isHost: p.userId === hostId,
@@ -411,7 +438,7 @@ export function useRoomSession(
           }
 
           // Auto-resolve seat collisions on initial join
-          const me = hydrated.find((p) => p.userId === localUserId)
+          const me = hydrated.find((p) => p.userId === activeLocalId)
           if (me) {
             const seatsNow = computedSeatsRef.current
             const isSharedOrRoam =
@@ -419,7 +446,7 @@ export function useRoomSession(
             const occupiedByEarlierPeer =
               !isSharedOrRoam &&
               hydrated.some((other) => {
-                if (other.userId === localUserId) return false
+                if (other.userId === activeLocalId) return false
                 if (other.seatId === FREE_ROAM_SEAT_ID) return false
                 const sameSeat =
                   me.seatId && other.seatId
@@ -439,7 +466,7 @@ export function useRoomSession(
                   hydrated
                     .filter(
                       (other) =>
-                        other.userId !== localUserId &&
+                        other.userId !== activeLocalId &&
                         other.seatId !== FREE_ROAM_SEAT_ID,
                     )
                     .map(
@@ -460,23 +487,33 @@ export function useRoomSession(
                   seatsNow[0]
                 setLocalProfile((prev) => ({
                   ...prev,
+                  displayName: me.displayName,
+                  verifiedKeyTag: me.verifiedKeyTag ?? prev.verifiedKeyTag,
                   seatIndex: freeSeat.index,
                   seatId: freeSeat.id,
-                  isHost: hostId === localUserId,
+                  isHost: hostId === activeLocalId,
                 }))
                 void service.updatePresence({
+                  displayName: me.displayName,
+                  verifiedKeyTag: me.verifiedKeyTag,
                   seatIndex: freeSeat.index,
                   seatId: freeSeat.id,
-                  isHost: hostId === localUserId,
+                  isHost: hostId === activeLocalId,
                 })
                 return
               }
             }
 
             setLocalProfile((prev) =>
-              prev.isHost === (hostId === localUserId)
+              prev.isHost === (hostId === activeLocalId) &&
+              prev.displayName === me.displayName
                 ? prev
-                : { ...prev, isHost: hostId === localUserId },
+                : {
+                    ...prev,
+                    displayName: me.displayName,
+                    verifiedKeyTag: me.verifiedKeyTag ?? prev.verifiedKeyTag,
+                    isHost: hostId === activeLocalId,
+                  },
             )
           }
 
@@ -495,7 +532,7 @@ export function useRoomSession(
           }
         },
         onPoseUpdate: (pose) => {
-          if (pose.userId !== localUserId) {
+          if (pose.userId !== activeLocalId) {
             remotePosesRef.current.set(pose.userId, pose)
           }
         },
@@ -529,7 +566,7 @@ export function useRoomSession(
           const me = localProfileRef.current
           if (
             current.revision > 0 &&
-            (current.activePresenterId === localUserId || me.isHost)
+            (current.activePresenterId === activeLocalId || me.isHost)
           ) {
             // Include live playback progress when answering a late joiner
             const elapsed =
@@ -850,6 +887,7 @@ export function useRoomSession(
         avatarColor: me.avatarColor,
         text,
         createdAt: Date.now(),
+        verifiedKeyTag: me.verifiedKeyTag,
       }
       setMessages((prev) => [...prev.slice(-79), msg])
       serviceRef.current?.broadcastChatMessage(msg)

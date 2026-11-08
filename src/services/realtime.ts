@@ -11,6 +11,24 @@ import type {
   TransportMode,
   WebRTCSignalMessage,
 } from '../types/lounge'
+import {
+  decryptRoomPayload,
+  derivePbkdf2Hex,
+  encryptRoomPayload,
+  getRoomCryptoContext,
+  type EncryptedWirePacket,
+} from './cryptoSession'
+import {
+  disambiguateParticipantRoster,
+  ensureMemberIdentity,
+  signRealtimeEnvelope,
+  verifyRealtimeEnvelope,
+  type SignedEnvelopeFields,
+} from './identityAuth'
+import {
+  getUnlockedRoomMasterKeyHex,
+  isPasscodeGateEnabled,
+} from './passcode'
 
 export interface RealtimeCallbacks {
   onParticipantsChange: (participants: ParticipantProfile[]) => void
@@ -25,19 +43,21 @@ export interface RealtimeCallbacks {
   onConnectionStatus?: (connected: boolean) => void
 }
 
-interface RelayEnvelope {
+export type RelayEnvelopeType =
+  | 'pose-update'
+  | 'presenter-state'
+  | 'room-customization'
+  | 'bar-games-event'
+  | 'request-room-state'
+  | 'chat-message'
+  | 'emoji-reaction'
+  | 'webrtc-signal'
+  | 'presence-announce'
+  | 'presence-leave'
+
+export interface RelayEnvelope extends SignedEnvelopeFields {
   id: string
-  type:
-    | 'pose-update'
-    | 'presenter-state'
-    | 'room-customization'
-    | 'bar-games-event'
-    | 'request-room-state'
-    | 'chat-message'
-    | 'emoji-reaction'
-    | 'webrtc-signal'
-    | 'presence-announce'
-    | 'presence-leave'
+  type: RelayEnvelopeType
   senderId: string
   payload: unknown
 }
@@ -65,12 +85,6 @@ export function hasSupabaseCredentials(): boolean {
   return Boolean(supabaseUrl && supabaseAnonKey)
 }
 
-/**
- * Lightweight Auth settings GET ping once per browser session so Supabase Free Tier
- * registers project/database activity (preventing the 7-day inactivity pause even when
- * VR Lounge only uses Realtime Broadcast & Presence). Works with both `sb_publishable_…`
- * and legacy `anon` keys.
- */
 function pingSupabaseKeepalive(): void {
   if (supabaseKeepaliveSent || !hasSupabaseCredentials() || typeof fetch === 'undefined') return
   supabaseKeepaliveSent = true
@@ -105,24 +119,36 @@ function shortPacketId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+async function resolveActiveMasterKeyHex(roomCode: string): Promise<string | null> {
+  const unlockedKey = getUnlockedRoomMasterKeyHex()
+  if (unlockedKey) return unlockedKey
+  if (!isPasscodeGateEnabled()) {
+    // Only used when passcode gate is explicitly disabled via VITE_LOUNGE_PASSCODE_VERIFIER=off
+    return derivePbkdf2Hex(`OPEN:${roomCode}`, 'vr-lounge-open-fallback-v2', 1000)
+  }
+  return null
+}
+
 /**
- * Multi-tier realtime room transport:
- * 1. Supabase Realtime (Presence + Broadcast) when VITE_SUPABASE_URL & VITE_SUPABASE_ANON_KEY are set.
- * 2. Zero-Config Cloud Relay (MQTT over TLS WebSockets + local BroadcastChannel mirror) out of the box,
- *    allowing Meta Quest 3 headsets and desktop browsers across different networks to connect immediately
- *    with zero account setup (or as an automatic fallback if a Supabase project is paused).
+ * End-to-End Encrypted + ECDSA-Signed Multi-Tier Realtime Room Transport:
+ * - Derives an unguessable 128-bit topic token via `HMAC-SHA256(passcodeKey, roomCode)`.
+ * - Signs every outgoing envelope with the local member's persistent ECDSA P-256 private key.
+ * - Encrypts every packet and retained layout snapshot with AES-256-GCM before transmitting
+ *   over Supabase Realtime Broadcast or MQTT over TLS WebSockets.
  */
 export class RoomRealtimeService {
   readonly roomCode: string
-  readonly localUserId: string
+  localUserId: string
   mode: TransportMode
 
   private callbacks: RealtimeCallbacks
   private currentProfile: ParticipantProfile
+  private masterKeyHex: string | null = null
+  private topicToken = ''
   private supabaseChannel: RealtimeChannel | null = null
   private mqttClient: MqttClient | null = null
-  private mqttTopic: string
-  private mqttRetainedLayoutTopic: string
+  private mqttTopic = ''
+  private mqttRetainedLayoutTopic = ''
   private pendingRetainedLayout: RoomCustomizationState | null = null
   private localChannel: BroadcastChannel | null = null
   private heartbeatTimer: number | null = null
@@ -143,12 +169,36 @@ export class RoomRealtimeService {
     this.currentProfile = profile
     this.callbacks = callbacks
     this.mode = hasSupabaseCredentials() ? 'supabase' : 'cloud-relay'
-    this.mqttTopic = `vrlounge/v1/${encodeURIComponent(this.roomCode)}/bus`
-    this.mqttRetainedLayoutTopic = `vrlounge/v1/${encodeURIComponent(this.roomCode)}/retained-layout`
   }
 
   async connect(): Promise<void> {
     if (this.destroyed) return
+
+    // 1. Ensure cryptographic ECDSA P-256 identity and bind localUserId
+    const identity = await ensureMemberIdentity()
+    if (this.destroyed) return
+    this.localUserId = identity.userId
+    this.currentProfile = {
+      ...this.currentProfile,
+      userId: identity.userId,
+      verifiedKeyTag: identity.keyTag,
+    }
+
+    // 2. Ensure passcode-derived 256-bit E2EE master key is available
+    const masterKeyHex = await resolveActiveMasterKeyHex(this.roomCode)
+    if (!masterKeyHex || this.destroyed) {
+      this.callbacks.onConnectionStatus?.(false)
+      return
+    }
+    this.masterKeyHex = masterKeyHex
+
+    // 3. Derive unguessable HMAC-SHA256 channel topic token & AES-256-GCM key
+    const cryptoCtx = await getRoomCryptoContext(masterKeyHex, this.roomCode)
+    if (this.destroyed) return
+    this.topicToken = cryptoCtx.topicToken
+    this.mqttTopic = `vrlounge/v2/enc/${this.topicToken}/bus`
+    this.mqttRetainedLayoutTopic = `vrlounge/v2/enc/${this.topicToken}/retained-layout`
+
     if (this.mode === 'supabase') {
       void this.connectMqttBroker(0, true)
       await this.connectSupabase()
@@ -157,9 +207,41 @@ export class RoomRealtimeService {
     }
   }
 
+  private async buildEncryptedPacket(
+    type: RelayEnvelopeType,
+    payload: unknown,
+  ): Promise<{ envelope: RelayEnvelope; wirePacket: EncryptedWirePacket } | null> {
+    if (!this.masterKeyHex) return null
+    const signed = await signRealtimeEnvelope(this.roomCode, {
+      id: shortPacketId(),
+      type,
+      senderId: this.localUserId,
+      payload,
+    })
+    const wirePacket = await encryptRoomPayload(
+      this.masterKeyHex,
+      this.roomCode,
+      signed,
+    )
+    return { envelope: signed, wirePacket }
+  }
+
+  private async decodeAndVerifyPacket(rawPacket: unknown): Promise<RelayEnvelope | null> {
+    if (!this.masterKeyHex) return null
+    const decrypted = await decryptRoomPayload<RelayEnvelope>(
+      this.masterKeyHex,
+      this.roomCode,
+      rawPacket,
+    )
+    if (!decrypted) return null
+    const verified = await verifyRealtimeEnvelope(this.roomCode, decrypted)
+    if (!verified) return null
+    return decrypted
+  }
+
   private async connectSupabase(): Promise<void> {
     const client = getSupabaseClient()
-    if (!client) {
+    if (!client || !this.topicToken) {
       this.mode = 'cloud-relay'
       this.connectCloudRelayAndLocal()
       return
@@ -167,7 +249,7 @@ export class RoomRealtimeService {
 
     pingSupabaseKeepalive()
 
-    const channelName = `vr-lounge:${this.roomCode}`
+    const channelName = `vr-lounge-enc:${this.topicToken}`
     const channel = client.channel(channelName, {
       config: {
         presence: { key: this.localUserId },
@@ -175,77 +257,21 @@ export class RoomRealtimeService {
       },
     })
 
-    channel
-      .on('presence', { event: 'sync' }, () => {
-        if (this.destroyed) return
-        const state = channel.presenceState<ParticipantProfile>()
-        const participants: ParticipantProfile[] = []
-        for (const entries of Object.values(state)) {
-          if (entries && entries.length > 0) {
-            const latest = entries[entries.length - 1]
-            if (latest && latest.userId) {
-              participants.push({
-                userId: latest.userId,
-                displayName: latest.displayName,
-                avatarColor: latest.avatarColor,
-                avatarStyle: latest.avatarStyle,
-                avatarCustomization: latest.avatarCustomization,
-                seatIndex: latest.seatIndex,
-                seatId: latest.seatId,
-                isHost: latest.isHost,
-                isMuted: latest.isMuted,
-                inVR: latest.inVR,
-                joinedAt: latest.joinedAt,
-              })
-            }
-          }
-        }
-        participants.sort((a, b) => a.joinedAt - b.joinedAt)
-        this.callbacks.onParticipantsChange(participants)
-      })
-      .on('broadcast', { event: 'pose-update' }, ({ payload }) => {
-        if (!this.destroyed && payload) {
-          this.callbacks.onPoseUpdate(payload as AvatarPose6DoF)
+    // Seed local presence and start periodic signed presence heartbeat
+    this.presenceMap.set(this.localUserId, {
+      profile: this.currentProfile,
+      lastSeen: Date.now(),
+    })
+    this.emitPresenceRoster()
+
+    channel.on('broadcast', { event: 'enc-envelope' }, ({ payload }) => {
+      if (this.destroyed || !payload) return
+      void this.decodeAndVerifyPacket(payload).then((env) => {
+        if (env && !this.destroyed) {
+          this.handleRelayEnvelope(env)
         }
       })
-      .on('broadcast', { event: 'presenter-state' }, ({ payload }) => {
-        if (!this.destroyed && payload) {
-          this.callbacks.onPresenterState(payload as PresenterState)
-        }
-      })
-      .on('broadcast', { event: 'room-customization' }, ({ payload }) => {
-        if (!this.destroyed && payload) {
-          this.callbacks.onRoomCustomization?.(payload as RoomCustomizationState)
-        }
-      })
-      .on('broadcast', { event: 'bar-games-event' }, ({ payload }) => {
-        if (!this.destroyed && payload) {
-          this.callbacks.onBarGamesEvent?.(payload as BarGamesWireEvent)
-        }
-      })
-      .on('broadcast', { event: 'request-room-state' }, ({ payload }) => {
-        if (!this.destroyed && payload && typeof payload.requesterId === 'string') {
-          this.callbacks.onRoomStateRequest(payload.requesterId)
-        }
-      })
-      .on('broadcast', { event: 'chat-message' }, ({ payload }) => {
-        if (!this.destroyed && payload) {
-          this.callbacks.onChatMessage(payload as ChatMessage)
-        }
-      })
-      .on('broadcast', { event: 'emoji-reaction' }, ({ payload }) => {
-        if (!this.destroyed && payload) {
-          this.callbacks.onReaction(payload as FloatingReaction)
-        }
-      })
-      .on('broadcast', { event: 'webrtc-signal' }, ({ payload }) => {
-        if (!this.destroyed && payload) {
-          const signal = payload as WebRTCSignalMessage
-          if (signal.toUserId === this.localUserId) {
-            this.callbacks.onWebRTCSignal(signal)
-          }
-        }
-      })
+    })
 
     this.supabaseChannel = channel
     let subscribedOnce = false
@@ -260,15 +286,26 @@ export class RoomRealtimeService {
           this.supabaseReconnectTimer = null
         }
         this.callbacks.onConnectionStatus?.(true)
-        await channel.track(this.currentProfile)
+        this.publishEncrypted('presence-announce', this.currentProfile)
         this.requestRoomState()
+
+        if (this.heartbeatTimer === null) {
+          this.heartbeatTimer = window.setInterval(() => {
+            if (this.destroyed) return
+            this.presenceMap.set(this.localUserId, {
+              profile: this.currentProfile,
+              lastSeen: Date.now(),
+            })
+            this.publishEncrypted('presence-announce', this.currentProfile)
+            this.emitPresenceRoster()
+          }, PRESENCE_HEARTBEAT_MS)
+        }
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
         this.supabaseFailCount += 1
         if (
           (!subscribedOnce || this.supabaseFailCount >= 2) &&
           this.supabaseChannel === channel
         ) {
-          // Automatic failover to Cloud Relay if Supabase is unreachable or drops repeatedly
           this.supabaseChannel = null
           this.mode = 'cloud-relay'
           void client.removeChannel(channel).catch(() => undefined)
@@ -294,49 +331,59 @@ export class RoomRealtimeService {
   }
 
   private connectCloudRelayAndLocal(): void {
-    // Seed own presence immediately
     this.presenceMap.set(this.localUserId, {
       profile: this.currentProfile,
       lastSeen: Date.now(),
     })
     this.emitPresenceRoster()
 
-    // 1. Same-device BroadcastChannel mirror for instant 0ms multi-tab sync
-    if (typeof BroadcastChannel !== 'undefined') {
-      const bc = new BroadcastChannel(`vr-lounge-bc:${this.roomCode}`)
-      bc.onmessage = (ev: MessageEvent<RelayEnvelope>) => {
+    // 1. Same-device BroadcastChannel mirror on HMAC topic
+    if (typeof BroadcastChannel !== 'undefined' && this.topicToken) {
+      if (this.localChannel) {
+        this.localChannel.close()
+      }
+      const bc = new BroadcastChannel(`vr-lounge-bc-enc:${this.topicToken}`)
+      bc.onmessage = (ev: MessageEvent<EncryptedWirePacket>) => {
         if (!this.destroyed && ev.data) {
-          this.handleRelayEnvelope(ev.data)
+          void this.decodeAndVerifyPacket(ev.data).then((env) => {
+            if (env && !this.destroyed) {
+              this.handleRelayEnvelope(env)
+            }
+          })
         }
       }
       this.localChannel = bc
     }
 
-    // 2. Global TLS WebSocket Relay (MQTT over WSS) for cross-network headsets & friends
+    // 2. Global TLS WebSocket Relay (MQTT over WSS) on unguessable HMAC topic
     void this.connectMqttBroker(0, false)
 
-    // Announce immediately + periodic heartbeat & stale-peer pruning
-    this.publishRelay('presence-announce', this.currentProfile)
+    this.publishEncrypted('presence-announce', this.currentProfile)
     this.requestRoomState()
 
+    if (this.heartbeatTimer !== null) {
+      window.clearInterval(this.heartbeatTimer)
+    }
     this.heartbeatTimer = window.setInterval(() => {
       if (this.destroyed) return
       this.presenceMap.set(this.localUserId, {
         profile: this.currentProfile,
         lastSeen: Date.now(),
       })
-      this.publishRelay('presence-announce', this.currentProfile)
+      this.publishEncrypted('presence-announce', this.currentProfile)
       this.emitPresenceRoster()
     }, PRESENCE_HEARTBEAT_MS)
 
-    window.addEventListener('beforeunload', this.handleWindowUnload)
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', this.handleWindowUnload)
+    }
   }
 
   private async connectMqttBroker(
     brokerIndex: number,
     retainedLayoutOnly = false,
   ): Promise<void> {
-    if (this.destroyed) return
+    if (this.destroyed || !this.topicToken || !this.masterKeyHex) return
     if (this.mqttClient) {
       try {
         this.mqttClient.end(true)
@@ -356,25 +403,23 @@ export class RoomRealtimeService {
     }
     if (this.destroyed) return
 
-    const willEnvelope: RelayEnvelope = {
-      id: shortPacketId(),
-      type: 'presence-leave',
-      senderId: this.localUserId,
-      payload: { userId: this.localUserId },
-    }
+    const willBuilt = await this.buildEncryptedPacket('presence-leave', {
+      userId: this.localUserId,
+    })
+    if (this.destroyed) return
 
     const client = mqttConnect(url, {
-      clientId: `vrl-${this.localUserId.slice(0, 12)}-${Math.random().toString(36).slice(2, 6)}`,
+      clientId: `vrl-${this.localUserId.slice(0, 10)}-${Math.random().toString(36).slice(2, 6)}`,
       clean: true,
       keepalive: 25,
       connectTimeout: 7000,
       reconnectPeriod: 2500,
-      ...(retainedLayoutOnly
+      ...(retainedLayoutOnly || !willBuilt
         ? {}
         : {
             will: {
               topic: this.mqttTopic,
-              payload: JSON.stringify(willEnvelope),
+              payload: JSON.stringify(willBuilt.wirePacket),
               qos: 0,
               retain: false,
             },
@@ -390,15 +435,10 @@ export class RoomRealtimeService {
       }
       connectedOnce = true
 
-      // Subscribe to the retained room layout snapshot topic so returning
-      // users receive the latest layout even when 0 peers are online
+      // Subscribe to the encrypted retained room layout snapshot topic
       client.subscribe(this.mqttRetainedLayoutTopic, { qos: 1 }, () => {
         if (!this.destroyed && this.pendingRetainedLayout) {
-          client.publish(
-            this.mqttRetainedLayoutTopic,
-            JSON.stringify(this.pendingRetainedLayout),
-            { qos: 1, retain: true },
-          )
+          void this.publishEncryptedRetainedLayout(this.pendingRetainedLayout)
         }
       })
 
@@ -406,7 +446,7 @@ export class RoomRealtimeService {
         client.subscribe(this.mqttTopic, { qos: 0 }, (err) => {
           if (!err && !this.destroyed) {
             this.callbacks.onConnectionStatus?.(true)
-            this.publishRelay('presence-announce', this.currentProfile)
+            this.publishEncrypted('presence-announce', this.currentProfile)
             this.requestRoomState()
           }
         })
@@ -416,19 +456,19 @@ export class RoomRealtimeService {
     client.on('message', (topic, messageBuffer) => {
       if (this.destroyed) return
       try {
-        if (topic === this.mqttRetainedLayoutTopic) {
-          const retainedState = JSON.parse(
-            messageBuffer.toString(),
-          ) as RoomCustomizationState
-          if (retainedState && typeof retainedState === 'object') {
-            this.callbacks.onRoomCustomization?.(retainedState)
+        const parsedWire = JSON.parse(messageBuffer.toString()) as unknown
+        void this.decodeAndVerifyPacket(parsedWire).then((env) => {
+          if (!env || this.destroyed) return
+          if (topic === this.mqttRetainedLayoutTopic) {
+            if (env.type === 'room-customization' && env.payload && typeof env.payload === 'object') {
+              this.callbacks.onRoomCustomization?.(env.payload as RoomCustomizationState)
+            }
+            return
           }
-          return
-        }
-        const parsed = JSON.parse(messageBuffer.toString()) as RelayEnvelope
-        this.handleRelayEnvelope(parsed)
+          this.handleRelayEnvelope(env)
+        })
       } catch {
-        // Ignore malformed packets
+        // Ignore malformed or unencrypted packets
       }
     })
 
@@ -447,6 +487,17 @@ export class RoomRealtimeService {
     })
 
     this.mqttClient = client
+  }
+
+  private async publishEncryptedRetainedLayout(state: RoomCustomizationState): Promise<void> {
+    if (this.destroyed || !this.mqttClient?.connected) return
+    const built = await this.buildEncryptedPacket('room-customization', state)
+    if (!built || this.destroyed || !this.mqttClient?.connected) return
+    this.mqttClient.publish(
+      this.mqttRetainedLayoutTopic,
+      JSON.stringify(built.wirePacket),
+      { qos: 1, retain: true },
+    )
   }
 
   private markPacketSeen(id: string): boolean {
@@ -470,19 +521,23 @@ export class RoomRealtimeService {
     switch (env.type) {
       case 'presence-announce': {
         const profile = env.payload as ParticipantProfile
-        if (!profile?.userId) return
-        const isBrandNewPeer = !this.presenceMap.has(profile.userId)
-        this.presenceMap.set(profile.userId, {
-          profile,
+        if (!profile?.userId || profile.userId !== env.senderId) return
+        const verifiedProfile: ParticipantProfile = {
+          ...profile,
+          userId: env.senderId,
+          verifiedKeyTag: env.senderId.slice(2, 6).toUpperCase(),
+        }
+        const isBrandNewPeer = !this.presenceMap.has(verifiedProfile.userId)
+        this.presenceMap.set(verifiedProfile.userId, {
+          profile: verifiedProfile,
           lastSeen: Date.now(),
         })
         this.emitPresenceRoster()
 
-        // Reply immediately so newly joined peers see us in <200ms
         const now = Date.now()
         if (isBrandNewPeer && now - this.lastAnnounceReplyAt > 250) {
           this.lastAnnounceReplyAt = now
-          this.publishRelay('presence-announce', this.currentProfile)
+          this.publishEncrypted('presence-announce', this.currentProfile)
         }
         break
       }
@@ -492,9 +547,13 @@ export class RoomRealtimeService {
         }
         break
       }
-      case 'pose-update':
-        this.callbacks.onPoseUpdate(env.payload as AvatarPose6DoF)
+      case 'pose-update': {
+        const pose = env.payload as AvatarPose6DoF
+        if (pose && pose.userId === env.senderId) {
+          this.callbacks.onPoseUpdate(pose)
+        }
         break
+      }
       case 'presenter-state':
         this.callbacks.onPresenterState(env.payload as PresenterState)
         break
@@ -506,18 +565,33 @@ export class RoomRealtimeService {
         break
       case 'request-room-state': {
         const req = env.payload as { requesterId: string }
-        if (req?.requesterId) this.callbacks.onRoomStateRequest(req.requesterId)
+        if (req?.requesterId === env.senderId) {
+          this.callbacks.onRoomStateRequest(req.requesterId)
+        }
         break
       }
-      case 'chat-message':
-        this.callbacks.onChatMessage(env.payload as ChatMessage)
+      case 'chat-message': {
+        const msg = env.payload as ChatMessage
+        if (!msg || msg.userId !== env.senderId) return
+        const peerRecord = this.presenceMap.get(env.senderId)
+        const verifiedChat: ChatMessage = {
+          ...msg,
+          userId: env.senderId,
+          displayName: peerRecord?.profile.displayName ?? msg.displayName,
+          verifiedKeyTag: env.senderId.slice(2, 6).toUpperCase(),
+        }
+        this.callbacks.onChatMessage(verifiedChat)
         break
-      case 'emoji-reaction':
-        this.callbacks.onReaction(env.payload as FloatingReaction)
+      }
+      case 'emoji-reaction': {
+        const reaction = env.payload as FloatingReaction
+        if (!reaction || reaction.userId !== env.senderId) return
+        this.callbacks.onReaction(reaction)
         break
+      }
       case 'webrtc-signal': {
         const signal = env.payload as WebRTCSignalMessage
-        if (signal?.toUserId === this.localUserId) {
+        if (signal?.fromUserId === env.senderId && signal?.toUserId === this.localUserId) {
           this.callbacks.onWebRTCSignal(signal)
         }
         break
@@ -540,164 +614,129 @@ export class RoomRealtimeService {
     if (!active.some((p) => p.userId === this.localUserId)) {
       active.push(this.currentProfile)
     }
-    active.sort((a, b) => a.joinedAt - b.joinedAt)
-    this.callbacks.onParticipantsChange(active)
+
+    // Disambiguate display names across distinct cryptographic public keys
+    const disambiguated = disambiguateParticipantRoster(active)
+    for (const p of disambiguated) {
+      if (p.userId === this.localUserId) {
+        this.currentProfile = {
+          ...this.currentProfile,
+          displayName: p.displayName,
+          verifiedKeyTag: p.verifiedKeyTag,
+        }
+      } else {
+        const rec = this.presenceMap.get(p.userId)
+        if (rec) {
+          rec.profile = p
+        }
+      }
+    }
+    this.callbacks.onParticipantsChange(disambiguated)
   }
 
-  private publishRelay(type: RelayEnvelope['type'], payload: unknown): void {
-    if (this.destroyed) return
-    const envelope: RelayEnvelope = {
-      id: shortPacketId(),
-      type,
-      senderId: this.localUserId,
-      payload,
-    }
+  private publishEncrypted(type: RelayEnvelopeType, payload: unknown): void {
+    if (this.destroyed || !this.masterKeyHex) return
+    void this.buildEncryptedPacket(type, payload).then((built) => {
+      if (!built || this.destroyed) return
+      const { wirePacket } = built
 
-    if (this.mqttClient?.connected) {
-      this.mqttClient.publish(this.mqttTopic, JSON.stringify(envelope), { qos: 0 })
-    }
+      if (this.supabaseChannel && this.mode === 'supabase') {
+        void this.supabaseChannel.send({
+          type: 'broadcast',
+          event: 'enc-envelope',
+          payload: wirePacket,
+        })
+      }
 
-    // Always mirror on local BroadcastChannel (or poses only when MQTT isn't connected)
-    if (this.localChannel && (type !== 'pose-update' || !this.mqttClient?.connected)) {
-      this.localChannel.postMessage(envelope)
-    }
+      if (this.mqttClient?.connected && this.mode !== 'supabase') {
+        this.mqttClient.publish(this.mqttTopic, JSON.stringify(wirePacket), { qos: 0 })
+      }
+
+      if (
+        this.localChannel &&
+        (type !== 'pose-update' || (!this.mqttClient?.connected && !this.supabaseChannel))
+      ) {
+        this.localChannel.postMessage(wirePacket)
+      }
+    })
   }
 
   private handleWindowUnload = (): void => {
-    this.publishRelay('presence-leave', { userId: this.localUserId })
+    this.publishEncrypted('presence-leave', { userId: this.localUserId })
   }
 
   async updatePresence(patch: Partial<ParticipantProfile>): Promise<void> {
-    this.currentProfile = { ...this.currentProfile, ...patch }
-    if (this.destroyed) return
-    if (this.supabaseChannel) {
-      await this.supabaseChannel.track(this.currentProfile)
-    } else {
-      this.presenceMap.set(this.localUserId, {
-        profile: this.currentProfile,
-        lastSeen: Date.now(),
-      })
-      this.emitPresenceRoster()
-      this.publishRelay('presence-announce', this.currentProfile)
+    this.currentProfile = {
+      ...this.currentProfile,
+      ...patch,
+      userId: this.localUserId,
     }
+    if (this.destroyed) return
+    this.presenceMap.set(this.localUserId, {
+      profile: this.currentProfile,
+      lastSeen: Date.now(),
+    })
+    this.emitPresenceRoster()
+    this.publishEncrypted('presence-announce', this.currentProfile)
   }
 
   broadcastPose(pose: AvatarPose6DoF): void {
     if (this.destroyed) return
-    if (this.supabaseChannel) {
-      void this.supabaseChannel.send({
-        type: 'broadcast',
-        event: 'pose-update',
-        payload: pose,
-      })
-    } else {
-      this.publishRelay('pose-update', pose)
-    }
+    this.publishEncrypted('pose-update', {
+      ...pose,
+      userId: this.localUserId,
+    })
   }
 
   broadcastPresenterState(state: PresenterState): void {
     if (this.destroyed) return
-    if (this.supabaseChannel) {
-      void this.supabaseChannel.send({
-        type: 'broadcast',
-        event: 'presenter-state',
-        payload: state,
-      })
-    } else {
-      this.publishRelay('presenter-state', state)
-    }
+    this.publishEncrypted('presenter-state', state)
   }
 
   broadcastRoomCustomization(state: RoomCustomizationState): void {
     if (this.destroyed) return
     this.pendingRetainedLayout = state
-    if (this.mqttClient?.connected) {
-      this.mqttClient.publish(
-        this.mqttRetainedLayoutTopic,
-        JSON.stringify(state),
-        { qos: 1, retain: true },
-      )
-    }
-    if (this.supabaseChannel) {
-      void this.supabaseChannel.send({
-        type: 'broadcast',
-        event: 'room-customization',
-        payload: state,
-      })
-    } else {
-      this.publishRelay('room-customization', state)
-    }
+    void this.publishEncryptedRetainedLayout(state)
+    this.publishEncrypted('room-customization', state)
   }
 
   broadcastBarGamesEvent(event: BarGamesWireEvent): void {
     if (this.destroyed) return
-    if (this.supabaseChannel) {
-      void this.supabaseChannel.send({
-        type: 'broadcast',
-        event: 'bar-games-event',
-        payload: event,
-      })
-    } else {
-      this.publishRelay('bar-games-event', event)
-    }
+    this.publishEncrypted('bar-games-event', event)
   }
 
   requestRoomState(): void {
     if (this.destroyed) return
-    const payload = { requesterId: this.localUserId }
-    if (this.supabaseChannel) {
-      void this.supabaseChannel.send({
-        type: 'broadcast',
-        event: 'request-room-state',
-        payload,
-      })
-    } else {
-      this.publishRelay('request-room-state', payload)
-    }
+    this.publishEncrypted('request-room-state', { requesterId: this.localUserId })
   }
 
   broadcastChatMessage(message: ChatMessage): void {
     if (this.destroyed) return
-    if (this.supabaseChannel) {
-      void this.supabaseChannel.send({
-        type: 'broadcast',
-        event: 'chat-message',
-        payload: message,
-      })
-    } else {
-      this.publishRelay('chat-message', message)
-    }
+    this.publishEncrypted('chat-message', {
+      ...message,
+      userId: this.localUserId,
+    })
   }
 
   broadcastReaction(reaction: FloatingReaction): void {
     if (this.destroyed) return
-    if (this.supabaseChannel) {
-      void this.supabaseChannel.send({
-        type: 'broadcast',
-        event: 'emoji-reaction',
-        payload: reaction,
-      })
-    } else {
-      this.publishRelay('emoji-reaction', reaction)
-    }
+    this.publishEncrypted('emoji-reaction', {
+      ...reaction,
+      userId: this.localUserId,
+    })
   }
 
   sendWebRTCSignal(signal: WebRTCSignalMessage): void {
     if (this.destroyed) return
-    if (this.supabaseChannel) {
-      void this.supabaseChannel.send({
-        type: 'broadcast',
-        event: 'webrtc-signal',
-        payload: signal,
-      })
-    } else {
-      this.publishRelay('webrtc-signal', signal)
-    }
+    this.publishEncrypted('webrtc-signal', {
+      ...signal,
+      fromUserId: this.localUserId,
+    })
   }
 
   async disconnect(): Promise<void> {
     if (this.destroyed) return
-    this.publishRelay('presence-leave', { userId: this.localUserId })
+    this.publishEncrypted('presence-leave', { userId: this.localUserId })
     this.destroyed = true
 
     if (this.heartbeatTimer !== null) {
@@ -708,7 +747,9 @@ export class RoomRealtimeService {
       window.clearTimeout(this.supabaseReconnectTimer)
       this.supabaseReconnectTimer = null
     }
-    window.removeEventListener('beforeunload', this.handleWindowUnload)
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('beforeunload', this.handleWindowUnload)
+    }
 
     if (this.supabaseChannel) {
       const client = getSupabaseClient()
