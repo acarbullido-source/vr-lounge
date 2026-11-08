@@ -189,6 +189,9 @@ export function recordClubhouseAchievement(
     checkoutScore?: number
     hitBullseye?: boolean
     puttingStreak?: number
+    arcadeScore?: number
+    shuffleboardWin?: boolean
+    cornholeWin?: boolean
     completedMatch?: CompletedMatchRecord | null
   },
 ): ClubhousePersistentState {
@@ -210,6 +213,9 @@ export function recordClubhouseAchievement(
       highestCheckout: 0,
       longestPuttingStreak: 0,
       bullseyes: 0,
+      shuffleboardWins: 0,
+      cornholeWins: 0,
+      arcadeHighScore: 0,
       updatedAt: Date.now(),
     }
   }
@@ -230,6 +236,18 @@ export function recordClubhouseAchievement(
       entry.longestPuttingStreak = opts.puttingStreak
       mutated = true
     }
+    if (opts.arcadeScore && opts.arcadeScore > (entry.arcadeHighScore ?? 0)) {
+      entry.arcadeHighScore = opts.arcadeScore
+      mutated = true
+    }
+    if (opts.shuffleboardWin) {
+      entry.shuffleboardWins = (entry.shuffleboardWins ?? 0) + 1
+      mutated = true
+    }
+    if (opts.cornholeWin) {
+      entry.cornholeWins = (entry.cornholeWins ?? 0) + 1
+      mutated = true
+    }
     if (mutated) {
       entry.updatedAt = Date.now()
       playerStats[entry.key] = entry
@@ -240,15 +258,28 @@ export function recordClubhouseAchievement(
   if (opts.completedMatch) {
     const m = opts.completedMatch
     const isDarts = m.game === 'darts-501' || m.game === 'darts-cricket'
+    const isPutting = m.game === 'putting-puttoff' || m.game === 'putting-streak'
     for (const part of m.participants) {
       const entry = ensureEntry(part.displayName)
       const won = part.userId === m.winnerId
       if (isDarts) {
         if (won) entry.dartWins += 1
         else if (m.participants.length > 1) entry.dartLosses += 1
-      } else {
+      } else if (isPutting) {
         if (won) entry.puttingWins += 1
         else if (m.participants.length > 1) entry.puttingLosses += 1
+      } else if (m.game === 'shuffleboard') {
+        if (won) entry.shuffleboardWins = (entry.shuffleboardWins ?? 0) + 1
+      } else if (m.game === 'cornhole') {
+        if (won) entry.cornholeWins = (entry.cornholeWins ?? 0) + 1
+      } else if (
+        m.game === 'arcade-hoops' ||
+        m.game === 'arcade-skeeball' ||
+        m.game === 'arcade-retro'
+      ) {
+        if (part.finalScore > (entry.arcadeHighScore ?? 0)) {
+          entry.arcadeHighScore = part.finalScore
+        }
       }
       entry.updatedAt = Date.now()
       playerStats[entry.key] = entry

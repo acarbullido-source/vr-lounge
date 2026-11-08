@@ -6,6 +6,7 @@ import {
   OUTDOOR_SKY_PRESETS,
   type ExpansionWingLayout,
 } from '../../constants/expansionRooms'
+import type { CornholeBagRecord, CornholeState } from '../../types/barGames'
 import type {
   ComputedSeat,
   ExpansionWingSyncedState,
@@ -13,6 +14,7 @@ import type {
   ParticipantProfile,
   RoomLightingConfig,
 } from '../../types/lounge'
+import { DeckCornhole3D } from './DeckCornhole3D'
 
 const noopRaycast = () => null
 
@@ -315,6 +317,10 @@ export interface OutdoorLakeDeck3DProps {
   computedSeats: ComputedSeat[]
   localSeatId?: string
   participants: ParticipantProfile[]
+  cornholeState: CornholeState
+  localDisplayName: string
+  onRecordCornholeThrow: (bag: CornholeBagRecord) => void
+  onResetCornhole: () => void
   onSelectSeat: (seatId: string) => void
   onTeleportToFloor?: (point: [number, number, number]) => void
   onUpdateWingState: (patch: Partial<ExpansionWingSyncedState>) => void
@@ -346,6 +352,10 @@ export function OutdoorLakeDeck3D({
   computedSeats,
   localSeatId,
   participants,
+  cornholeState,
+  localDisplayName,
+  onRecordCornholeThrow,
+  onResetCornhole,
   onSelectSeat,
   onTeleportToFloor,
   onUpdateWingState,
@@ -426,7 +436,10 @@ export function OutdoorLakeDeck3D({
   })
 
   const deckSeats = useMemo(
-    () => computedSeats.filter((s) => s.roomWing === 'outdoor-deck'),
+    () =>
+      computedSeats.filter(
+        (s) => s.roomWing === 'outdoor-deck' && s.stationKind === 'seat',
+      ),
     [computedSeats],
   )
 
@@ -860,6 +873,16 @@ export function OutdoorLakeDeck3D({
           onSelectSeat={onSelectSeat}
         />
       ))}
+
+      {/* Playable Deck Cornhole Pitch (2 Angled Boards + Synced Scoreboard Post) */}
+      <DeckCornhole3D
+        hallStartZ={z0}
+        state={cornholeState}
+        localDisplayName={localDisplayName}
+        onRecordThrow={onRecordCornholeThrow}
+        onReset={onResetCornhole}
+        onSnapToStation={() => onSelectSeat('wing:deck-cornhole')}
+      />
 
       {/* =================================================================== */}
       {/* PANORAMIC ALPINE LAKE, WATERFALL, CHALET, MOUNTAINS & SKY BACKDROP  */}

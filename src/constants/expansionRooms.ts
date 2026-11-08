@@ -4,6 +4,7 @@ import type {
   ExpansionWingSyncedState,
   LoungeWingId,
   OutdoorSkyPresetId,
+  SportsLeagueId,
 } from '../types/lounge'
 
 export const HALLWAY_ARCH_HALF_WIDTH = 1.55
@@ -24,6 +25,7 @@ export const DEFAULT_EXPANSION_WING_STATE: ExpansionWingSyncedState = {
   commandWeatherCityId: 'nyc',
   commandCustomCityQuery: '',
   commandNewsCategory: 'top',
+  commandSportsLeague: 'nfl',
 }
 
 export function resolveExpansionWingState(
@@ -76,6 +78,15 @@ export function resolveExpansionWingState(
     raw.commandNewsCategory === 'top'
       ? raw.commandNewsCategory
       : 'top'
+  const commandSportsLeague: SportsLeagueId =
+    raw.commandSportsLeague === 'nba' ||
+    raw.commandSportsLeague === 'mlb' ||
+    raw.commandSportsLeague === 'nhl' ||
+    raw.commandSportsLeague === 'mls' ||
+    raw.commandSportsLeague === 'ncaaf' ||
+    raw.commandSportsLeague === 'nfl'
+      ? raw.commandSportsLeague
+      : 'nfl'
 
   return {
     boardroomScreenMode,
@@ -89,6 +100,7 @@ export function resolveExpansionWingState(
     commandWeatherCityId,
     commandCustomCityQuery,
     commandNewsCategory,
+    commandSportsLeague,
   }
 }
 
@@ -311,6 +323,7 @@ export interface ExpansionWingLayout {
   boardroomCenter: [number, number, number]
   libraryCenter: [number, number, number]
   commandCenter: [number, number, number]
+  gameRoomCenter: [number, number, number]
   outdoorDeckCenter: [number, number, number]
   destinations: ExpansionRoomDestination[]
   wingSeats: Array<Omit<ComputedSeat, 'index'>>
@@ -323,6 +336,7 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
   const boardZ = Number((z0 + 5.4).toFixed(2))
   const libZ = Number((z0 + 5.4).toFixed(2))
   const cmdZ = Number((z0 + 15.1).toFixed(2))
+  const gameRoomZ = Number((z0 + 15.1).toFixed(2))
   const deckZ = Number((z0 + 25.0).toFixed(2))
 
   const destinations: ExpansionRoomDestination[] = [
@@ -331,7 +345,7 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
       emoji: '🎬',
       shortLabel: 'Main Lounge',
       title: 'Main Cinema & Hangout Lounge',
-      subtitle: 'Giant Screen · YouTube TV · Bar Games & Tabletop',
+      subtitle: 'Giant Screen · Back-Wall Mirrors · Shuffleboard, Darts & Putting',
       accentColor: '#E5A93C',
       spawnPosition: [0, 0, 0.85],
       spawnYaw: 0,
@@ -342,7 +356,7 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
       emoji: '🏛',
       shortLabel: 'Hallway',
       title: 'Grand Clubhouse Gallery Hallway',
-      subtitle: 'Central corridor connecting all private rooms & deck',
+      subtitle: 'Central corridor connecting all private rooms, Game Room & deck',
       accentColor: '#94A3B8',
       spawnPosition: [0, 0, Number((z0 + 2.4).toFixed(2))],
       spawnYaw: Math.PI,
@@ -364,7 +378,7 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
       emoji: '🔥',
       shortLabel: 'Library',
       title: 'Cozy Library & Crackling Fireplace',
-      subtitle: 'Floor-to-Ceiling Bookshelves · Stone Hearth & Reading Chairs',
+      subtitle: 'Quiet Audio Isolation Zone · Stone Hearth & Reading Chairs',
       accentColor: '#EA580C',
       spawnPosition: [3.2, 0, libZ],
       spawnYaw: -Math.PI / 2,
@@ -375,18 +389,29 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
       emoji: '🛰',
       shortLabel: 'Command Ops',
       title: 'Command & Control Center',
-      subtitle: 'Aux Viewing Screen · Live Weather Radar · Breaking News & Markets',
+      subtitle: 'Aux Screen · Live US Sports Scoreboard · Weather & Breaking News',
       accentColor: '#38BDF8',
       spawnPosition: [-7.35, 0, cmdZ],
       spawnYaw: Math.PI / 2,
       defaultSeatId: 'wing:command-seat-1',
     },
     {
+      id: 'game-room',
+      emoji: '🕹',
+      shortLabel: 'Game Room',
+      title: 'The Game Room & Holotable Sanctum',
+      subtitle: 'Wall Stream Mirror · Neon Arcade Perimeter · 3D Tactical Holotable',
+      accentColor: '#A855F7',
+      spawnPosition: [3.25, 0, gameRoomZ],
+      spawnYaw: -Math.PI / 2,
+      defaultSeatId: 'wing:gameroom-holo-1',
+    },
+    {
       id: 'outdoor-deck',
       emoji: '🏔',
       shortLabel: 'Lake Deck',
       title: 'Outdoor Lake & Mountain Observation Deck',
-      subtitle: 'Panoramic Alpine Lake · Snow Peaks · Firepit & Sunset/Aurora Sky',
+      subtitle: 'Panoramic Alpine Lake · Deck Cornhole · Firepit & Aurora Sky',
       accentColor: '#34D399',
       spawnPosition: [0, 0, Number((z0 + 22.4).toFixed(2))],
       spawnYaw: Math.PI,
@@ -524,7 +549,53 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
   })
 
   // -------------------------------------------------------------------------
-  // 4. OUTDOOR LAKE & MOUNTAIN DECK SEATS (6 Adirondack & Firepit Lounge Chairs)
+  // 4. THE GAME ROOM: TACTICAL HOLOTABLE SANCTUM SEATS (6 seats around [+6.925, gameRoomZ])
+  //    + Arcade Perimeter Station
+  // -------------------------------------------------------------------------
+  const holoCenter: [number, number, number] = [6.925, 0.88, gameRoomZ]
+  const holoAngles = [
+    { suffix: 'DM West', angle: Math.PI, rotY: -Math.PI / 2 },
+    { suffix: 'North-West', angle: -Math.PI * 0.68, rotY: -Math.PI * 0.82 },
+    { suffix: 'North-East', angle: -Math.PI * 0.32, rotY: Math.PI * 0.82 },
+    { suffix: 'Commander East', angle: 0, rotY: Math.PI / 2 },
+    { suffix: 'South-East', angle: Math.PI * 0.32, rotY: Math.PI * 0.18 },
+    { suffix: 'South-West', angle: Math.PI * 0.68, rotY: -Math.PI * 0.18 },
+  ]
+  holoAngles.forEach((spot, idx) => {
+    const r = 1.72
+    const sx = Number((6.925 + Math.cos(spot.angle) * r).toFixed(2))
+    const sz = Number((gameRoomZ + Math.sin(spot.angle) * r).toFixed(2))
+    wingSeats.push({
+      id: `wing:gameroom-holo-${idx + 1}`,
+      furnitureId: 'wing-gameroom-holotable',
+      furnitureType: 'wing-seat',
+      label: `🕹 Game Room · Holotable ${spot.suffix}`,
+      position: [sx, 0, sz],
+      localCushionOffset: [0, 0, 0],
+      seatHeightOffset: 0.44,
+      rotationY: Number(spot.rotY.toFixed(4)),
+      lookAtTarget: holoCenter,
+      stationKind: 'seat',
+      roomWing: 'game-room',
+    })
+  })
+
+  wingSeats.push({
+    id: 'wing:gameroom-arcade-1',
+    furnitureId: 'wing-gameroom-arcade',
+    furnitureType: 'game-station',
+    label: '🕹 Game Room · Neon Arcade Row',
+    position: [9.85, 0, gameRoomZ],
+    localCushionOffset: [0, 0, 0],
+    seatHeightOffset: 0.48,
+    rotationY: -Math.PI / 2,
+    lookAtTarget: [11.8, 1.55, gameRoomZ],
+    stationKind: 'arcade',
+    roomWing: 'game-room',
+  })
+
+  // -------------------------------------------------------------------------
+  // 5. OUTDOOR LAKE & MOUNTAIN DECK SEATS (6 Adirondack & Firepit Lounge Chairs + Deck Cornhole)
   //    Lake & Mountains lie in +Z (dz > 29.8). Facing +Z corresponds to rotationY = PI.
   // -------------------------------------------------------------------------
   const lakeVistaLook: [number, number, number] = [0, 2.6, Number((z0 + 58).toFixed(2))]
@@ -595,6 +666,21 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
     })
   }
 
+  // Deck Cornhole Throw Station (East Side of Outdoor Deck)
+  wingSeats.push({
+    id: 'wing:deck-cornhole',
+    furnitureId: 'wing-deck-cornhole',
+    furnitureType: 'game-station',
+    label: '🌽 Lake Deck · Cornhole Pitch',
+    position: [6.55, 0, Number((z0 + 22.15).toFixed(2))],
+    localCushionOffset: [0, 0, 0],
+    seatHeightOffset: 0.48,
+    rotationY: Math.PI,
+    lookAtTarget: [6.55, 0.35, Number((z0 + 27.6).toFixed(2))],
+    stationKind: 'cornhole',
+    roomWing: 'outdoor-deck',
+  })
+
   return {
     hallStartZ: z0,
     hallEndZ,
@@ -603,6 +689,7 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
     boardroomCenter: [-6.42, 0, boardZ],
     libraryCenter: [6.42, 0, libZ],
     commandCenter: [-6.92, 0, cmdZ],
+    gameRoomCenter: [6.925, 0, gameRoomZ],
     outdoorDeckCenter: [0, 0, deckZ],
     destinations,
     wingSeats,
@@ -621,7 +708,7 @@ export function detectActiveLoungeWing(
     return dz < 10.2 ? 'boardroom' : 'command-center'
   }
   if (x > 1.75) {
-    return 'library'
+    return dz < 10.2 ? 'library' : 'game-room'
   }
   return 'hallway'
 }
@@ -646,7 +733,10 @@ const EXPANSION_WALK_RECTS: readonly WalkRect[] = [
   // 4. Command & Control Center Doorway + Interior (West Rear)
   { minX: -2.35, maxX: -0.95, minDz: 14.25, maxDz: 15.95, floorY: 0 },
   { minX: -11.25, maxX: -2.15, minDz: 11.2, maxDz: 19.0, floorY: 0 },
-  // 5. Outdoor Lake & Mountain Observation Deck + Central Lakeshore Pier
+  // 5. The Game Room Doorway + Interior (East Rear)
+  { minX: 0.95, maxX: 2.35, minDz: 14.25, maxDz: 15.95, floorY: 0 },
+  { minX: 2.15, maxX: 11.25, minDz: 11.2, maxDz: 19.0, floorY: 0 },
+  // 6. Outdoor Lake & Mountain Observation Deck + Central Lakeshore Pier
   { minX: -8.05, maxX: 8.05, minDz: 20.85, maxDz: 29.15, floorY: 0 },
   { minX: -1.15, maxX: 1.15, minDz: 28.9, maxDz: 33.15, floorY: 0.02 },
 ]
@@ -729,7 +819,9 @@ export function resolveExpansionWingWalkablePosition(
   ;[bestX, bestDz] = pushOutOfBox(bestX, bestDz, 9.75, 11.2, 4.05, 6.75)
   // 3) Command & Control Center octagonal hologram globe table
   ;[bestX, bestDz] = pushOutOfCircle(bestX, bestDz, -5.85, 15.1, 1.08)
-  // 4) Outdoor Lake Deck circular stone firepit
+  // 4) The Game Room central Tactical Holotable Sanctum
+  ;[bestX, bestDz] = pushOutOfCircle(bestX, bestDz, 6.925, 15.1, 1.24)
+  // 5) Outdoor Lake Deck circular stone firepit
   ;[bestX, bestDz] = pushOutOfCircle(bestX, bestDz, -3.8, 25.0, 1.05)
 
   return [

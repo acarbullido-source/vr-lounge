@@ -125,7 +125,16 @@ export interface PuttingMatchState {
 
 export interface CompletedMatchRecord {
   id: string
-  game: 'darts-501' | 'darts-cricket' | 'putting-puttoff'
+  game:
+    | 'darts-501'
+    | 'darts-cricket'
+    | 'putting-puttoff'
+    | 'putting-streak'
+    | 'shuffleboard'
+    | 'cornhole'
+    | 'arcade-hoops'
+    | 'arcade-skeeball'
+    | 'arcade-retro'
   winnerId: string
   winnerName: string
   participants: Array<{ userId: string; displayName: string; finalScore: number }>
@@ -143,6 +152,9 @@ export interface PlayerClubhouseStats {
   highestCheckout: number
   longestPuttingStreak: number
   bullseyes: number
+  shuffleboardWins?: number
+  cornholeWins?: number
+  arcadeHighScore?: number
   updatedAt: number
 }
 
@@ -267,7 +279,103 @@ export interface TabletopState {
 }
 
 // ============================================================================
-// Unified Realtime Wire Envelope for Bar Games & Tabletop Corner
+// Pillar 5: Main Theater Room Table Shuffleboard (1-2-3-4 Scoring Zones)
+// ============================================================================
+
+export type ShuffleboardTeam = 'red' | 'blue'
+
+export interface ShuffleboardPuck {
+  id: string
+  team: ShuffleboardTeam
+  localX: number // across board width (-0.22 to +0.22)
+  localZ: number // along board length (+1.05 launch end to -1.25 far scoring end)
+  points: number
+  shotBy: string
+}
+
+export interface ShuffleboardState {
+  revision: number
+  updatedAt: number
+  pucks: ShuffleboardPuck[]
+  redScore: number
+  blueScore: number
+  activeTeam: ShuffleboardTeam
+  lastSummary: string
+  winnerTeam: ShuffleboardTeam | null
+}
+
+// ============================================================================
+// Pillar 6: Outdoor Deck Cornhole (3 Pts In-Hole, 1 Pt On-Board)
+// ============================================================================
+
+export type CornholeTeam = 'gold' | 'cyan'
+
+export interface CornholeBagRecord {
+  id: string
+  team: CornholeTeam
+  boardIndex: 0 | 1
+  localX: number // lateral offset on target board (-0.30..+0.30)
+  localZ: number // longitudinal offset on target board (-0.55..+0.55)
+  inHole: boolean
+  points: number
+  thrownBy: string
+}
+
+export interface CornholeState {
+  revision: number
+  updatedAt: number
+  bags: CornholeBagRecord[]
+  goldScore: number
+  cyanScore: number
+  activeTeam: CornholeTeam
+  lastSummary: string
+  winnerTeam: CornholeTeam | null
+}
+
+// ============================================================================
+// Pillar 7: The Game Room — Tactical Holotable Sanctum (Terrain, Minis, Fog)
+// ============================================================================
+
+export type HolotableTerrainPresetId =
+  | 'dungeon-keep'
+  | 'forest-clearing'
+  | 'scifi-starship'
+  | 'mountain-pass'
+  | 'tactical-grid'
+
+export type HolotableMiniKind =
+  | 'hero-paladin'
+  | 'hero-mage'
+  | 'hero-rogue'
+  | 'monster-dragon'
+  | 'monster-golem'
+  | 'prop-chest'
+  | 'prop-portal'
+
+export interface HolotableMiniature {
+  id: string
+  kind: HolotableMiniKind
+  label: string
+  color: string
+  localPos: [number, number] // [x, z] on holotable surface
+  rotationY: number
+  scale: number // 0.65..1.85
+  ownerName: string
+}
+
+export interface HolotableState {
+  revision: number
+  updatedAt: number
+  terrain: HolotableTerrainPresetId
+  miniatures: HolotableMiniature[]
+  selectedMiniId: string | null
+  fogEnabled: boolean
+  revealedFogCells: string[] // "row,col" for row, col in 0..5
+  lastActionSummary: string
+}
+
+// ============================================================================
+// Unified Realtime Wire Envelope for Bar Games, Deck & Game Room
 // ============================================================================
 
 export type BarGamesWireEvent =
@@ -278,11 +386,18 @@ export type BarGamesWireEvent =
   | { kind: 'putt-settle'; payload: PuttShotSettlePacket; matchState: PuttingMatchState }
   | { kind: 'putting-state'; payload: PuttingMatchState }
   | { kind: 'tabletop-state'; payload: TabletopState }
+  | { kind: 'shuffleboard-state'; payload: ShuffleboardState }
+  | { kind: 'cornhole-state'; payload: CornholeState }
+  | { kind: 'holotable-state'; payload: HolotableState }
   | { kind: 'clubhouse-state'; payload: ClubhousePersistentState }
   | {
       kind: 'bar-games-full-sync'
       darts: DartsMatchState
       putting: PuttingMatchState
       tabletop: TabletopState
+      shuffleboard?: ShuffleboardState
+      cornhole?: CornholeState
+      holotable?: HolotableState
       clubhouse: ClubhousePersistentState
     }
+

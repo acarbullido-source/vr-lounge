@@ -358,6 +358,54 @@ export function BarGamesDrawer({
               >
                 🎲 Table
               </button>
+              <button
+                id="btn-goto-shuffleboard"
+                type="button"
+                onClick={() => onSelectSeat('station:shuffleboard')}
+                className={`rounded-xl border px-2 py-2 text-[11px] font-semibold transition ${
+                  localSeatId === 'station:shuffleboard'
+                    ? 'border-orange-400 bg-orange-500/20 text-orange-200'
+                    : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+                }`}
+              >
+                🥌 Shuffleboard
+              </button>
+              <button
+                id="btn-goto-cornhole"
+                type="button"
+                onClick={() => onSelectSeat('wing:deck-cornhole')}
+                className={`rounded-xl border px-2 py-2 text-[11px] font-semibold transition ${
+                  localSeatId === 'wing:deck-cornhole'
+                    ? 'border-lime-400 bg-lime-500/20 text-lime-200'
+                    : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+                }`}
+              >
+                🌽 Cornhole
+              </button>
+              <button
+                id="btn-goto-holotable"
+                type="button"
+                onClick={() => onSelectSeat('wing:gameroom-holo-1')}
+                className={`rounded-xl border px-2 py-2 text-[11px] font-semibold transition ${
+                  localSeatId?.startsWith('wing:gameroom-holo-')
+                    ? 'border-purple-400 bg-purple-500/20 text-purple-200'
+                    : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+                }`}
+              >
+                🗺 Holotable
+              </button>
+              <button
+                id="btn-goto-arcade"
+                type="button"
+                onClick={() => onSelectSeat('wing:gameroom-arcade-1')}
+                className={`rounded-xl border px-2 py-2 text-[11px] font-semibold transition ${
+                  localSeatId === 'wing:gameroom-arcade-1'
+                    ? 'border-fuchsia-400 bg-fuchsia-500/20 text-fuchsia-200'
+                    : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
+                }`}
+              >
+                🕹 Arcade
+              </button>
             </div>
 
             {/* 3D DARTS SECTION */}

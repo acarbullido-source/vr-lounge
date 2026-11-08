@@ -247,6 +247,7 @@ export type LoungeWingId =
   | 'boardroom'
   | 'library'
   | 'command-center'
+  | 'game-room'
   | 'outdoor-deck'
 
 export type OutdoorSkyPresetId =
@@ -255,6 +256,8 @@ export type OutdoorSkyPresetId =
   | 'alpine-morning'
 
 export type CommandNewsCategoryId = 'top' | 'tech' | 'space' | 'markets'
+
+export type SportsLeagueId = 'nfl' | 'nba' | 'mlb' | 'nhl' | 'mls' | 'ncaaf'
 
 export interface ExpansionWingSyncedState {
   boardroomScreenMode: 'agenda' | 'mirror-lounge'
@@ -268,6 +271,7 @@ export interface ExpansionWingSyncedState {
   commandWeatherCityId: string
   commandCustomCityQuery: string
   commandNewsCategory: CommandNewsCategoryId
+  commandSportsLeague?: SportsLeagueId
 }
 
 export interface RoomCustomizationState {
@@ -292,7 +296,16 @@ export interface ComputedSeat {
   seatHeightOffset: number
   rotationY: number
   lookAtTarget?: [number, number, number]
-  stationKind?: 'seat' | 'game-table' | 'darts-oche' | 'putting-tee' | 'chalkboard'
+  stationKind?:
+    | 'seat'
+    | 'game-table'
+    | 'darts-oche'
+    | 'putting-tee'
+    | 'chalkboard'
+    | 'shuffleboard'
+    | 'cornhole'
+    | 'arcade'
   roomWing?: LoungeWingId
 }
+
 

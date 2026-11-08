@@ -3,16 +3,19 @@ import type {
   CardSuit,
   ClubhousePersistentState,
   CompletedMatchRecord,
+  CornholeState,
   CricketTarget,
   DartHitResult,
   DartPlayerSlot,
   DartsMatchState,
   DieKind,
+  HolotableState,
   PlayingCard,
   PredictionProp,
   PuttShotSettlePacket,
   PuttingMatchState,
   PuttingPlayerSlot,
+  ShuffleboardState,
   TableSurfaceStyle,
   TabletopState,
   ThrownDartRecord,
@@ -753,3 +756,126 @@ export function createInitialClubhouseState(): ClubhousePersistentState {
     props: [defaultProp],
   }
 }
+
+// ============================================================================
+// Pillar 5: Table Shuffleboard, Deck Cornhole & Tactical Holotable Sanctum
+// ============================================================================
+
+export function createInitialShuffleboardState(): ShuffleboardState {
+  return {
+    revision: 0,
+    updatedAt: 0,
+    redScore: 0,
+    blueScore: 0,
+    activeTeam: 'red',
+    pucks: [
+      {
+        id: 'puck-init-red-1',
+        team: 'red',
+        localX: -0.06,
+        localZ: -0.92,
+        points: 3,
+        shotBy: 'Lounge',
+      },
+      {
+        id: 'puck-init-blue-1',
+        team: 'blue',
+        localX: 0.07,
+        localZ: -0.68,
+        points: 2,
+        shotBy: 'Lounge',
+      },
+    ],
+    lastSummary: 'Slide Red & Blue pucks into the 1-2-3-4 scoring zones! First to 15 pts wins.',
+    winnerTeam: null,
+  }
+}
+
+export function createInitialCornholeState(): CornholeState {
+  return {
+    revision: 0,
+    updatedAt: 0,
+    goldScore: 0,
+    cyanScore: 0,
+    activeTeam: 'gold',
+    bags: [
+      {
+        id: 'bag-init-gold-1',
+        team: 'gold',
+        boardIndex: 1,
+        localX: 0.08,
+        localZ: 0.14,
+        inHole: false,
+        points: 1,
+        thrownBy: 'Lounge',
+      },
+    ],
+    lastSummary: 'Toss beanbags onto the Deck boards — 3 PTS in the hole, 1 PT on the board! First to 21 wins.',
+    winnerTeam: null,
+  }
+}
+
+export function createInitialHolotableState(): HolotableState {
+  return {
+    revision: 0,
+    updatedAt: 0,
+    terrain: 'dungeon-keep',
+    fogEnabled: false,
+    revealedFogCells: ['2,2', '2,3', '3,2', '3,3'],
+    selectedMiniId: 'holo-hero-paladin',
+    lastActionSummary: 'Tactical Holotable Sanctum online — select terrain, move miniatures, or toggle Fog of War.',
+    miniatures: [
+      {
+        id: 'holo-hero-paladin',
+        kind: 'hero-paladin',
+        label: 'Paladin',
+        color: '#F59E0B',
+        localPos: [-0.35, 0.35],
+        rotationY: 0.4,
+        scale: 1,
+        ownerName: 'Clubhouse',
+      },
+      {
+        id: 'holo-hero-mage',
+        kind: 'hero-mage',
+        label: 'Archmage',
+        color: '#38BDF8',
+        localPos: [-0.12, 0.42],
+        rotationY: 0.15,
+        scale: 1,
+        ownerName: 'Clubhouse',
+      },
+      {
+        id: 'holo-hero-rogue',
+        kind: 'hero-rogue',
+        label: 'Shadow Rogue',
+        color: '#10B981',
+        localPos: [0.22, 0.32],
+        rotationY: -0.35,
+        scale: 1,
+        ownerName: 'Clubhouse',
+      },
+      {
+        id: 'holo-monster-dragon',
+        kind: 'monster-dragon',
+        label: 'Elder Dragon',
+        color: '#EF4444',
+        localPos: [0.05, -0.28],
+        rotationY: Math.PI,
+        scale: 1.25,
+        ownerName: 'Dungeon Master',
+      },
+      {
+        id: 'holo-prop-chest',
+        kind: 'prop-chest',
+        label: 'Relic Vault',
+        color: '#EAB308',
+        localPos: [-0.32, -0.34],
+        rotationY: 0.6,
+        scale: 1,
+        ownerName: 'Dungeon Master',
+      },
+    ],
+  }
+}
+

@@ -11,6 +11,8 @@ import type {
   PuttShotSettlePacket,
   PuttingGameMode,
   PuttingMatchState,
+  ShuffleboardPuck,
+  ShuffleboardState,
   TableSurfaceStyle,
   TabletopState,
 } from '../../types/barGames'
@@ -19,6 +21,7 @@ import { DartboardStation3D } from './DartboardStation3D'
 import { InteractiveGameTable3D } from './InteractiveGameTable3D'
 import { PredictionChalkboard3D } from './PredictionChalkboard3D'
 import { PuttingGreen3D } from './PuttingGreen3D'
+import { ShuffleboardTable3D } from './ShuffleboardTable3D'
 
 export interface BarGamesCorner3DProps {
   localUserId: string
@@ -31,6 +34,7 @@ export interface BarGamesCorner3DProps {
   puttingState: PuttingMatchState
   tabletopState: TabletopState
   clubhouseState: ClubhousePersistentState
+  shuffleboardState: ShuffleboardState
   activeDartShot: LiveDartShotPacket | null
   activePuttShot: LivePuttShotPacket | null
   onSelectSeat: (seatId: string) => void
@@ -72,6 +76,12 @@ export interface BarGamesCorner3DProps {
   onPickPropOption: (propId: string, optionIndex: number) => void
   onLockProp: (propId: string) => void
   onResolveProp: (propId: string, winningOptionIndex: number) => void
+  // Shuffleboard
+  onRecordShuffleboardShot: (
+    puck: ShuffleboardPuck,
+    updatedPucks?: ShuffleboardPuck[],
+  ) => void
+  onResetShuffleboard: () => void
 }
 
 export function BarGamesCorner3D({
@@ -85,6 +95,7 @@ export function BarGamesCorner3D({
   puttingState,
   tabletopState,
   clubhouseState,
+  shuffleboardState,
   activeDartShot,
   activePuttShot,
   onSelectSeat,
@@ -115,6 +126,8 @@ export function BarGamesCorner3D({
   onPickPropOption,
   onLockProp,
   onResolveProp,
+  onRecordShuffleboardShot,
+  onResetShuffleboard,
 }: BarGamesCorner3DProps) {
   const layout = useMemo(
     () => computeBarGamesLayout(roomCustomization),
@@ -194,6 +207,15 @@ export function BarGamesCorner3D({
         onLockProp={onLockProp}
         onResolveProp={onResolveProp}
         onOpen2DPropsDrawer={onOpen2DPropsDrawer}
+      />
+
+      <ShuffleboardTable3D
+        origin={layout.shuffleboardOrigin}
+        state={shuffleboardState}
+        localDisplayName={localDisplayName}
+        onRecordShot={onRecordShuffleboardShot}
+        onReset={onResetShuffleboard}
+        onSnapToStation={() => onSelectSeat('station:shuffleboard')}
       />
     </group>
   )

@@ -584,14 +584,98 @@ export function CinemaRoom({
           </Text>
           <Text
             position={[0, -0.068, 0.03]}
-            fontSize={0.045}
+            fontSize={0.044}
             color="#94A3B8"
             anchorX="center"
             anchorY="middle"
           >
-            Boardroom · Cozy Library · Command Center · Outdoor Lake Deck
+            Boardroom · Cozy Library · Command Ops · The Game Room · Lake Deck
           </Text>
         </group>
+
+        {/* Two Secondary 16:9 Back-Wall Mirrored Video Screens (Reusing Single Shared VideoTexture) */}
+        {[
+          { id: 'back-mirror-left', x: -(halfW + 1.55) / 2, label: 'REAR MIRROR · WEST' },
+          { id: 'back-mirror-right', x: (halfW + 1.55) / 2, label: 'REAR MIRROR · EAST' },
+        ].map((scr) => (
+          <group
+            key={scr.id}
+            name={scr.id}
+            position={[scr.x, 3.56, sizeSpec.backZ - 0.045]}
+            rotation={[0, Math.PI, 0]}
+          >
+            {/* Sleek Brushed Obsidian Bezel */}
+            <RoundedBox args={[2.44, 1.42, 0.04]} radius={0.025} smoothness={2}>
+              <meshStandardMaterial color="#090D16" metalness={0.55} roughness={0.35} />
+            </RoundedBox>
+            <mesh position={[0, 0.68, 0.024]}>
+              <planeGeometry args={[2.32, 0.018]} />
+              <meshBasicMaterial color={lighting.accentColor} />
+            </mesh>
+
+            {/* Shared VideoTexture Surface (Zero duplicate <video> elements) */}
+            <mesh position={[0, 0.02, 0.025]}>
+              <planeGeometry args={[2.32, 1.26]} />
+              {isShowingVideo ? (
+                <meshBasicMaterial
+                  key="back-mirror-live-video"
+                  map={videoTexture}
+                  color="#ffffff"
+                  toneMapped={false}
+                />
+              ) : (
+                <meshBasicMaterial key="back-mirror-standby" color="#0B1322" />
+              )}
+            </mesh>
+
+            {/* Standby / Active Feed Badge */}
+            {!isShowingVideo && (
+              <group position={[0, 0.04, 0.03]}>
+                <Text
+                  position={[0, 0.14, 0]}
+                  fontSize={0.072}
+                  color="#E5A93C"
+                  anchorX="center"
+                  anchorY="middle"
+                >
+                  {`📺 ${scr.label}`}
+                </Text>
+                <Text
+                  position={[0, -0.04, 0]}
+                  fontSize={0.048}
+                  color="#E2E8F0"
+                  maxWidth={2.05}
+                  textAlign="center"
+                  anchorX="center"
+                  anchorY="middle"
+                >
+                  {presenterState.mediaTitle || 'Main Cinema Stream Standby'}
+                </Text>
+                <Text
+                  position={[0, -0.22, 0]}
+                  fontSize={0.036}
+                  color="#94A3B8"
+                  anchorX="center"
+                  anchorY="middle"
+                >
+                  Automatically mirrors the main theater screen (0 extra GPU decoders)
+                </Text>
+              </group>
+            )}
+
+            <Text
+              position={[-1.1, -0.64, 0.028]}
+              fontSize={0.035}
+              color={isShowingVideo ? '#34D399' : '#94A3B8'}
+              anchorX="left"
+              anchorY="middle"
+            >
+              {isShowingVideo
+                ? `🟢 MIRRORING MAIN SCREEN · ${presenterState.mediaTitle || 'LIVE'}`
+                : `● ${scr.label} · SYNCED`}
+            </Text>
+          </group>
+        ))}
       </group>
 
       {/* Left Wall — Solid OR Opened into the Pub & Bar Hangout Alcove */}

@@ -8,8 +8,11 @@ import {
   createDartPlayerSlot,
   createEmptyCricketMarks,
   createInitialClubhouseState,
+  createInitialCornholeState,
   createInitialDartsMatchState,
+  createInitialHolotableState,
   createInitialPuttingMatchState,
+  createInitialShuffleboardState,
   createInitialTabletopState,
   createOrderedDeck52,
   createPuttingPlayerSlot,
@@ -21,17 +24,24 @@ import {
   fetchCloudClubhouseState,
   loadLocalClubhouseState,
   recordClubhouseAchievement,
-   sanitizeClubhouseState,
+  sanitizeClubhouseState,
   saveLocalClubhouseState,
   scheduleCloudClubhouseSave,
 } from '../services/clubhouseStorage'
 import type {
   BarGamesWireEvent,
   ClubhousePersistentState,
+  CompletedMatchRecord,
+  CornholeBagRecord,
+  CornholeState,
   DartGameMode,
   DartShotSettlePacket,
   DartsMatchState,
   DieKind,
+  HolotableMiniKind,
+  HolotableMiniature,
+  HolotableState,
+  HolotableTerrainPresetId,
   LedgerEntry,
   LiveDartShotPacket,
   LivePuttShotPacket,
@@ -40,6 +50,8 @@ import type {
   PuttingGameMode,
   PuttingMatchState,
   RolledDie,
+  ShuffleboardPuck,
+  ShuffleboardState,
   TableSurfaceStyle,
   TabletopState,
 } from '../types/barGames'
@@ -87,6 +99,15 @@ export function useBarGames({
   const [clubhouseState, setClubhouseState] = useState<ClubhousePersistentState>(() =>
     createInitialClubhouseState(),
   )
+  const [shuffleboardState, setShuffleboardState] = useState<ShuffleboardState>(() =>
+    createInitialShuffleboardState(),
+  )
+  const [cornholeState, setCornholeState] = useState<CornholeState>(() =>
+    createInitialCornholeState(),
+  )
+  const [holotableState, setHolotableState] = useState<HolotableState>(() =>
+    createInitialHolotableState(),
+  )
 
   const [activeDartShot, setActiveDartShot] = useState<LiveDartShotPacket | null>(null)
   const [activePuttShot, setActivePuttShot] = useState<LivePuttShotPacket | null>(null)
@@ -95,6 +116,9 @@ export function useBarGames({
   const puttingRef = useRef<PuttingMatchState>(puttingState)
   const tabletopRef = useRef<TabletopState>(tabletopState)
   const clubhouseRef = useRef<ClubhousePersistentState>(clubhouseState)
+  const shuffleboardRef = useRef<ShuffleboardState>(shuffleboardState)
+  const cornholeRef = useRef<CornholeState>(cornholeState)
+  const holotableRef = useRef<HolotableState>(holotableState)
   const localProfileRef = useRef<ParticipantProfile>(localProfile)
   const roomCodeRef = useRef<string>(roomCode)
   const announcedClubhouseRef = useRef<boolean>(false)
@@ -114,6 +138,18 @@ export function useBarGames({
   useEffect(() => {
     clubhouseRef.current = clubhouseState
   }, [clubhouseState])
+
+  useEffect(() => {
+    shuffleboardRef.current = shuffleboardState
+  }, [shuffleboardState])
+
+  useEffect(() => {
+    cornholeRef.current = cornholeState
+  }, [cornholeState])
+
+  useEffect(() => {
+    holotableRef.current = holotableState
+  }, [holotableState])
 
   useEffect(() => {
     localProfileRef.current = localProfile
@@ -163,17 +199,26 @@ export function useBarGames({
       const freshDarts = createInitialDartsMatchState()
       const freshPutting = createInitialPuttingMatchState()
       const freshTabletop = createInitialTabletopState()
+      const freshShuffleboard = createInitialShuffleboardState()
+      const freshCornhole = createInitialCornholeState()
+      const freshHolotable = createInitialHolotableState()
       const savedClubhouse =
         loadLocalClubhouseState(normalizedRoomCode) ?? createInitialClubhouseState()
 
       dartsRef.current = freshDarts
       puttingRef.current = freshPutting
       tabletopRef.current = freshTabletop
+      shuffleboardRef.current = freshShuffleboard
+      cornholeRef.current = freshCornhole
+      holotableRef.current = freshHolotable
       clubhouseRef.current = savedClubhouse
 
       setDartsState(freshDarts)
       setPuttingState(freshPutting)
       setTabletopState(freshTabletop)
+      setShuffleboardState(freshShuffleboard)
+      setCornholeState(freshCornhole)
+      setHolotableState(freshHolotable)
       setClubhouseState(savedClubhouse)
       setActiveDartShot(null)
       setActivePuttShot(null)
@@ -204,6 +249,9 @@ export function useBarGames({
         dartsRef.current.revision > 0 ||
         puttingRef.current.revision > 0 ||
         tabletopRef.current.revision > 0 ||
+        shuffleboardRef.current.revision > 0 ||
+        cornholeRef.current.revision > 0 ||
+        holotableRef.current.revision > 0 ||
         clubhouseRef.current.revision > 0
       if (!hasAnyActivity) return
 
@@ -213,6 +261,9 @@ export function useBarGames({
         putting: puttingRef.current,
         tabletop: tabletopRef.current,
         clubhouse: clubhouseRef.current,
+        shuffleboard: shuffleboardRef.current,
+        cornhole: cornholeRef.current,
+        holotable: holotableRef.current,
       })
     },
 
@@ -272,6 +323,30 @@ export function useBarGames({
           })
           break
         }
+        case 'shuffleboard-state': {
+          setShuffleboardState((prev) => {
+            if (!isNewerState(event.payload, prev)) return prev
+            shuffleboardRef.current = event.payload
+            return event.payload
+          })
+          break
+        }
+        case 'cornhole-state': {
+          setCornholeState((prev) => {
+            if (!isNewerState(event.payload, prev)) return prev
+            cornholeRef.current = event.payload
+            return event.payload
+          })
+          break
+        }
+        case 'holotable-state': {
+          setHolotableState((prev) => {
+            if (!isNewerState(event.payload, prev)) return prev
+            holotableRef.current = event.payload
+            return event.payload
+          })
+          break
+        }
         case 'clubhouse-state': {
           const clean = sanitizeClubhouseState(event.payload)
           if (!clean) break
@@ -301,6 +376,30 @@ export function useBarGames({
             tabletopRef.current = event.tabletop
             return event.tabletop
           })
+          if (event.shuffleboard) {
+            const incomingShuffle = event.shuffleboard
+            setShuffleboardState((prev) => {
+              if (!isNewerState(incomingShuffle, prev)) return prev
+              shuffleboardRef.current = incomingShuffle
+              return incomingShuffle
+            })
+          }
+          if (event.cornhole) {
+            const incomingCornhole = event.cornhole
+            setCornholeState((prev) => {
+              if (!isNewerState(incomingCornhole, prev)) return prev
+              cornholeRef.current = incomingCornhole
+              return incomingCornhole
+            })
+          }
+          if (event.holotable) {
+            const incomingHolo = event.holotable
+            setHolotableState((prev) => {
+              if (!isNewerState(incomingHolo, prev)) return prev
+              holotableRef.current = incomingHolo
+              return incomingHolo
+            })
+          }
           const cleanClub = sanitizeClubhouseState(event.clubhouse)
           if (cleanClub) {
             setClubhouseState((prev) => {
@@ -1126,11 +1225,440 @@ export function useBarGames({
     [persistAndBroadcastClubhouse],
   )
 
+  // =========================================================================
+  // PILLAR 5: TABLE SHUFFLEBOARD, DECK CORNHOLE, HOLOTABLE & ARCADE LEADERBOARD
+  // =========================================================================
+
+  const recordShuffleboardShot = useCallback(
+    (puck: ShuffleboardPuck, updatedPucks?: ShuffleboardPuck[]) => {
+      const me = localProfileRef.current
+      const prev = shuffleboardRef.current
+      const now = Date.now()
+      const baseRed = prev.winnerTeam ? 0 : prev.redScore
+      const baseBlue = prev.winnerTeam ? 0 : prev.blueScore
+      const nextRed = puck.team === 'red' ? baseRed + puck.points : baseRed
+      const nextBlue = puck.team === 'blue' ? baseBlue + puck.points : baseBlue
+      const nextWinner =
+        nextRed >= 15 ? 'red' : nextBlue >= 15 ? 'blue' : null
+
+      const nextPucks = updatedPucks
+        ? updatedPucks.slice(-8)
+        : [...(prev.winnerTeam ? [] : prev.pucks).slice(-7), puck]
+
+      const zoneDesc =
+        puck.points === 4
+          ? '🔥 HANGER (4 PTS)!'
+          : puck.points > 0
+            ? `+${puck.points} PTS in Zone ${puck.points}!`
+            : 'slid off the gutter (0 PTS).'
+
+      const summary = nextWinner
+        ? `🏆 ${nextWinner.toUpperCase()} TEAM wins Shuffleboard (${nextRed}–${nextBlue}) on ${me.displayName}'s shot!`
+        : `🥌 ${me.displayName} (${puck.team.toUpperCase()}) slid ${zoneDesc}`
+
+      const next: ShuffleboardState = {
+        revision: prev.revision + 1,
+        updatedAt: now,
+        redScore: nextRed,
+        blueScore: nextBlue,
+        activeTeam: puck.team === 'red' ? 'blue' : 'red',
+        pucks: nextPucks,
+        lastSummary: summary,
+        winnerTeam: nextWinner,
+      }
+
+      shuffleboardRef.current = next
+      setShuffleboardState(next)
+      broadcastBarGamesEvent({ kind: 'shuffleboard-state', payload: next })
+
+      if (nextWinner) {
+        const completedMatch: CompletedMatchRecord = {
+          id: `shuf-${now.toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+          game: 'shuffleboard',
+          winnerId: localUserId,
+          winnerName: me.displayName,
+          participants: [
+            {
+              userId: localUserId,
+              displayName: me.displayName,
+              finalScore: Math.max(nextRed, nextBlue),
+            },
+          ],
+          highlight: `Shuffleboard ${nextWinner.toUpperCase()} Victory (${nextRed}–${nextBlue})`,
+          completedAt: now,
+        }
+        const nextClub = recordClubhouseAchievement(clubhouseRef.current, {
+          shooterName: me.displayName,
+          shuffleboardWin: true,
+          completedMatch,
+        })
+        if (nextClub !== clubhouseRef.current) {
+          persistAndBroadcastClubhouse(nextClub)
+        }
+        appendSystemMessage(summary)
+      }
+    },
+    [appendSystemMessage, broadcastBarGamesEvent, localUserId, persistAndBroadcastClubhouse],
+  )
+
+  const resetShuffleboard = useCallback(() => {
+    const prev = shuffleboardRef.current
+    const next: ShuffleboardState = {
+      revision: prev.revision + 1,
+      updatedAt: Date.now(),
+      redScore: 0,
+      blueScore: 0,
+      activeTeam: 'red',
+      pucks: [],
+      lastSummary: 'Fresh Shuffleboard match — Red Team slides first! First to 15 pts wins.',
+      winnerTeam: null,
+    }
+    shuffleboardRef.current = next
+    setShuffleboardState(next)
+    broadcastBarGamesEvent({ kind: 'shuffleboard-state', payload: next })
+  }, [broadcastBarGamesEvent])
+
+  const recordCornholeThrow = useCallback(
+    (bag: CornholeBagRecord) => {
+      const me = localProfileRef.current
+      const prev = cornholeRef.current
+      const now = Date.now()
+      const baseGold = prev.winnerTeam ? 0 : prev.goldScore
+      const baseCyan = prev.winnerTeam ? 0 : prev.cyanScore
+      const nextGold = bag.team === 'gold' ? baseGold + bag.points : baseGold
+      const nextCyan = bag.team === 'cyan' ? baseCyan + bag.points : baseCyan
+      const nextWinner =
+        nextGold >= 21 ? 'gold' : nextCyan >= 21 ? 'cyan' : null
+
+      const nextBags = [...(prev.winnerTeam ? [] : prev.bags).slice(-7), bag]
+      const shotLabel = bag.inHole
+        ? '🌽 CORNHOLE! (+3 PTS in the hole)'
+        : bag.points === 1
+          ? '🪵 Woody! (+1 PT on the board)'
+          : 'missed the board (0 PTS)'
+
+      const summary = nextWinner
+        ? `🏆 ${nextWinner.toUpperCase()} SQUAD wins Deck Cornhole (${nextGold}–${nextCyan}) via ${me.displayName}!`
+        : `${me.displayName} (${bag.team.toUpperCase()}) tossed ${shotLabel}`
+
+      const next: CornholeState = {
+        revision: prev.revision + 1,
+        updatedAt: now,
+        goldScore: nextGold,
+        cyanScore: nextCyan,
+        activeTeam: bag.team === 'gold' ? 'cyan' : 'gold',
+        bags: nextBags,
+        lastSummary: summary,
+        winnerTeam: nextWinner,
+      }
+
+      cornholeRef.current = next
+      setCornholeState(next)
+      broadcastBarGamesEvent({ kind: 'cornhole-state', payload: next })
+
+      if (nextWinner) {
+        const completedMatch: CompletedMatchRecord = {
+          id: `corn-${now.toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+          game: 'cornhole',
+          winnerId: localUserId,
+          winnerName: me.displayName,
+          participants: [
+            {
+              userId: localUserId,
+              displayName: me.displayName,
+              finalScore: Math.max(nextGold, nextCyan),
+            },
+          ],
+          highlight: `Deck Cornhole ${nextWinner.toUpperCase()} Win (${nextGold}–${nextCyan})`,
+          completedAt: now,
+        }
+        const nextClub = recordClubhouseAchievement(clubhouseRef.current, {
+          shooterName: me.displayName,
+          cornholeWin: true,
+          completedMatch,
+        })
+        if (nextClub !== clubhouseRef.current) {
+          persistAndBroadcastClubhouse(nextClub)
+        }
+        appendSystemMessage(summary)
+      }
+    },
+    [appendSystemMessage, broadcastBarGamesEvent, localUserId, persistAndBroadcastClubhouse],
+  )
+
+  const resetCornhole = useCallback(() => {
+    const prev = cornholeRef.current
+    const next: CornholeState = {
+      revision: prev.revision + 1,
+      updatedAt: Date.now(),
+      goldScore: 0,
+      cyanScore: 0,
+      activeTeam: 'gold',
+      bags: [],
+      lastSummary: 'Fresh Deck Cornhole match — Gold Squad tosses first! (3 pts in hole, 1 pt on board)',
+      winnerTeam: null,
+    }
+    cornholeRef.current = next
+    setCornholeState(next)
+    broadcastBarGamesEvent({ kind: 'cornhole-state', payload: next })
+  }, [broadcastBarGamesEvent])
+
+  const commitHolotable = useCallback(
+    (next: HolotableState) => {
+      holotableRef.current = next
+      setHolotableState(next)
+      broadcastBarGamesEvent({ kind: 'holotable-state', payload: next })
+    },
+    [broadcastBarGamesEvent],
+  )
+
+  const setHolotableTerrain = useCallback(
+    (terrain: HolotableTerrainPresetId) => {
+      const me = localProfileRef.current
+      const prev = holotableRef.current
+      commitHolotable({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        terrain,
+        lastActionSummary: `${me.displayName} switched Holotable terrain to ${terrain.replace(/-/g, ' ').toUpperCase()}.`,
+      })
+    },
+    [commitHolotable],
+  )
+
+  const selectHolotableMini = useCallback(
+    (miniId: string | null) => {
+      const prev = holotableRef.current
+      commitHolotable({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        selectedMiniId: miniId,
+      })
+    },
+    [commitHolotable],
+  )
+
+  const spawnHolotableMini = useCallback(
+    (kind: HolotableMiniKind, label: string, color: string) => {
+      const me = localProfileRef.current
+      const prev = holotableRef.current
+      const idx = prev.miniatures.length
+      const col = idx % 5
+      const row = Math.floor(idx / 5) % 4
+      const lx = Number((-0.44 + col * 0.22).toFixed(3))
+      const lz = Number((-0.33 + row * 0.22).toFixed(3))
+      const newMini: HolotableMiniature = {
+        id: `holo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+        kind,
+        label: label.trim().slice(0, 16) || 'Token',
+        color,
+        localPos: [lx, lz],
+        rotationY: 0,
+        scale: 1,
+        ownerName: me.displayName,
+      }
+      commitHolotable({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        selectedMiniId: newMini.id,
+        miniatures: [...prev.miniatures.slice(-17), newMini],
+        lastActionSummary: `${me.displayName} deployed miniature "${newMini.label}" onto the Holotable.`,
+      })
+    },
+    [commitHolotable],
+  )
+
+  const updateHolotableMini = useCallback(
+    (
+      miniId: string,
+      patch: Partial<Pick<HolotableMiniature, 'localPos' | 'rotationY' | 'scale' | 'color' | 'label'>>,
+    ) => {
+      const me = localProfileRef.current
+      const prev = holotableRef.current
+      const target = prev.miniatures.find((m) => m.id === miniId)
+      if (!target) return
+
+      const clampedPos: [number, number] = patch.localPos
+        ? [
+            Number(Math.max(-0.78, Math.min(0.78, patch.localPos[0])).toFixed(3)),
+            Number(Math.max(-0.78, Math.min(0.78, patch.localPos[1])).toFixed(3)),
+          ]
+        : target.localPos
+
+      const clampedScale =
+        patch.scale !== undefined
+          ? Number(Math.max(0.65, Math.min(1.75, patch.scale)).toFixed(2))
+          : target.scale
+
+      const nextMinis = prev.miniatures.map((m) =>
+        m.id === miniId
+          ? {
+              ...m,
+              ...patch,
+              localPos: clampedPos,
+              scale: clampedScale,
+            }
+          : m,
+      )
+
+      commitHolotable({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        selectedMiniId: miniId,
+        miniatures: nextMinis,
+        lastActionSummary: `${me.displayName} updated "${target.label}" at (${clampedPos[0].toFixed(2)}, ${clampedPos[1].toFixed(2)}).`,
+      })
+    },
+    [commitHolotable],
+  )
+
+  const deleteHolotableMini = useCallback(
+    (miniId: string) => {
+      const me = localProfileRef.current
+      const prev = holotableRef.current
+      const target = prev.miniatures.find((m) => m.id === miniId)
+      const remaining = prev.miniatures.filter((m) => m.id !== miniId)
+      commitHolotable({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        selectedMiniId: remaining[0]?.id ?? null,
+        miniatures: remaining,
+        lastActionSummary: `${me.displayName} removed "${target?.label ?? 'miniature'}" from the Holotable.`,
+      })
+    },
+    [commitHolotable],
+  )
+
+  const resetHolotableMinis = useCallback(() => {
+    const fresh = createInitialHolotableState()
+    const prev = holotableRef.current
+    commitHolotable({
+      ...prev,
+      revision: prev.revision + 1,
+      updatedAt: Date.now(),
+      miniatures: fresh.miniatures,
+      selectedMiniId: fresh.selectedMiniId,
+      lastActionSummary: 'Reset Holotable miniatures to campaign starting party.',
+    })
+  }, [commitHolotable])
+
+  const toggleHolotableFog = useCallback(
+    (enabled?: boolean) => {
+      const me = localProfileRef.current
+      const prev = holotableRef.current
+      const nextFog = enabled !== undefined ? enabled : !prev.fogEnabled
+      commitHolotable({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        fogEnabled: nextFog,
+        lastActionSummary: `${me.displayName} ${nextFog ? 'engaged' : 'disabled'} Tactical Fog of War.`,
+      })
+    },
+    [commitHolotable],
+  )
+
+  const toggleHolotableFogCell = useCallback(
+    (cellKey: string) => {
+      const me = localProfileRef.current
+      const prev = holotableRef.current
+      const exists = prev.revealedFogCells.includes(cellKey)
+      const nextCells = exists
+        ? prev.revealedFogCells.filter((k) => k !== cellKey)
+        : [...prev.revealedFogCells, cellKey]
+      commitHolotable({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        fogEnabled: true,
+        revealedFogCells: nextCells,
+        lastActionSummary: `${me.displayName} ${exists ? 'shrouded' : 'revealed'} sector [${cellKey}] in Fog of War.`,
+      })
+    },
+    [commitHolotable],
+  )
+
+  const revealAllHolotableFog = useCallback(() => {
+    const me = localProfileRef.current
+    const prev = holotableRef.current
+    const allCells: string[] = []
+    for (let r = 0; r < 6; r++) {
+      for (let c = 0; c < 6; c++) {
+        allCells.push(`${r},${c}`)
+      }
+    }
+    commitHolotable({
+      ...prev,
+      revision: prev.revision + 1,
+      updatedAt: Date.now(),
+      revealedFogCells: allCells,
+      lastActionSummary: `${me.displayName} revealed all Fog of War sectors across the Holotable!`,
+    })
+  }, [commitHolotable])
+
+  const shroudAllHolotableFog = useCallback(() => {
+    const me = localProfileRef.current
+    const prev = holotableRef.current
+    commitHolotable({
+      ...prev,
+      revision: prev.revision + 1,
+      updatedAt: Date.now(),
+      fogEnabled: true,
+      revealedFogCells: [],
+      lastActionSummary: `${me.displayName} shrouded the entire Holotable map in Fog of War.`,
+    })
+  }, [commitHolotable])
+
+  const recordArcadeStationScore = useCallback(
+    (
+      game: 'arcade-hoops' | 'arcade-skeeball' | 'arcade-retro',
+      score: number,
+      highlight: string,
+    ) => {
+      if (score <= 0) return
+      const me = localProfileRef.current
+      const now = Date.now()
+      const completedMatch: CompletedMatchRecord = {
+        id: `arc-${now.toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        game,
+        winnerId: localUserId,
+        winnerName: me.displayName,
+        participants: [
+          {
+            userId: localUserId,
+            displayName: me.displayName,
+            finalScore: score,
+          },
+        ],
+        highlight,
+        completedAt: now,
+      }
+      const nextClub = recordClubhouseAchievement(clubhouseRef.current, {
+        shooterName: me.displayName,
+        arcadeScore: score,
+        completedMatch,
+      })
+      if (nextClub !== clubhouseRef.current) {
+        persistAndBroadcastClubhouse(nextClub)
+      }
+      appendSystemMessage(`🕹 ${me.displayName} posted ${score} PTS on ${highlight}!`)
+    },
+    [appendSystemMessage, localUserId, persistAndBroadcastClubhouse],
+  )
+
   return {
     dartsState,
     puttingState,
     tabletopState,
     clubhouseState,
+    shuffleboardState,
+    cornholeState,
+    holotableState,
     activeDartShot,
     activePuttShot,
     // Darts
@@ -1165,5 +1693,23 @@ export function useBarGames({
     lockPredictionProp,
     resolvePredictionProp,
     deletePredictionProp,
+    // Shuffleboard
+    recordShuffleboardShot,
+    resetShuffleboard,
+    // Deck Cornhole
+    recordCornholeThrow,
+    resetCornhole,
+    // Game Room Tactical Holotable & Arcade
+    setHolotableTerrain,
+    selectHolotableMini,
+    spawnHolotableMini,
+    updateHolotableMini,
+    deleteHolotableMini,
+    resetHolotableMinis,
+    toggleHolotableFog,
+    toggleHolotableFogCell,
+    revealAllHolotableFog,
+    shroudAllHolotableFog,
+    recordArcadeStationScore,
   }
 }

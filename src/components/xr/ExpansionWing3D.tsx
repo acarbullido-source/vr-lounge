@@ -14,6 +14,14 @@ import {
 import { ROOM_SIZE_SPECS } from '../../constants/hangout'
 import { fireplaceAudio } from '../../services/fireplaceAudio'
 import type {
+  CornholeBagRecord,
+  CornholeState,
+  HolotableMiniKind,
+  HolotableMiniature,
+  HolotableState,
+  HolotableTerrainPresetId,
+} from '../../types/barGames'
+import type {
   ComputedSeat,
   ExpansionWingSyncedState,
   LightingPresetId,
@@ -26,6 +34,7 @@ import {
   CommandCenterRoom3D,
   type LoungeMirrorCamPreset,
 } from './CommandCenterRoom3D'
+import { GameRoom3D } from './GameRoom3D'
 import { OutdoorLakeDeck3D } from './OutdoorLakeDeck3D'
 
 const noopRaycast = () => null
@@ -377,8 +386,37 @@ export interface ExpansionWing3DProps {
   hasMainVideoFrames: boolean
   computedSeats: ComputedSeat[]
   localSeatId?: string
+  localDisplayName: string
   participants: ParticipantProfile[]
   cinemaVolume: number
+  cornholeState: CornholeState
+  holotableState: HolotableState
+  gameRoomStreamMuted: boolean
+  onToggleGameRoomStreamMute: () => void
+  onRecordCornholeThrow: (bag: CornholeBagRecord) => void
+  onResetCornhole: () => void
+  onSetHolotableTerrain: (preset: HolotableTerrainPresetId) => void
+  onSelectHolotableMini: (id: string | null) => void
+  onSpawnHolotableMini: (
+    kind: HolotableMiniKind,
+    label: string,
+    color: string,
+  ) => void
+  onUpdateHolotableMini: (
+    id: string,
+    patch: Partial<HolotableMiniature>,
+  ) => void
+  onDeleteHolotableMini: (id: string) => void
+  onResetHolotableMinis: () => void
+  onToggleHolotableFog: () => void
+  onToggleHolotableFogCell: (cellKey: string) => void
+  onRevealAllHolotableFog: () => void
+  onShroudAllHolotableFog: () => void
+  onRecordArcadeScore: (
+    game: 'arcade-hoops' | 'arcade-skeeball' | 'arcade-retro',
+    score: number,
+    highlight: string,
+  ) => void
   onSelectSeat: (seatId: string) => void
   onTeleportToFloor?: (point: [number, number, number]) => void
   onJumpToDestination?: (dest: ExpansionRoomDestination) => void
@@ -395,8 +433,26 @@ export function ExpansionWing3D({
   hasMainVideoFrames,
   computedSeats,
   localSeatId,
+  localDisplayName,
   participants,
   cinemaVolume,
+  cornholeState,
+  holotableState,
+  gameRoomStreamMuted,
+  onToggleGameRoomStreamMute,
+  onRecordCornholeThrow,
+  onResetCornhole,
+  onSetHolotableTerrain,
+  onSelectHolotableMini,
+  onSpawnHolotableMini,
+  onUpdateHolotableMini,
+  onDeleteHolotableMini,
+  onResetHolotableMinis,
+  onToggleHolotableFog,
+  onToggleHolotableFogCell,
+  onRevealAllHolotableFog,
+  onShroudAllHolotableFog,
+  onRecordArcadeScore,
   onSelectSeat,
   onTeleportToFloor,
   onJumpToDestination,
@@ -724,10 +780,11 @@ export function ExpansionWing3D({
           </mesh>
         ))}
 
-        {/* EAST HALLWAY PARTITION WALL (x = +1.65) with Doorway at dz [4.25, 6.55] */}
+        {/* EAST HALLWAY PARTITION WALL (x = +1.65) with Doorways at dz [4.25, 6.55] and [13.85, 16.15] */}
         {[
           [z0 + 2.125, 4.25],
-          [z0 + 13.475, 13.85],
+          [z0 + 10.2, 7.3],
+          [z0 + 18.275, 4.25],
         ].map(([ez, eLen], idx) => (
           <group key={idx} position={[HALLWAY_HALF_WIDTH, 0, ez]}>
             <mesh position={[0, HALLWAY_HEIGHT / 2, 0]}>
@@ -754,15 +811,17 @@ export function ExpansionWing3D({
             </mesh>
           </group>
         ))}
-        <mesh position={[HALLWAY_HALF_WIDTH, 3.45, z0 + 5.4]}>
-          <boxGeometry args={[0.14, 0.7, 2.3]} />
-          <meshStandardMaterial
-            color="#333F54"
-            emissive="#1D2533"
-            emissiveIntensity={0.44 * emissiveBoost}
-            roughness={0.7}
-          />
-        </mesh>
+        {[z0 + 5.4, z0 + 15.0].map((doorZ) => (
+          <mesh key={doorZ} position={[HALLWAY_HALF_WIDTH, 3.45, doorZ]}>
+            <boxGeometry args={[0.14, 0.7, 2.3]} />
+            <meshStandardMaterial
+              color="#333F54"
+              emissive="#1D2533"
+              emissiveIntensity={0.44 * emissiveBoost}
+              roughness={0.7}
+            />
+          </mesh>
+        ))}
 
         {/* South End Hallway Lintel above Outdoor Deck Portal (dz = 20.4) */}
         <mesh position={[0, 3.5, z0 + HALLWAY_LENGTH]}>
@@ -787,31 +846,38 @@ export function ExpansionWing3D({
           position={[1.55, 3.32, z0 + 5.4]}
           rotationY={-Math.PI / 2}
           label="🔥 COZY LIBRARY & HEARTH"
-          sublabel="Crackling Fireplace · Study Chairs"
+          sublabel="Quiet Zone (Stream Auto-Mutes) · Study"
           accent="#EA580C"
         />
         <DoorwaySign3D
           position={[-1.55, 3.32, z0 + 15.0]}
           rotationY={Math.PI / 2}
           label="🛰 COMMAND & CONTROL"
-          sublabel="Aux Screen · Live Weather · Breaking News"
+          sublabel="Aux Screen · ESPN Sports · Weather & News"
           accent="#38BDF8"
+        />
+        <DoorwaySign3D
+          position={[1.55, 3.32, z0 + 15.0]}
+          rotationY={-Math.PI / 2}
+          label="🕹 THE GAME ROOM"
+          sublabel="Holotable Sanctum · Neon Arcade · Stream Mirror"
+          accent="#A855F7"
         />
         <DoorwaySign3D
           position={[0, 3.42, z0 + HALLWAY_LENGTH - 0.12]}
           rotationY={Math.PI}
           label="🏔 OUTDOOR LAKE & MOUNTAIN DECK"
-          sublabel="Step outside to Alpine Vista & Firepit ↑"
+          sublabel="Step outside to Alpine Vista, Firepit & Cornhole ↑"
           accent="#34D399"
         />
 
         {/* Interactive 3D Clubhouse Directory & Lighting Control Board ([1.55, 1.72, z0 + 2.15]) */}
         <group position={[1.55, 1.72, z0 + 2.15]} rotation={[0, -Math.PI / 2, 0]}>
-          <RoundedBox args={[1.64, 1.48, 0.04]} radius={0.025} smoothness={2}>
+          <RoundedBox args={[1.64, 1.56, 0.04]} radius={0.025} smoothness={2}>
             <meshStandardMaterial color="#0F172A" metalness={0.45} roughness={0.4} />
           </RoundedBox>
           <Text
-            position={[0, 0.6, 0.026]}
+            position={[0, 0.63, 0.026]}
             fontSize={0.068}
             color="#E5A93C"
             anchorX="center"
@@ -820,7 +886,7 @@ export function ExpansionWing3D({
             🏛 CLUBHOUSE WING DIRECTORY
           </Text>
           <Text
-            position={[0, 0.49, 0.026]}
+            position={[0, 0.52, 0.026]}
             fontSize={0.038}
             color="#CBD5E1"
             anchorX="center"
@@ -833,7 +899,7 @@ export function ExpansionWing3D({
             .map((dest, idx) => (
               <group
                 key={dest.id}
-                position={[0, 0.33 - idx * 0.165, 0.026]}
+                position={[0, 0.36 - idx * 0.145, 0.026]}
                 onClick={(e) => {
                   e.stopPropagation()
                   if (onJumpToDestination) {
@@ -843,12 +909,12 @@ export function ExpansionWing3D({
                   }
                 }}
               >
-                <RoundedBox args={[1.44, 0.135, 0.015]} radius={0.018} smoothness={2}>
+                <RoundedBox args={[1.44, 0.12, 0.015]} radius={0.018} smoothness={2}>
                   <meshBasicMaterial color="#1E293B" />
                 </RoundedBox>
                 <Text
                   position={[-0.65, 0, 0.012]}
-                  fontSize={0.046}
+                  fontSize={0.044}
                   color="#F8FAFC"
                   anchorX="left"
                   anchorY="middle"
@@ -868,7 +934,7 @@ export function ExpansionWing3D({
             ))}
 
           {/* 3D Quick Lighting Controls on Hallway Directory Board */}
-          <group position={[0, -0.56, 0.026]}>
+          <group position={[0, -0.57, 0.026]}>
             {[
               { id: 'daylight' as LightingPresetId, label: '☀️ Bright', b: 1.45 },
               { id: 'cozy' as LightingPresetId, label: '🕯 Warm', b: 1.05 },
@@ -889,7 +955,7 @@ export function ExpansionWing3D({
                     }
                   }}
                 >
-                  <RoundedBox args={[0.33, 0.13, 0.015]} radius={0.016}>
+                  <RoundedBox args={[0.33, 0.125, 0.015]} radius={0.016}>
                     <meshBasicMaterial color={active ? '#E5A93C' : '#1E293B'} />
                   </RoundedBox>
                   <Text
@@ -907,8 +973,8 @@ export function ExpansionWing3D({
           </group>
         </group>
 
-        {/* Illuminated Gallery Art Prints along East Rear Hallway Wall */}
-        {[11.6, 15.0, 18.2].map((artDz, idx) => (
+        {/* Illuminated Gallery Art Prints along East Rear Hallway Wall (flanking Game Room doorway) */}
+        {[10.2, 18.2].map((artDz, idx) => (
           <group
             key={artDz}
             position={[1.56, 1.88, z0 + artDz]}
@@ -1755,7 +1821,38 @@ export function ExpansionWing3D({
       />
 
       {/* =================================================================== */}
-      {/* 5. OUTDOOR LAKE & MOUNTAIN OBSERVATION DECK (South Vista)           */}
+      {/* 5. THE GAME ROOM (East Wing Rear: Holotable, Arcade & Stream Mirror)*/}
+      {/* =================================================================== */}
+      <GameRoom3D
+        wingLayout={wingLayout}
+        lighting={lighting}
+        presenterState={presenterState}
+        mainVideoTexture={mainVideoTexture}
+        hasMainVideoFrames={hasMainVideoFrames}
+        loungeMirrorTexture={loungeMirrorTarget.texture}
+        computedSeats={computedSeats}
+        localSeatId={localSeatId}
+        participants={participants}
+        holotableState={holotableState}
+        gameRoomStreamMuted={gameRoomStreamMuted}
+        onToggleGameRoomStreamMute={onToggleGameRoomStreamMute}
+        onSelectSeat={onSelectSeat}
+        onTeleportToFloor={onTeleportToFloor}
+        onSetHolotableTerrain={onSetHolotableTerrain}
+        onSelectHolotableMini={onSelectHolotableMini}
+        onSpawnHolotableMini={onSpawnHolotableMini}
+        onUpdateHolotableMini={onUpdateHolotableMini}
+        onDeleteHolotableMini={onDeleteHolotableMini}
+        onResetHolotableMinis={onResetHolotableMinis}
+        onToggleHolotableFog={onToggleHolotableFog}
+        onToggleHolotableFogCell={onToggleHolotableFogCell}
+        onRevealAllHolotableFog={onRevealAllHolotableFog}
+        onShroudAllHolotableFog={onShroudAllHolotableFog}
+        onRecordArcadeScore={onRecordArcadeScore}
+      />
+
+      {/* =================================================================== */}
+      {/* 6. OUTDOOR LAKE & MOUNTAIN OBSERVATION DECK (South Vista + Cornhole)*/}
       {/* =================================================================== */}
       <OutdoorLakeDeck3D
         wingLayout={wingLayout}
@@ -1764,6 +1861,10 @@ export function ExpansionWing3D({
         computedSeats={computedSeats}
         localSeatId={localSeatId}
         participants={participants}
+        cornholeState={cornholeState}
+        localDisplayName={localDisplayName}
+        onRecordCornholeThrow={onRecordCornholeThrow}
+        onResetCornhole={onResetCornhole}
         onSelectSeat={onSelectSeat}
         onTeleportToFloor={onTeleportToFloor}
         onUpdateWingState={onUpdateWingState}

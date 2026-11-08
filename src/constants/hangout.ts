@@ -540,12 +540,14 @@ export interface BarGamesSpatialLayout {
   puttingStripOrigin: [number, number, number]
   puttingTeePos: [number, number, number]
   gameTableOrigin: [number, number, number]
+  shuffleboardOrigin: [number, number, number]
+  shuffleboardPlayerPos: [number, number, number]
   rearDeckY: number
 }
 
 /**
  * Computes collision-free world coordinates for the Dartboard, Digital Scoreboard,
- * Mini-Golf Putting Strip, Interactive Game & Dice Table, and Prediction Chalkboard
+ * Mini-Golf Putting Strip, Interactive Game & Dice Table, Table Shuffleboard, and Prediction Chalkboard
  * across all room sizes (`cozy`, `classic`, `grand`) and alcove configurations,
  * leaving a generous central opening (`x ∈ [-1.55, +1.55]`) for the Grand Hallway Archway.
  */
@@ -613,6 +615,16 @@ export function computeBarGamesLayout(
     : -1.95
   const gameTableOrigin: [number, number, number] = [tableX, 0, tableZ]
 
+  // Main Theater Room Table Shuffleboard along the Right-Rear Side Wall
+  const shuffleX = Number((halfW - 1.08).toFixed(2))
+  const shuffleZ = Number((sizeSpec.backZ - 2.25).toFixed(2))
+  const shuffleboardOrigin: [number, number, number] = [shuffleX, 0, shuffleZ]
+  const shuffleboardPlayerPos: [number, number, number] = [
+    shuffleX,
+    0,
+    Number((shuffleZ + 1.52).toFixed(2)),
+  ]
+
   return {
     dartboardCenter,
     scoreboardCenter,
@@ -621,6 +633,8 @@ export function computeBarGamesLayout(
     puttingStripOrigin,
     puttingTeePos,
     gameTableOrigin,
+    shuffleboardOrigin,
+    shuffleboardPlayerPos,
     rearDeckY,
   }
 }
@@ -631,7 +645,7 @@ export const FREE_ROAM_SEAT_ID = 'roam:free'
  * Clamps any horizontal `(x, z)` walk/teleport target to the walkable lounge floor,
  * smoothly allowing entry into opened Left/Right Hangout Alcoves, stepping onto the
  * `0.38m` Rear Balcony riser, AND walking through the central Rear Archway down the
- * Grand Clubhouse Hallway into the Boardroom, Library, Command Center, and Outdoor Lake Deck.
+ * Grand Clubhouse Hallway into the Boardroom, Library, Command Center, Game Room, and Outdoor Lake Deck.
  */
 export function resolveWalkablePosition(
   x: number,
@@ -686,8 +700,8 @@ export function resolveWalkablePosition(
 /**
  * Computes world-space interactive seats attached to all seating furniture
  * currently placed in the room, perimeter snap-to-seat spots around the
- * Interactive Game & Dice Table / Bar Games stations, AND all 23 seats across
- * the Executive Boardroom, Cozy Library, Command Center, and Outdoor Lake Deck.
+ * Interactive Game & Dice Table / Bar Games stations, AND all seats across
+ * the Executive Boardroom, Cozy Library, Command Center, Game Room, and Outdoor Lake Deck.
  */
 export function computeRoomSeats(customization: RoomCustomizationState): ComputedSeat[] {
   const seats: ComputedSeat[] = []
@@ -771,7 +785,7 @@ export function computeRoomSeats(customization: RoomCustomizationState): Compute
     })
   }
 
-  // Append 4 Game Table Perimeter Snap-to-Seat Positions + Dartboard Oche + Putting Tee
+  // Append 4 Game Table Perimeter Snap-to-Seat Positions + Dartboard Oche + Putting Tee + Shuffleboard
   const barLayout = computeBarGamesLayout(customization)
   const [tx, ty, tz] = barLayout.gameTableOrigin
   const tableLookTarget: [number, number, number] = [tx, ty + 0.78, tz]
@@ -841,6 +855,23 @@ export function computeRoomSeats(customization: RoomCustomizationState): Compute
     roomWing: 'main-lounge',
   })
 
+  // Table Shuffleboard Snap Spot facing -Z down the butcher-block board
+  const [sx, sy, sz] = barLayout.shuffleboardOrigin
+  seats.push({
+    id: 'station:shuffleboard',
+    index: seats.length,
+    furnitureId: 'station-shuffleboard',
+    furnitureType: 'game-station',
+    label: '🥌 Table Shuffleboard',
+    position: barLayout.shuffleboardPlayerPos,
+    localCushionOffset: [0, 0, 0],
+    seatHeightOffset: 0.48,
+    rotationY: 0,
+    lookAtTarget: [sx, sy + 0.82, sz - 0.85],
+    stationKind: 'shuffleboard',
+    roomWing: 'main-lounge',
+  })
+
   // Live Prediction & $1 Wager Chalkboard Snap Spot facing +Z toward Back-Left Wall
   const [cx, , cz] = barLayout.chalkboardCenter
   seats.push({
@@ -858,7 +889,7 @@ export function computeRoomSeats(customization: RoomCustomizationState): Compute
     roomWing: 'main-lounge',
   })
 
-  // Append Clubhouse Expansion Wing Seats (Boardroom, Library, Command Center, Outdoor Deck)
+  // Append Clubhouse Expansion Wing Seats (Boardroom, Library, Command Center, Game Room, Outdoor Deck)
   const wingLayout = computeExpansionWingLayout(sizeSpec.backZ)
   for (const wingSeat of wingLayout.wingSeats) {
     seats.push({

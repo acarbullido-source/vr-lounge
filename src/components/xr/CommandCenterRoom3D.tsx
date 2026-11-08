@@ -16,6 +16,11 @@ import {
   type CommandWeatherReport,
   type WorldClockEntry,
 } from '../../services/commandFeeds'
+import {
+  SPORTS_LEAGUE_SPECS,
+  fetchSportsScoreboard,
+  type SportsScoreboardSnapshot,
+} from '../../services/sportsScoreboard'
 import type {
   CommandNewsCategoryId,
   ComputedSeat,
@@ -23,6 +28,7 @@ import type {
   ParticipantProfile,
   PresenterState,
   RoomLightingConfig,
+  SportsLeagueId,
 } from '../../types/lounge'
 
 let hlsCtorPromise: Promise<typeof Hls> | null = null
@@ -239,6 +245,12 @@ export function CommandCenterRoom3D({
   const [newsLoading, setNewsLoading] = useState(false)
   const [newsNonce, setNewsNonce] = useState(0)
 
+  const activeSportsLeague: SportsLeagueId = wingState.commandSportsLeague ?? 'nfl'
+  const [sportsSnapshot, setSportsSnapshot] = useState<SportsScoreboardSnapshot | null>(null)
+  const [sportsLoading, setSportsLoading] = useState(false)
+  const [sportsNonce, setSportsNonce] = useState(0)
+  const [sportsAutoCycle, setSportsAutoCycle] = useState(false)
+
   const [clocks, setClocks] = useState<WorldClockEntry[]>(() => getCommandWorldClocks())
   const [opsAudioUnmuted, setOpsAudioUnmuted] = useState(false)
   const [hasOpsFrames, setHasOpsFrames] = useState(false)
@@ -395,6 +407,36 @@ export function CommandCenterRoom3D({
       window.clearInterval(timer)
     }
   }, [newsNonce, wingState.commandNewsCategory])
+
+  // Live ESPN US Sports Scoreboard Fetcher + 60-second automatic refresh
+  useEffect(() => {
+    let cancelled = false
+    setSportsLoading(true)
+    const run = async (force: boolean) => {
+      const snap = await fetchSportsScoreboard(activeSportsLeague, force)
+      if (!cancelled) {
+        setSportsSnapshot(snap)
+        setSportsLoading(false)
+      }
+    }
+    void run(sportsNonce > 0)
+    const timer = window.setInterval(() => void run(true), 60_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [activeSportsLeague, sportsNonce])
+
+  // Optional League Auto-Cycle every 12 seconds when enabled on the Control Room Scoreboard
+  useEffect(() => {
+    if (!sportsAutoCycle) return
+    const timer = window.setInterval(() => {
+      const idx = SPORTS_LEAGUE_SPECS.findIndex((s) => s.id === activeSportsLeague)
+      const next = SPORTS_LEAGUE_SPECS[(idx + 1) % SPORTS_LEAGUE_SPECS.length]
+      onUpdateWingState({ commandSportsLeague: next.id })
+    }, 12_000)
+    return () => window.clearInterval(timer)
+  }, [activeSportsLeague, onUpdateWingState, sportsAutoCycle])
 
   // World clocks tick every 1s
   useEffect(() => {
@@ -1070,6 +1112,187 @@ export function CommandCenterRoom3D({
                 onClick={onOpenCommandOpsDrawer}
               />
             )}
+          </group>
+        )}
+      </group>
+
+      {/* =================================================================== */}
+      {/* NORTH WALL DEDICATED LIVE US SPORTS SCOREBOARD SCREEN               */}
+      {/* (NFL · NBA · MLB · NHL · MLS · NCAAF — Auto-Refreshes Every 60s)    */}
+      {/* =================================================================== */}
+      <group
+        name="control-room-sports-scoreboard"
+        position={[-6.85, 2.08, z0 + 10.74]}
+        rotation={[0, 0, 0]}
+      >
+        {/* Outer Bezel */}
+        <RoundedBox args={[4.68, 2.38, 0.05]} radius={0.032} smoothness={2}>
+          <meshStandardMaterial color="#070E1B" metalness={0.55} roughness={0.35} />
+        </RoundedBox>
+        <mesh position={[0, 1.13, 0.028]}>
+          <planeGeometry args={[4.48, 0.03]} />
+          <meshBasicMaterial color="#10B981" />
+        </mesh>
+
+        {/* Top Header */}
+        <Text
+          position={[-2.18, 0.98, 0.03]}
+          fontSize={0.078}
+          color="#34D399"
+          anchorX="left"
+          anchorY="middle"
+        >
+          🏟 LIVE US SPORTS SCOREBOARD · ESPN TICKER
+        </Text>
+        <OpsButton3D
+          label={sportsAutoCycle ? '⟳ Auto-Cycle: ON' : '⟳ Auto-Cycle'}
+          position={[1.38, 0.98, 0.03]}
+          width={0.92}
+          height={0.12}
+          fontSize={0.045}
+          active={sportsAutoCycle}
+          accent="#10B981"
+          onClick={() => setSportsAutoCycle((v) => !v)}
+        />
+        <OpsButton3D
+          label={sportsLoading ? '…' : '↻ 60s'}
+          position={[2.04, 0.98, 0.03]}
+          width={0.32}
+          height={0.12}
+          fontSize={0.044}
+          accent="#38BDF8"
+          onClick={() => setSportsNonce((n) => n + 1)}
+        />
+
+        {/* 6 League Filter Tabs: NFL, NBA, MLB, NHL, MLS, NCAAF */}
+        {SPORTS_LEAGUE_SPECS.map((lg, idx) => (
+          <OpsButton3D
+            key={lg.id}
+            label={`${lg.emoji} ${lg.shortLabel}`}
+            position={[-1.85 + idx * 0.74, 0.76, 0.03]}
+            width={0.68}
+            height={0.13}
+            fontSize={0.05}
+            active={activeSportsLeague === lg.id}
+            accent={lg.accentColor}
+            onClick={() => {
+              setSportsAutoCycle(false)
+              onUpdateWingState({ commandSportsLeague: lg.id })
+            }}
+          />
+        ))}
+
+        {/* 2x2 Matchup Cards Grid */}
+        {sportsSnapshot && (
+          <group position={[0, 0.02, 0.03]}>
+            {sportsSnapshot.games.slice(0, 4).map((g, idx) => {
+              const col = idx % 2
+              const row = Math.floor(idx / 2)
+              const cx = col === 0 ? -1.12 : 1.12
+              const cy = row === 0 ? 0.25 : -0.42
+              const isLive = g.state === 'in'
+              return (
+                <group key={g.id} position={[cx, cy, 0]}>
+                  <RoundedBox args={[2.12, 0.58, 0.01]} radius={0.02}>
+                    <meshBasicMaterial color="#0C1729" />
+                  </RoundedBox>
+                  {/* Status / Clock Pill */}
+                  <Text
+                    position={[-0.98, 0.2, 0.008]}
+                    fontSize={0.042}
+                    color={isLive ? '#34D399' : '#E5A93C'}
+                    anchorX="left"
+                    anchorY="middle"
+                  >
+                    {`${isLive ? '● LIVE · ' : ''}${g.statusText}`}
+                  </Text>
+                  <Text
+                    position={[0.98, 0.2, 0.008]}
+                    fontSize={0.038}
+                    color="#94A3B8"
+                    anchorX="right"
+                    anchorY="middle"
+                  >
+                    {g.broadcast}
+                  </Text>
+
+                  {/* Away Team Row */}
+                  <Text
+                    position={[-0.98, 0.04, 0.008]}
+                    fontSize={0.068}
+                    color="#F8FAFC"
+                    anchorX="left"
+                    anchorY="middle"
+                  >
+                    {`${g.awayTeam}  ${g.awayName}`}
+                  </Text>
+                  {g.awayRecord && (
+                    <Text
+                      position={[0.38, 0.04, 0.008]}
+                      fontSize={0.038}
+                      color="#64748B"
+                      anchorX="right"
+                      anchorY="middle"
+                    >
+                      {`(${g.awayRecord})`}
+                    </Text>
+                  )}
+                  <Text
+                    position={[0.98, 0.04, 0.008]}
+                    fontSize={0.088}
+                    color="#38BDF8"
+                    anchorX="right"
+                    anchorY="middle"
+                  >
+                    {g.awayScore}
+                  </Text>
+
+                  {/* Home Team Row */}
+                  <Text
+                    position={[-0.98, -0.14, 0.008]}
+                    fontSize={0.068}
+                    color="#F8FAFC"
+                    anchorX="left"
+                    anchorY="middle"
+                  >
+                    {`${g.homeTeam}  ${g.homeName}`}
+                  </Text>
+                  {g.homeRecord && (
+                    <Text
+                      position={[0.38, -0.14, 0.008]}
+                      fontSize={0.038}
+                      color="#64748B"
+                      anchorX="right"
+                      anchorY="middle"
+                    >
+                      {`(${g.homeRecord})`}
+                    </Text>
+                  )}
+                  <Text
+                    position={[0.98, -0.14, 0.008]}
+                    fontSize={0.088}
+                    color="#FDE68A"
+                    anchorX="right"
+                    anchorY="middle"
+                  >
+                    {g.homeScore}
+                  </Text>
+                </group>
+              )
+            })}
+
+            {/* Footer Status / Clean Fallback Notice */}
+            <Text
+              position={[-2.18, -0.96, 0.008]}
+              fontSize={0.042}
+              color={sportsSnapshot.isLiveData ? '#34D399' : '#FBBF24'}
+              anchorX="left"
+              anchorY="middle"
+            >
+              {sportsSnapshot.noActiveGamesMessage
+                ? `● ${sportsSnapshot.noActiveGamesMessage}`
+                : `● ESPN LIVE ${sportsSnapshot.leagueLabel.toUpperCase()} FEED · AUTO-REFRESHES EVERY 60S`}
+            </Text>
           </group>
         )}
       </group>

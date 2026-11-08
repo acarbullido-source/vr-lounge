@@ -36,6 +36,11 @@ import {
   type CommandWeatherReport,
 } from '../../services/commandFeeds'
 import { fireplaceAudio } from '../../services/fireplaceAudio'
+import {
+  SPORTS_LEAGUE_SPECS,
+  fetchSportsScoreboard,
+  type SportsScoreboardSnapshot,
+} from '../../services/sportsScoreboard'
 import type {
   CommandNewsCategoryId,
   ComputedSeat,
@@ -45,6 +50,7 @@ import type {
   ParticipantProfile,
   RoomCustomizationState,
   RoomLightingConfig,
+  SportsLeagueId,
 } from '../../types/lounge'
 
 export type ClubhouseDrawerTabId = 'rooms' | 'command-ops'
@@ -107,8 +113,13 @@ export function ClubhouseRoomsAndOpsDrawer({
   const [weatherLoading, setWeatherLoading] = useState(false)
   const [news, setNews] = useState<CommandNewsFeedResult | null>(null)
   const [newsLoading, setNewsLoading] = useState(false)
+  const [sportsSnapshot, setSportsSnapshot] =
+    useState<SportsScoreboardSnapshot | null>(null)
+  const [sportsLoading, setSportsLoading] = useState(false)
   const [refreshNonce, setRefreshNonce] = useState(0)
   const [crackleOn, setCrackleOn] = useState(() => fireplaceAudio.isPlaying())
+  const activeSportsLeague: SportsLeagueId =
+    wingState.commandSportsLeague ?? 'nfl'
 
   useEffect(() => {
     setCustomCityDraft(wingState.commandCustomCityQuery)
@@ -161,6 +172,25 @@ export function ClubhouseRoomsAndOpsDrawer({
       cancelled = true
     }
   }, [activeTab, open, refreshNonce, wingState.commandNewsCategory])
+
+  useEffect(() => {
+    if (!open || activeTab !== 'command-ops') return
+    let cancelled = false
+    setSportsLoading(true)
+    const run = async (force: boolean) => {
+      const snap = await fetchSportsScoreboard(activeSportsLeague, force)
+      if (!cancelled) {
+        setSportsSnapshot(snap)
+        setSportsLoading(false)
+      }
+    }
+    void run(refreshNonce > 0)
+    const id = window.setInterval(() => void run(true), 60_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [activeSportsLeague, activeTab, open, refreshNonce])
 
   const seatById = useMemo(() => {
     const m = new Map<string, ComputedSeat>()
@@ -637,10 +667,11 @@ export function ClubhouseRoomsAndOpsDrawer({
                   Weather &amp; Forecast Telemetry
                 </span>
                 <button
+                  id="btn-cmd-sports-refresh"
                   type="button"
                   onClick={() => setRefreshNonce((n) => n + 1)}
                   className="text-[#94a3b8] hover:text-[#f4f1ea]"
-                  title="Refresh weather & news telemetry"
+                  title="Refresh weather, news & sports telemetry"
                 >
                   <RefreshCw
                     className={`h-3.5 w-3.5 ${weatherLoading ? 'animate-spin' : ''}`}
@@ -797,6 +828,99 @@ export function ClubhouseRoomsAndOpsDrawer({
                     </div>
                   </a>
                 ))
+              )}
+            </div>
+
+            {/* Live US Sports Scoreboard (ESPN — NFL, NBA, MLB, NHL, MLS, NCAAF) */}
+            <div
+              id="cmd-sports-scoreboard-panel"
+              className="mt-4 border-t border-[#f4f1ea]/10 pt-3.5"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#34d399]">
+                  🏟 Live US Sports Scoreboard (ESPN · 60s Sync)
+                </span>
+                <div className="flex flex-wrap items-center gap-1">
+                  {SPORTS_LEAGUE_SPECS.map((lg) => (
+                    <button
+                      key={lg.id}
+                      id={`btn-cmd-sports-${lg.id}`}
+                      type="button"
+                      onClick={() =>
+                        onUpdateWingState({ commandSportsLeague: lg.id })
+                      }
+                      className={`rounded-lg px-2 py-1 text-[11px] font-semibold transition ${
+                        activeSportsLeague === lg.id
+                          ? 'bg-[#34d399] text-[#080a0d]'
+                          : 'bg-[#090f19] text-[#94a3b8] hover:text-[#f4f1ea]'
+                      }`}
+                    >
+                      {lg.emoji} {lg.shortLabel}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+                {sportsLoading && !sportsSnapshot ? (
+                  <p className="col-span-2 py-4 text-center text-xs text-[#94a3b8]">
+                    Fetching ESPN live scoreboard…
+                  </p>
+                ) : (
+                  sportsSnapshot?.games.slice(0, 4).map((g) => (
+                    <div
+                      key={g.id}
+                      data-sports-game={g.id}
+                      className="rounded-lg border border-[#f4f1ea]/10 bg-[#090f19] px-3 py-2 text-xs"
+                    >
+                      <div className="flex items-center justify-between text-[10px] font-semibold">
+                        <span
+                          className={
+                            g.state === 'in'
+                              ? 'text-[#34d399]'
+                              : 'text-[#e5a93c]'
+                          }
+                        >
+                          {g.state === 'in' ? '● LIVE · ' : ''}
+                          {g.statusText}
+                        </span>
+                        <span className="text-[#94a3b8]">{g.broadcast}</span>
+                      </div>
+                      <div className="mt-1 flex items-center justify-between">
+                        <span className="font-semibold text-[#f8fafc]">
+                          {g.awayTeam} {g.awayName}{' '}
+                          {g.awayRecord ? (
+                            <span className="text-[10px] font-normal text-[#64748b]">
+                              ({g.awayRecord})
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="font-mono text-sm font-bold text-[#38bdf8]">
+                          {g.awayScore}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 flex items-center justify-between">
+                        <span className="font-semibold text-[#f8fafc]">
+                          {g.homeTeam} {g.homeName}{' '}
+                          {g.homeRecord ? (
+                            <span className="text-[10px] font-normal text-[#64748b]">
+                              ({g.homeRecord})
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="font-mono text-sm font-bold text-[#fde68a]">
+                          {g.homeScore}
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {sportsSnapshot?.noActiveGamesMessage && (
+                <p className="mt-2 text-[10px] text-[#fbbf24]">
+                  ● {sportsSnapshot.noActiveGamesMessage}
+                </p>
               )}
             </div>
           </div>

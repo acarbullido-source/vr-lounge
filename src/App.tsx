@@ -40,6 +40,7 @@ import type { VRKeyboardMode } from './components/xr/VRKeyboard3D'
 import { WardrobeMirror3D } from './components/xr/WardrobeMirror3D'
 import { YouTubeBrowser3D } from './components/xr/YouTubeBrowser3D'
 import {
+  detectActiveLoungeWing,
   resolveExpansionWingState,
   type ExpansionRoomDestination,
 } from './constants/expansionRooms'
@@ -71,6 +72,7 @@ import type {
   ExpansionWingSyncedState,
   FurnitureCatalogId,
   LightingPresetId,
+  LoungeWingId,
   PlacedFurnitureItem,
   RoomArchitectureConfig,
   RoomLightingConfig,
@@ -163,6 +165,7 @@ interface SeatRigProps {
   onEnterFreeRoam: () => void
   onSummonDockToggle: () => void
   onInVRChange: (inVR: boolean) => void
+  onRoamWingChange?: (wing: LoungeWingId) => void
   children?: React.ReactNode
 }
 
@@ -194,6 +197,7 @@ function SeatCameraAndOriginRig({
   onEnterFreeRoam,
   onSummonDockToggle,
   onInVRChange,
+  onRoamWingChange,
   children,
 }: SeatRigProps) {
   const { camera, gl } = useThree()
@@ -259,6 +263,9 @@ function SeatCameraAndOriginRig({
   onEnterFreeRoamRef.current = onEnterFreeRoam
   const onSummonDockToggleRef = useRef(onSummonDockToggle)
   onSummonDockToggleRef.current = onSummonDockToggle
+  const onRoamWingChangeRef = useRef(onRoamWingChange)
+  onRoamWingChangeRef.current = onRoamWingChange
+  const lastReportedWingRef = useRef<LoungeWingId>('main-lounge')
 
   // Initialize <XROrigin> & dockGroupRef once on mount so JSX re-renders never reset VR walk transforms
   useEffect(() => {
@@ -388,33 +395,35 @@ function SeatCameraAndOriginRig({
           : seat.position[2] - Math.cos(seat.rotationY) * 0.42
         const startWalk = resolveWalkablePosition(baseStartX, baseStartZ, architecture)
 
-        const currentWalk = resolveWalkablePosition(
-          camera.position.x,
-          camera.position.z,
-          architecture,
-        )
-        localRoamPoseRef.current = {
-          position: currentWalk,
-          yaw: Math.atan2(-fx, -fz),
-        }
-        desktopFloorYRef.current = currentWalk[1]
-
-        // Pull OrbitControls target onto a 0.85m sphere around head so mouse drag turns head in place
-        camera.position.y = currentWalk[1] + 1.56
-        if (orbitRef.current) {
-          orbitRef.current.target.set(
-            camera.position.x + fx * 0.85,
-            camera.position.y + Math.max(-0.35, Math.min(0.35, scratchCamForward.y)) * 0.85,
-            camera.position.z + fz * 0.85,
-          )
-          orbitRef.current.update()
-        }
-
         const hasPendingTeleport = Boolean(
           teleportRequest && teleportRequest.id !== handledTeleportIdRef.current,
         )
-        if (!hasKeyHeld && !hasPendingTeleport && !desktopGlideTargetRef.current) {
-          desktopGlideTargetRef.current = startWalk
+        if (!hasPendingTeleport) {
+          const currentWalk = resolveWalkablePosition(
+            camera.position.x,
+            camera.position.z,
+            architecture,
+          )
+          localRoamPoseRef.current = {
+            position: currentWalk,
+            yaw: Math.atan2(-fx, -fz),
+          }
+          desktopFloorYRef.current = currentWalk[1]
+
+          // Pull OrbitControls target onto a 0.85m sphere around head so mouse drag turns head in place
+          camera.position.y = currentWalk[1] + 1.56
+          if (orbitRef.current) {
+            orbitRef.current.target.set(
+              camera.position.x + fx * 0.85,
+              camera.position.y + Math.max(-0.35, Math.min(0.35, scratchCamForward.y)) * 0.85,
+              camera.position.z + fz * 0.85,
+            )
+            orbitRef.current.update()
+          }
+
+          if (!hasKeyHeld && !desktopGlideTargetRef.current) {
+            desktopGlideTargetRef.current = startWalk
+          }
         }
       }
     } else if (!isFreeRoaming && prevIsFreeRoamingRef.current && !inVR) {
@@ -446,6 +455,11 @@ function SeatCameraAndOriginRig({
       teleportRequest.position[2],
       architecture,
     )
+    const spec =
+      ROOM_SIZE_SPECS[architecture.sizePreset] ?? ROOM_SIZE_SPECS.classic
+    const detectedWing = detectActiveLoungeWing(target[0], target[2], spec.backZ)
+    lastReportedWingRef.current = detectedWing
+    onRoamWingChangeRef.current?.(detectedWing)
 
     if (inVR) {
       camera.getWorldPosition(scratchHeadWorld)
@@ -706,6 +720,17 @@ function SeatCameraAndOriginRig({
           desiredDockQuat.setFromEuler(tmpEuler.set(0, vrDockYawRef.current, 0))
           dockGroupRef.current.position.lerp(desiredDockPos, rigAlpha)
           dockGroupRef.current.quaternion.slerp(desiredDockQuat, rigAlpha)
+          const spec =
+            ROOM_SIZE_SPECS[architecture.sizePreset] ?? ROOM_SIZE_SPECS.classic
+          const detectedWing = detectActiveLoungeWing(
+            localRoamPoseRef.current.position[0],
+            localRoamPoseRef.current.position[2],
+            spec.backZ,
+          )
+          if (detectedWing !== lastReportedWingRef.current) {
+            lastReportedWingRef.current = detectedWing
+            onRoamWingChangeRef.current?.(detectedWing)
+          }
         } else {
           const seatDeltaY = Math.max(0, seat.seatHeightOffset - 0.38)
           const ergonomicFloorY = seat.position[1] + seatDeltaY
@@ -822,6 +847,17 @@ function SeatCameraAndOriginRig({
           desktopGlideTargetRef.current = null
         }
       }
+      const spec =
+        ROOM_SIZE_SPECS[architecture.sizePreset] ?? ROOM_SIZE_SPECS.classic
+      const detectedWing = detectActiveLoungeWing(
+        localRoamPoseRef.current.position[0],
+        localRoamPoseRef.current.position[2],
+        spec.backZ,
+      )
+      if (detectedWing !== lastReportedWingRef.current) {
+        lastReportedWingRef.current = detectedWing
+        onRoamWingChangeRef.current?.(detectedWing)
+      }
       return
     }
 
@@ -922,6 +958,8 @@ export function App() {
   const [selectedSpeakerId, setSelectedSpeakerId] = useState('')
   const [cinemaVolume, setCinemaVolume] = useState(0.8)
   const [voiceVolume, setVoiceVolume] = useState(0.9)
+  const [freeRoamWing, setFreeRoamWing] = useState<LoungeWingId>('main-lounge')
+  const [gameRoomStreamMuted, setGameRoomStreamMuted] = useState(false)
   const [inVRSession, setInVRSession] = useState(false)
   const [recenterVersion, setRecenterVersion] = useState(0)
   const [spatialChatOpen, setSpatialChatOpen] = useState(true)
@@ -993,20 +1031,40 @@ export function App() {
     return byId ?? byIndex ?? computedSeats[0]
   }, [computedSeats, roomLocalProfile.seatId, roomLocalProfile.seatIndex])
 
+  const activeLoungeWing: LoungeWingId = isFreeRoaming
+    ? freeRoamWing
+    : (activeSeat?.roomWing ?? 'main-lounge')
+
+  // Upgrade #1: Library Audio Isolation (automatically mute main stream inside Library & restore on exit)
+  // Plus Upgrade #5: Local mute toggle on The Game Room's mirrored stream screen
+  const isLibraryQuietZone = roomJoined && activeLoungeWing === 'library'
+  const isGameRoomStreamMuted =
+    roomJoined && activeLoungeWing === 'game-room' && gameRoomStreamMuted
+  const effectiveCinemaVolume =
+    isLibraryQuietZone || isGameRoomStreamMuted ? 0 : cinemaVolume
+
   const handleEnterFreeRoam = useCallback(() => {
+    setFreeRoamWing(activeSeat?.roomWing ?? 'main-lounge')
     roomSelectSeat(FREE_ROAM_SEAT_ID)
-  }, [roomSelectSeat])
+  }, [activeSeat?.roomWing, roomSelectSeat])
 
   const handleTeleportToFloor = useCallback(
     (worldPoint: [number, number, number]) => {
       if (!roomJoined) return
       roomSelectSeat(FREE_ROAM_SEAT_ID)
+      localRoamPoseRef.current.position = worldPoint
+      const spec =
+        ROOM_SIZE_SPECS[roomCustomization.architecture.sizePreset] ??
+        ROOM_SIZE_SPECS.classic
+      setFreeRoamWing(
+        detectActiveLoungeWing(worldPoint[0], worldPoint[2], spec.backZ),
+      )
       setTeleportRequest((prev) => ({
         id: (prev?.id ?? 0) + 1,
         position: worldPoint,
       }))
     },
-    [roomJoined, roomSelectSeat],
+    [roomCustomization.architecture.sizePreset, roomJoined, roomSelectSeat],
   )
 
   const skyBgColor =
@@ -1061,7 +1119,7 @@ export function App() {
     localUserId: room.localUserId,
     localScreenStream: webrtc.localScreenStream,
     remoteScreenStreams: webrtc.remoteScreenStreams,
-    cinemaVolume,
+    cinemaVolume: effectiveCinemaVolume,
     selectedSpeakerId,
     onPresenterProgress: handlePresenterHeartbeatProgress,
   })
@@ -1303,48 +1361,39 @@ export function App() {
   // =========================================================================
 
   const handleToggleWardrobe = useCallback((enabled?: boolean) => {
-    setWardrobeOpen((prev) => {
-      const next = typeof enabled === 'boolean' ? enabled : !prev
-      if (next) {
-        setBuildMode(false)
-        setBarGamesOpen(false)
-        setClubhouseOpen(false)
-        setYoutubeBrowserOpen(false)
-      }
-      return next
-    })
+    setWardrobeOpen((prev) => (typeof enabled === 'boolean' ? enabled : !prev))
+    if (enabled !== false) {
+      setBuildMode(false)
+      setBarGamesOpen(false)
+      setClubhouseOpen(false)
+      setYoutubeBrowserOpen(false)
+    }
   }, [])
 
   const handleToggleBuildMode = useCallback((enabled?: boolean) => {
-    setBuildMode((prev) => {
-      const next = typeof enabled === 'boolean' ? enabled : !prev
-      if (next) {
-        setYoutubeBrowserOpen(false)
-        setBarGamesOpen(false)
-        setWardrobeOpen(false)
-        setClubhouseOpen(false)
-      } else {
-        setSelectedFurnitureId(null)
-        setEditingPosterItemId(null)
-        setKeyboardMode((m) => (m === 'poster' ? null : m))
-      }
-      return next
-    })
+    setBuildMode((prev) => (typeof enabled === 'boolean' ? enabled : !prev))
+    if (enabled === false) {
+      setSelectedFurnitureId(null)
+      setEditingPosterItemId(null)
+      setKeyboardMode((m) => (m === 'poster' ? null : m))
+    } else {
+      setYoutubeBrowserOpen(false)
+      setBarGamesOpen(false)
+      setWardrobeOpen(false)
+      setClubhouseOpen(false)
+    }
   }, [])
 
   const handleToggleClubhouse = useCallback(
     (enabled?: boolean, tab?: ClubhouseDrawerTabId) => {
       if (tab) setClubhouseTab(tab)
-      setClubhouseOpen((prev) => {
-        const next = typeof enabled === 'boolean' ? enabled : !prev
-        if (next) {
-          setBuildMode(false)
-          setBarGamesOpen(false)
-          setWardrobeOpen(false)
-          setYoutubeBrowserOpen(false)
-        }
-        return next
-      })
+      setClubhouseOpen((prev) => (typeof enabled === 'boolean' ? enabled : !prev))
+      if (enabled !== false) {
+        setBuildMode(false)
+        setBarGamesOpen(false)
+        setWardrobeOpen(false)
+        setYoutubeBrowserOpen(false)
+      }
     },
     [],
   )
@@ -1352,6 +1401,11 @@ export function App() {
   const handleJumpToDestination = useCallback(
     (dest: ExpansionRoomDestination) => {
       roomSelectSeat(FREE_ROAM_SEAT_ID)
+      localRoamPoseRef.current = {
+        position: dest.spawnPosition,
+        yaw: dest.spawnYaw,
+      }
+      setFreeRoamWing(dest.id)
       setTeleportRequest((prev) => ({
         id: (prev?.id ?? 0) + 1,
         position: dest.spawnPosition,
@@ -1626,6 +1680,7 @@ export function App() {
               teleportRequest={teleportRequest}
               localRoamPoseRef={localRoamPoseRef}
               onEnterFreeRoam={handleEnterFreeRoam}
+              onRoamWingChange={setFreeRoamWing}
               onSummonDockToggle={() => setDockSummonToggleVersion((v) => v + 1)}
               onInVRChange={handleInVRChange}
             >
@@ -1776,8 +1831,28 @@ export function App() {
                 hasMainVideoFrames={media.hasVideoFrames}
                 computedSeats={computedSeats}
                 localSeatId={room.localProfile.seatId}
+                localDisplayName={room.localProfile.displayName}
                 participants={room.participants}
-                cinemaVolume={cinemaVolume}
+                cinemaVolume={effectiveCinemaVolume}
+                cornholeState={barGames.cornholeState}
+                holotableState={barGames.holotableState}
+                gameRoomStreamMuted={gameRoomStreamMuted}
+                onToggleGameRoomStreamMute={() =>
+                  setGameRoomStreamMuted((prev) => !prev)
+                }
+                onRecordCornholeThrow={barGames.recordCornholeThrow}
+                onResetCornhole={barGames.resetCornhole}
+                onSetHolotableTerrain={barGames.setHolotableTerrain}
+                onSelectHolotableMini={barGames.selectHolotableMini}
+                onSpawnHolotableMini={barGames.spawnHolotableMini}
+                onUpdateHolotableMini={barGames.updateHolotableMini}
+                onDeleteHolotableMini={barGames.deleteHolotableMini}
+                onResetHolotableMinis={barGames.resetHolotableMinis}
+                onToggleHolotableFog={barGames.toggleHolotableFog}
+                onToggleHolotableFogCell={barGames.toggleHolotableFogCell}
+                onRevealAllHolotableFog={barGames.revealAllHolotableFog}
+                onShroudAllHolotableFog={barGames.shroudAllHolotableFog}
+                onRecordArcadeScore={barGames.recordArcadeStationScore}
                 onSelectSeat={room.selectSeat}
                 onTeleportToFloor={room.joined ? handleTeleportToFloor : undefined}
                 onJumpToDestination={handleJumpToDestination}
@@ -1803,6 +1878,7 @@ export function App() {
                 dartsState={barGames.dartsState}
                 puttingState={barGames.puttingState}
                 tabletopState={barGames.tabletopState}
+                shuffleboardState={barGames.shuffleboardState}
                 clubhouseState={barGames.clubhouseState}
                 activeDartShot={barGames.activeDartShot}
                 activePuttShot={barGames.activePuttShot}
@@ -1844,6 +1920,8 @@ export function App() {
                 onPickPropOption={barGames.pickPropOption}
                 onLockProp={barGames.lockPredictionProp}
                 onResolveProp={barGames.resolvePredictionProp}
+                onRecordShuffleboardShot={barGames.recordShuffleboardShot}
+                onResetShuffleboard={barGames.resetShuffleboard}
               />
             </SceneSectionBoundary>
 
@@ -1983,14 +2061,12 @@ export function App() {
           onSendReaction={(emoji) => room.sendReaction(emoji)}
           barGamesOpen={barGamesOpen}
           onToggleBarGames={() => {
-            setBarGamesOpen((v) => {
-              const next = !v
-              if (next) {
-                setWardrobeOpen(false)
-                setClubhouseOpen(false)
-              }
-              return next
-            })
+            const next = !barGamesOpen
+            setBarGamesOpen(next)
+            if (next) {
+              setWardrobeOpen(false)
+              setClubhouseOpen(false)
+            }
           }}
           wardrobeOpen={wardrobeOpen}
           onToggleWardrobe={handleToggleWardrobe}
@@ -2074,6 +2150,54 @@ export function App() {
           onDeleteProp={barGames.deletePredictionProp}
         />
       )}
+
+      {/* Library Audio Isolation Quiet-Zone Indicator */}
+      {passcodeUnlocked && room.joined && isLibraryQuietZone && (
+        <div
+          id="library-audio-isolation-badge"
+          data-effective-volume={effectiveCinemaVolume}
+          data-saved-volume={cinemaVolume}
+          className="pointer-events-none fixed top-16 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-orange-400/45 bg-[#120b07]/90 px-4 py-1.5 text-xs font-semibold text-orange-200 shadow-xl backdrop-blur-md"
+        >
+          <span className="h-2 w-2 animate-pulse rounded-full bg-orange-400" />
+          <span>
+            🔇 Library Quiet Zone — Main Stream Audio Auto-Muted (Restores to{' '}
+            {Math.round(cinemaVolume * 100)}% on Exit)
+          </span>
+        </div>
+      )}
+
+      {/* Game Room Local Stream Mute Indicator */}
+      {passcodeUnlocked &&
+        room.joined &&
+        activeLoungeWing === 'game-room' &&
+        !isLibraryQuietZone && (
+          <div
+            id="gameroom-audio-status-badge"
+            data-stream-muted={gameRoomStreamMuted}
+            data-effective-volume={effectiveCinemaVolume}
+            className="pointer-events-auto fixed top-16 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2.5 rounded-full border border-purple-400/40 bg-[#10091c]/90 px-4 py-1.5 text-xs font-semibold text-purple-200 shadow-xl backdrop-blur-md"
+          >
+            <span>
+              🕹 The Game Room · Main Stream Mirror{' '}
+              {gameRoomStreamMuted
+                ? 'Muted Locally (0%)'
+                : `Audio Live (${Math.round(cinemaVolume * 100)}%)`}
+            </span>
+            <button
+              id="btn-gameroom-hud-mute-toggle"
+              type="button"
+              onClick={() => setGameRoomStreamMuted((m) => !m)}
+              className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold transition ${
+                gameRoomStreamMuted
+                  ? 'bg-red-500/30 text-red-200 hover:bg-red-500/45'
+                  : 'bg-emerald-500/30 text-emerald-200 hover:bg-emerald-500/45'
+              }`}
+            >
+              {gameRoomStreamMuted ? 'Unmute Stream' : 'Mute Stream'}
+            </button>
+          </div>
+        )}
 
       {inVRSession && usingSimulator && (
         <button
