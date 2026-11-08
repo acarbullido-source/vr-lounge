@@ -219,6 +219,7 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
                   {row.map((ch) => (
                     <button
                       key={ch}
+                      id={`btn-keypad-${ch.toLowerCase()}`}
                       type="button"
                       onClick={() => appendChar(ch)}
                       className="flex h-10 min-w-[30px] flex-1 items-center justify-center rounded-lg border border-[#f4f1ea]/10 bg-[#131924] font-mono text-xs font-semibold text-[#f4f1ea] hover:border-[#e5a93c]/60"
@@ -230,15 +231,23 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
               ))}
               <div className="grid grid-cols-2 gap-2 pt-1">
                 <button
+                  id="btn-keypad-clear"
                   type="button"
-                  onClick={() => setCode('')}
+                  onClick={() => {
+                    setCode('')
+                    setErrorMsg(null)
+                  }}
                   className="h-10 rounded-xl border border-[#f4f1ea]/10 bg-[#0e131c] text-xs font-medium text-[#c7c2b8] hover:text-[#f4f1ea]"
                 >
                   Clear
                 </button>
                 <button
+                  id="btn-keypad-backspace"
                   type="button"
-                  onClick={() => setCode((prev) => prev.slice(0, -1))}
+                  onClick={() => {
+                    setCode((prev) => prev.slice(0, -1))
+                    setErrorMsg(null)
+                  }}
                   className="flex h-10 items-center justify-center gap-1.5 rounded-xl border border-[#f4f1ea]/10 bg-[#0e131c] text-xs font-medium text-[#c7c2b8] hover:text-[#f4f1ea]"
                 >
                   <Delete className="h-4 w-4" /> Backspace

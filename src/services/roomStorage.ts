@@ -1,8 +1,9 @@
-import { resolveExpansionWingState } from '../constants/expansionRooms'
+import { CANONICAL_ROOM_CODE } from '../constants/cinema'
 import { createDefaultRoomCustomization } from '../constants/hangout'
 import type { RoomCustomizationState } from '../types/lounge'
 import { hasSupabaseCredentials } from './realtime'
 
+const CANONICAL_LAYOUT_KEY = 'vr-lounge:single-room-layout:v1'
 const LOCAL_STORAGE_PREFIX = 'vr-lounge:hangout-v2:'
 
 const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim() ?? ''
@@ -57,17 +58,54 @@ export function sanitizeRoomCustomization(raw: unknown): RoomCustomizationState 
           : defaults.screen.position,
     },
     furniture: candidate.furniture.slice(0, 80),
-    expansionWing: resolveExpansionWingState(candidate.expansionWing),
   }
 }
 
-export function loadLocalRoomCustomization(roomCode: string): RoomCustomizationState | null {
-  if (typeof window === 'undefined' || !roomCode) return null
+export function loadLocalRoomCustomization(
+  roomCode = CANONICAL_ROOM_CODE,
+): RoomCustomizationState | null {
+  if (typeof window === 'undefined') return null
   try {
-    const key = `${LOCAL_STORAGE_PREFIX}${roomCode.toUpperCase().trim()}`
-    const raw = window.localStorage.getItem(key)
-    if (!raw) return null
-    return sanitizeRoomCustomization(JSON.parse(raw))
+    const primaryRaw = window.localStorage.getItem(CANONICAL_LAYOUT_KEY)
+    if (primaryRaw) {
+      const parsed = sanitizeRoomCustomization(JSON.parse(primaryRaw))
+      if (parsed) return parsed
+    }
+
+    const legacyKey = `${LOCAL_STORAGE_PREFIX}${(roomCode || CANONICAL_ROOM_CODE).toUpperCase().trim()}`
+    const legacyRaw = window.localStorage.getItem(legacyKey)
+    if (legacyRaw) {
+      const parsed = sanitizeRoomCustomization(JSON.parse(legacyRaw))
+      if (parsed) {
+        window.localStorage.setItem(CANONICAL_LAYOUT_KEY, JSON.stringify(parsed))
+        return parsed
+      }
+    }
+
+    // Migrate the newest saved layout from any previous room code (e.g. CINEMA-1)
+    let bestMigrated: RoomCustomizationState | null = null
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i)
+      if (!k || !k.startsWith(LOCAL_STORAGE_PREFIX)) continue
+      const val = window.localStorage.getItem(k)
+      if (!val) continue
+      const candidate = sanitizeRoomCustomization(JSON.parse(val))
+      if (!candidate) continue
+      if (
+        !bestMigrated ||
+        candidate.updatedAt > bestMigrated.updatedAt ||
+        (candidate.updatedAt === bestMigrated.updatedAt &&
+          candidate.revision > bestMigrated.revision)
+      ) {
+        bestMigrated = candidate
+      }
+    }
+
+    if (bestMigrated) {
+      window.localStorage.setItem(CANONICAL_LAYOUT_KEY, JSON.stringify(bestMigrated))
+      return bestMigrated
+    }
+    return null
   } catch {
     return null
   }
@@ -77,20 +115,23 @@ export function saveLocalRoomCustomization(
   roomCode: string,
   state: RoomCustomizationState,
 ): void {
-  if (typeof window === 'undefined' || !roomCode) return
+  if (typeof window === 'undefined') return
   try {
-    const key = `${LOCAL_STORAGE_PREFIX}${roomCode.toUpperCase().trim()}`
-    window.localStorage.setItem(key, JSON.stringify(state))
+    const serialized = JSON.stringify(state)
+    window.localStorage.setItem(CANONICAL_LAYOUT_KEY, serialized)
+    const normalized = (roomCode || CANONICAL_ROOM_CODE).toUpperCase().trim()
+    window.localStorage.setItem(`${LOCAL_STORAGE_PREFIX}${normalized}`, serialized)
   } catch {
     // Ignore storage quota errors
   }
 }
 
-export function clearLocalRoomCustomization(roomCode: string): void {
-  if (typeof window === 'undefined' || !roomCode) return
+export function clearLocalRoomCustomization(roomCode = CANONICAL_ROOM_CODE): void {
+  if (typeof window === 'undefined') return
   try {
-    const key = `${LOCAL_STORAGE_PREFIX}${roomCode.toUpperCase().trim()}`
-    window.localStorage.removeItem(key)
+    window.localStorage.removeItem(CANONICAL_LAYOUT_KEY)
+    const normalized = (roomCode || CANONICAL_ROOM_CODE).toUpperCase().trim()
+    window.localStorage.removeItem(`${LOCAL_STORAGE_PREFIX}${normalized}`)
   } catch {
     // Ignore errors
   }

@@ -11,11 +11,6 @@ import type {
   RoomSizePreset,
 } from '../types/lounge'
 import { SCREEN_CONFIG } from './cinema'
-import {
-  DEFAULT_EXPANSION_WING_STATE,
-  computeExpansionWingLayout,
-  resolveExpansionWingWalkablePosition,
-} from './expansionRooms'
 
 export interface RoomSizeSpec {
   id: RoomSizePreset
@@ -528,7 +523,6 @@ export function createDefaultRoomCustomization(): RoomCustomizationState {
       curved: true,
     },
     furniture: createDefaultFurnitureLayout(),
-    expansionWing: { ...DEFAULT_EXPANSION_WING_STATE },
   }
 }
 
@@ -546,8 +540,7 @@ export interface BarGamesSpatialLayout {
 /**
  * Computes collision-free world coordinates for the Dartboard, Digital Scoreboard,
  * Mini-Golf Putting Strip, Interactive Game & Dice Table, and Prediction Chalkboard
- * across all room sizes (`cozy`, `classic`, `grand`) and alcove configurations,
- * leaving a generous central opening (`x ∈ [-1.55, +1.55]`) for the Grand Hallway Archway.
+ * across all room sizes (`cozy`, `classic`, `grand`) and alcove configurations.
  */
 export function computeBarGamesLayout(
   customization: RoomCustomizationState,
@@ -582,7 +575,7 @@ export function computeBarGamesLayout(
   const ocheFloorY = ocheOnBalcony ? 0.38 : 0
   const ocheFloorPos: [number, number, number] = [dartboardX, ocheFloorY, ocheZ]
 
-  // Live Prediction & Wager Chalkboard on Back-Left Wall (clear of central archway)
+  // Live Prediction & Wager Chalkboard on Back-Left Wall
   const chalkboardX = -Number(Math.min(halfW - 2.1, 3.55).toFixed(2))
   const chalkboardCenter: [number, number, number] = [
     chalkboardX,
@@ -629,9 +622,8 @@ export const FREE_ROAM_SEAT_ID = 'roam:free'
 
 /**
  * Clamps any horizontal `(x, z)` walk/teleport target to the walkable lounge floor,
- * smoothly allowing entry into opened Left/Right Hangout Alcoves, stepping onto the
- * `0.38m` Rear Balcony riser, AND walking through the central Rear Archway down the
- * Grand Clubhouse Hallway into the Boardroom, Library, Command Center, and Outdoor Lake Deck.
+ * smoothly allowing entry into opened Left/Right Hangout Alcoves and stepping onto
+ * the `0.38m` Rear Balcony riser inside the single lounge room.
  */
 export function resolveWalkablePosition(
   x: number,
@@ -639,12 +631,6 @@ export function resolveWalkablePosition(
   architecture: RoomArchitectureConfig,
 ): [number, number, number] {
   const sizeSpec = ROOM_SIZE_SPECS[architecture.sizePreset] ?? ROOM_SIZE_SPECS.classic
-
-  // Seamless doorway transition into the Grand Hallway & Expansion Wing rooms (+Z beyond backZ)
-  if ((Math.abs(x) <= 1.24 && z >= sizeSpec.backZ - 0.6) || z > sizeSpec.backZ - 0.12) {
-    return resolveExpansionWingWalkablePosition(x, z, sizeSpec.backZ)
-  }
-
   const halfW = sizeSpec.width / 2
   const centerZ = (sizeSpec.frontZ + sizeSpec.backZ) / 2
   const alcoveHalfZ = 2.82
@@ -685,9 +671,8 @@ export function resolveWalkablePosition(
 
 /**
  * Computes world-space interactive seats attached to all seating furniture
- * currently placed in the room, perimeter snap-to-seat spots around the
- * Interactive Game & Dice Table / Bar Games stations, AND all 23 seats across
- * the Executive Boardroom, Cozy Library, Command Center, and Outdoor Lake Deck.
+ * currently placed in the single lounge room, plus perimeter snap-to-seat spots
+ * around the Interactive Game & Dice Table and Bar Games stations.
  */
 export function computeRoomSeats(customization: RoomCustomizationState): ComputedSeat[] {
   const seats: ComputedSeat[] = []
@@ -857,15 +842,6 @@ export function computeRoomSeats(customization: RoomCustomizationState): Compute
     stationKind: 'chalkboard',
     roomWing: 'main-lounge',
   })
-
-  // Append Clubhouse Expansion Wing Seats (Boardroom, Library, Command Center, Outdoor Deck)
-  const wingLayout = computeExpansionWingLayout(sizeSpec.backZ)
-  for (const wingSeat of wingLayout.wingSeats) {
-    seats.push({
-      ...wingSeat,
-      index: seats.length,
-    })
-  }
 
   return seats
 }

@@ -7,7 +7,10 @@ import {
   resolveAvatarCustomization,
   saveAvatarPreferences,
 } from '../constants/avatars'
-import { createInitialPresenterState } from '../constants/cinema'
+import {
+  CANONICAL_ROOM_CODE,
+  createInitialPresenterState,
+} from '../constants/cinema'
 import {
   FREE_ROAM_SEAT_ID,
   computeRoomSeats,
@@ -46,7 +49,7 @@ function createSessionUserId(): string {
 }
 
 export interface JoinRoomOptions {
-  roomCode: string
+  roomCode?: string
   displayName: string
   avatarColor: string
   avatarStyle: AvatarStyleId
@@ -71,11 +74,12 @@ function isNewerCustomization(
   incoming: RoomCustomizationState,
   current: RoomCustomizationState,
 ): boolean {
-  if (incoming.revision > current.revision) return true
-  if (incoming.revision === current.revision && incoming.updatedAt > current.updatedAt) {
-    return true
+  if (incoming.revision <= 0 && incoming.updatedAt <= 0) return false
+  if (current.revision <= 0 && current.updatedAt <= 0) return true
+  if (incoming.updatedAt !== current.updatedAt) {
+    return incoming.updatedAt > current.updatedAt
   }
-  return false
+  return incoming.revision > current.revision
 }
 
 export function useRoomSession(
@@ -85,13 +89,15 @@ export function useRoomSession(
   const [localUserId] = useState<string>(() => createSessionUserId())
   const [joined, setJoined] = useState(false)
   const [connected, setConnected] = useState(false)
-  const [roomCode, setRoomCode] = useState('')
+  const [roomCode, setRoomCode] = useState(CANONICAL_ROOM_CODE)
   const [transportMode, setTransportMode] = useState<TransportMode>(() =>
     hasSupabaseCredentials() ? 'supabase' : 'cloud-relay',
   )
 
-  const [roomCustomization, setRoomCustomization] = useState<RoomCustomizationState>(() =>
-    createDefaultRoomCustomization(),
+  const [roomCustomization, setRoomCustomization] = useState<RoomCustomizationState>(
+    () =>
+      loadLocalRoomCustomization(CANONICAL_ROOM_CODE) ??
+      createDefaultRoomCustomization(),
   )
 
   const computedSeats = useMemo<ComputedSeat[]>(
@@ -101,6 +107,7 @@ export function useRoomSession(
 
   const [localProfile, setLocalProfile] = useState<ParticipantProfile>(() => {
     const saved = loadSavedAvatarPreferences()
+    const firstSeatId = computedSeats[0]?.id ?? 'furn-sofa-front:0'
     return {
       userId: localUserId,
       displayName: saved?.displayName || 'Guest',
@@ -109,7 +116,7 @@ export function useRoomSession(
       avatarCustomization:
         saved?.avatarCustomization ?? { ...DEFAULT_AVATAR_CUSTOMIZATION },
       seatIndex: 0,
-      seatId: 'furn-sofa-front:0',
+      seatId: firstSeatId,
       isHost: true,
       isMuted: false,
       inVR: false,
@@ -152,6 +159,41 @@ export function useRoomSession(
   useEffect(() => {
     roomCodeRef.current = roomCode
   }, [roomCode])
+
+  // Hydrate from cloud storage on initial mount and guarantee flush on pagehide/beforeunload
+  useEffect(() => {
+    void fetchCloudRoomCustomization(CANONICAL_ROOM_CODE).then((cloudState) => {
+      if (!cloudState) return
+      setRoomCustomization((prev) => {
+        if (!isNewerCustomization(cloudState, prev)) return prev
+        roomCustomizationRef.current = cloudState
+        saveLocalRoomCustomization(CANONICAL_ROOM_CODE, cloudState)
+        return cloudState
+      })
+    })
+
+    const flushLayoutToStorage = () => {
+      const current = roomCustomizationRef.current
+      if (current.revision > 0 || current.updatedAt > 0) {
+        saveLocalRoomCustomization(CANONICAL_ROOM_CODE, current)
+      }
+    }
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        flushLayoutToStorage()
+      }
+    }
+
+    window.addEventListener('beforeunload', flushLayoutToStorage)
+    window.addEventListener('pagehide', flushLayoutToStorage)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('beforeunload', flushLayoutToStorage)
+      window.removeEventListener('pagehide', flushLayoutToStorage)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [])
 
   // Prune expired floating 3D emoji reactions every 500ms
   useEffect(() => {
@@ -263,9 +305,15 @@ export function useRoomSession(
       }
       remotePosesRef.current.clear()
 
-      const normalizedCode = opts.roomCode.toUpperCase().trim() || 'LOUNGE-1'
+      const normalizedCode = CANONICAL_ROOM_CODE
+      const diskLayout = loadLocalRoomCustomization(normalizedCode)
+      const currentMemLayout = roomCustomizationRef.current
       const savedLocalLayout =
-        loadLocalRoomCustomization(normalizedCode) ?? createDefaultRoomCustomization()
+        diskLayout && isNewerCustomization(diskLayout, currentMemLayout)
+          ? diskLayout
+          : currentMemLayout.revision > 0 || currentMemLayout.updatedAt > 0
+            ? currentMemLayout
+            : (diskLayout ?? createDefaultRoomCustomization())
       const initialSeats = computeRoomSeats(savedLocalLayout)
       const firstSeat = initialSeats[0]
 
@@ -600,20 +648,20 @@ export function useRoomSession(
     ) => {
       const current = roomCustomizationRef.current
       const draft = updater(current)
+      const nextUpdatedAt = Math.max(Date.now(), current.updatedAt + 1)
+      const nextRevision = Math.max(current.revision + 1, nextUpdatedAt)
       const next: RoomCustomizationState = {
         ...draft,
-        revision: current.revision + 1,
-        updatedAt: Date.now(),
+        revision: nextRevision,
+        updatedAt: nextUpdatedAt,
         updatedBy: localProfileRef.current.displayName,
       }
       roomCustomizationRef.current = next
       setRoomCustomization(next)
 
-      const activeRoom = roomCodeRef.current
-      if (activeRoom) {
-        saveLocalRoomCustomization(activeRoom, next)
-        scheduleCloudRoomSave(activeRoom, next)
-      }
+      const activeRoom = roomCodeRef.current || CANONICAL_ROOM_CODE
+      saveLocalRoomCustomization(activeRoom, next)
+      scheduleCloudRoomSave(activeRoom, next)
       serviceRef.current?.broadcastRoomCustomization(next)
     },
     [],
@@ -622,21 +670,21 @@ export function useRoomSession(
   const resetRoomCustomization = useCallback(() => {
     const defaults = createDefaultRoomCustomization()
     const current = roomCustomizationRef.current
+    const nextUpdatedAt = Math.max(Date.now(), current.updatedAt + 1)
+    const nextRevision = Math.max(current.revision + 1, nextUpdatedAt)
     const next: RoomCustomizationState = {
       ...defaults,
-      revision: current.revision + 1,
-      updatedAt: Date.now(),
+      revision: nextRevision,
+      updatedAt: nextUpdatedAt,
       updatedBy: localProfileRef.current.displayName,
     }
     roomCustomizationRef.current = next
     setRoomCustomization(next)
 
-    const activeRoom = roomCodeRef.current
-    if (activeRoom) {
-      clearLocalRoomCustomization(activeRoom)
-      saveLocalRoomCustomization(activeRoom, next)
-      scheduleCloudRoomSave(activeRoom, next)
-    }
+    const activeRoom = roomCodeRef.current || CANONICAL_ROOM_CODE
+    clearLocalRoomCustomization(activeRoom)
+    saveLocalRoomCustomization(activeRoom, next)
+    scheduleCloudRoomSave(activeRoom, next)
     serviceRef.current?.broadcastRoomCustomization(next)
     appendSystemMessage(`${localProfileRef.current.displayName} reset the room layout to default.`)
   }, [appendSystemMessage])
@@ -647,19 +695,19 @@ export function useRoomSession(
         const parsed = sanitizeRoomCustomization(JSON.parse(rawJson))
         if (!parsed) return false
         const current = roomCustomizationRef.current
+        const nextUpdatedAt = Math.max(Date.now(), current.updatedAt + 1)
+        const nextRevision = Math.max(current.revision + 1, nextUpdatedAt)
         const next: RoomCustomizationState = {
           ...parsed,
-          revision: current.revision + 1,
-          updatedAt: Date.now(),
+          revision: nextRevision,
+          updatedAt: nextUpdatedAt,
           updatedBy: localProfileRef.current.displayName,
         }
         roomCustomizationRef.current = next
         setRoomCustomization(next)
-        const activeRoom = roomCodeRef.current
-        if (activeRoom) {
-          saveLocalRoomCustomization(activeRoom, next)
-          scheduleCloudRoomSave(activeRoom, next)
-        }
+        const activeRoom = roomCodeRef.current || CANONICAL_ROOM_CODE
+        saveLocalRoomCustomization(activeRoom, next)
+        scheduleCloudRoomSave(activeRoom, next)
         serviceRef.current?.broadcastRoomCustomization(next)
         appendSystemMessage(`${localProfileRef.current.displayName} loaded a custom room blueprint.`)
         return true

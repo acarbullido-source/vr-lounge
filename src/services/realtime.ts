@@ -122,6 +122,8 @@ export class RoomRealtimeService {
   private supabaseChannel: RealtimeChannel | null = null
   private mqttClient: MqttClient | null = null
   private mqttTopic: string
+  private mqttRetainedLayoutTopic: string
+  private pendingRetainedLayout: RoomCustomizationState | null = null
   private localChannel: BroadcastChannel | null = null
   private heartbeatTimer: number | null = null
   private presenceMap = new Map<string, PresenceRecord>()
@@ -140,11 +142,13 @@ export class RoomRealtimeService {
     this.callbacks = callbacks
     this.mode = hasSupabaseCredentials() ? 'supabase' : 'cloud-relay'
     this.mqttTopic = `vrlounge/v1/${encodeURIComponent(this.roomCode)}/bus`
+    this.mqttRetainedLayoutTopic = `vrlounge/v1/${encodeURIComponent(this.roomCode)}/retained-layout`
   }
 
   async connect(): Promise<void> {
     if (this.destroyed) return
     if (this.mode === 'supabase') {
+      void this.connectMqttBroker(0, true)
       await this.connectSupabase()
     } else {
       this.connectCloudRelayAndLocal()
@@ -287,7 +291,7 @@ export class RoomRealtimeService {
     }
 
     // 2. Global TLS WebSocket Relay (MQTT over WSS) for cross-network headsets & friends
-    void this.connectMqttBroker(0)
+    void this.connectMqttBroker(0, false)
 
     // Announce immediately + periodic heartbeat & stale-peer pruning
     this.publishRelay('presence-announce', this.currentProfile)
@@ -306,8 +310,19 @@ export class RoomRealtimeService {
     window.addEventListener('beforeunload', this.handleWindowUnload)
   }
 
-  private async connectMqttBroker(brokerIndex: number): Promise<void> {
+  private async connectMqttBroker(
+    brokerIndex: number,
+    retainedLayoutOnly = false,
+  ): Promise<void> {
     if (this.destroyed) return
+    if (this.mqttClient) {
+      try {
+        this.mqttClient.end(true)
+      } catch {
+        // Ignore cleanup error
+      }
+      this.mqttClient = null
+    }
     const url = PUBLIC_WSS_BROKERS[brokerIndex % PUBLIC_WSS_BROKERS.length]
 
     let mqttConnect: typeof import('mqtt').connect
@@ -332,12 +347,16 @@ export class RoomRealtimeService {
       keepalive: 25,
       connectTimeout: 7000,
       reconnectPeriod: 2500,
-      will: {
-        topic: this.mqttTopic,
-        payload: JSON.stringify(willEnvelope),
-        qos: 0,
-        retain: false,
-      },
+      ...(retainedLayoutOnly
+        ? {}
+        : {
+            will: {
+              topic: this.mqttTopic,
+              payload: JSON.stringify(willEnvelope),
+              qos: 0,
+              retain: false,
+            },
+          }),
     })
 
     let connectedOnce = false
@@ -348,18 +367,42 @@ export class RoomRealtimeService {
         return
       }
       connectedOnce = true
-      client.subscribe(this.mqttTopic, { qos: 0 }, (err) => {
-        if (!err && !this.destroyed) {
-          this.callbacks.onConnectionStatus?.(true)
-          this.publishRelay('presence-announce', this.currentProfile)
-          this.requestRoomState()
+
+      // Subscribe to the retained room layout snapshot topic so returning
+      // users receive the latest layout even when 0 peers are online
+      client.subscribe(this.mqttRetainedLayoutTopic, { qos: 1 }, () => {
+        if (!this.destroyed && this.pendingRetainedLayout) {
+          client.publish(
+            this.mqttRetainedLayoutTopic,
+            JSON.stringify(this.pendingRetainedLayout),
+            { qos: 1, retain: true },
+          )
         }
       })
+
+      if (!retainedLayoutOnly) {
+        client.subscribe(this.mqttTopic, { qos: 0 }, (err) => {
+          if (!err && !this.destroyed) {
+            this.callbacks.onConnectionStatus?.(true)
+            this.publishRelay('presence-announce', this.currentProfile)
+            this.requestRoomState()
+          }
+        })
+      }
     })
 
-    client.on('message', (_topic, messageBuffer) => {
+    client.on('message', (topic, messageBuffer) => {
       if (this.destroyed) return
       try {
+        if (topic === this.mqttRetainedLayoutTopic) {
+          const retainedState = JSON.parse(
+            messageBuffer.toString(),
+          ) as RoomCustomizationState
+          if (retainedState && typeof retainedState === 'object') {
+            this.callbacks.onRoomCustomization?.(retainedState)
+          }
+          return
+        }
         const parsed = JSON.parse(messageBuffer.toString()) as RelayEnvelope
         this.handleRelayEnvelope(parsed)
       } catch {
@@ -371,12 +414,12 @@ export class RoomRealtimeService {
       if (!connectedOnce && !this.destroyed && brokerIndex + 1 < PUBLIC_WSS_BROKERS.length) {
         client.end(true)
         this.mqttClient = null
-        void this.connectMqttBroker(brokerIndex + 1)
+        void this.connectMqttBroker(brokerIndex + 1, retainedLayoutOnly)
       }
     })
 
     client.on('offline', () => {
-      if (!this.destroyed) {
+      if (!this.destroyed && !retainedLayoutOnly) {
         this.callbacks.onConnectionStatus?.(false)
       }
     })
@@ -545,6 +588,14 @@ export class RoomRealtimeService {
 
   broadcastRoomCustomization(state: RoomCustomizationState): void {
     if (this.destroyed) return
+    this.pendingRetainedLayout = state
+    if (this.mqttClient?.connected) {
+      this.mqttClient.publish(
+        this.mqttRetainedLayoutTopic,
+        JSON.stringify(state),
+        { qos: 1, retain: true },
+      )
+    }
     if (this.supabaseChannel) {
       void this.supabaseChannel.send({
         type: 'broadcast',

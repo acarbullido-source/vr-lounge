@@ -197,13 +197,11 @@ export function CinemaRoom({
     [lighting.ambientTint],
   )
 
-  const inWingSeat = Boolean(localSeatId?.startsWith('wing:'))
-
   // Smoothly interpolate mood brightness, colors & playback Auto-Dim at 72Hz/90Hz
   useFrame(({ clock }, delta) => {
     const lerpAlpha = 1 - Math.exp(-5.0 * Math.min(delta, 0.1))
     const dimFactor =
-      lighting.autoDimOnPlay && isActivelyPlayingMedia && !buildMode && !inWingSeat
+      lighting.autoDimOnPlay && isActivelyPlayingMedia && !buildMode
         ? 0.32
         : 1.0
     const masterGain = Math.max(0.18, lighting.brightness * dimFactor)
@@ -1007,7 +1005,7 @@ export function CinemaRoom({
                 anchorX="center"
                 anchorY="middle"
               >
-                {`VR LOUNGE · ROOM ${roomCode || 'LOBBY'}`}
+                {`VR LOUNGE · ${roomCode ? 'SHARED HANGOUT' : 'PRIVATE HANGOUT'}`}
               </Text>
 
               <Text

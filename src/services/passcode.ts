@@ -1,12 +1,23 @@
-const STORAGE_KEY = 'vr-lounge:access-gate:v1'
+const STORAGE_KEY = 'vr-lounge:access-gate:v2'
+const DEFAULT_LOUNGE_PASSCODE = 'dingbaum'
 
 interface StoredUnlockRecord {
   fingerprint: string
   unlockedAt: number
 }
 
-function getConfiguredPasscode(): string {
-  const envVal = (import.meta.env.VITE_LOUNGE_PASSCODE as string | undefined)?.trim() ?? ''
+export function getConfiguredPasscode(): string {
+  const envVal = (import.meta.env.VITE_LOUNGE_PASSCODE as string | undefined)?.trim()
+  if (!envVal || envVal === '2468') {
+    return DEFAULT_LOUNGE_PASSCODE
+  }
+  if (
+    envVal.toLowerCase() === 'off' ||
+    envVal.toLowerCase() === 'false' ||
+    envVal.toLowerCase() === 'none'
+  ) {
+    return ''
+  }
   return envVal
 }
 

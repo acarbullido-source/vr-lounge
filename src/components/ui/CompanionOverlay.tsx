@@ -1,6 +1,5 @@
 import {
   Check,
-  Compass,
   Copy,
   Crown,
   Dices,
@@ -20,7 +19,6 @@ import {
   Play,
   Radio,
   RotateCcw,
-  RefreshCw,
   Search,
   Send,
   ShieldAlert,
@@ -41,9 +39,9 @@ import {
 import {
   AVATAR_COLORS,
   AVATAR_STYLES,
+  CANONICAL_ROOM_CODE,
   QUICK_REACTIONS,
   SAMPLE_MEDIA_PRESETS,
-  generateRoomCode,
 } from '../../constants/cinema'
 import { FREE_ROAM_SEAT_ID } from '../../constants/hangout'
 import type { JoinRoomOptions } from '../../hooks/useRoomSession'
@@ -182,7 +180,7 @@ export function CompanionOverlay({
   joined,
   connected,
   inVRSession,
-  roomCode,
+  roomCode: _roomCode,
   transportMode,
   localProfile,
   participants,
@@ -251,8 +249,6 @@ export function CompanionOverlay({
   onToggleBarGames,
   wardrobeOpen = false,
   onToggleWardrobe,
-  clubhouseOpen = false,
-  onToggleClubhouse,
 }: CompanionOverlayProps) {
   // Pre-join lobby form state hydrated from saved avatar preferences
   const [savedAvatarPrefs] = useState(() => loadSavedAvatarPreferences())
@@ -260,10 +256,6 @@ export function CompanionOverlay({
     const saved =
       savedAvatarPrefs?.displayName || window.localStorage.getItem('vr-lounge:name')
     return saved || `Viewer ${Math.floor(100 + Math.random() * 899)}`
-  })
-  const [lobbyRoomCode, setLobbyRoomCode] = useState(() => {
-    const params = new URLSearchParams(window.location.search)
-    return params.get('room')?.toUpperCase() || 'CINEMA-1'
   })
   const [avatarColor, setAvatarColor] = useState<string>(
     savedAvatarPrefs?.avatarColor ?? AVATAR_COLORS[0].hex,
@@ -386,16 +378,17 @@ export function CompanionOverlay({
     try {
       const cleanName = displayName.trim() || 'Cinema Guest'
       window.localStorage.setItem('vr-lounge:name', cleanName)
-      const normalizedRoom = lobbyRoomCode.trim().toUpperCase() || 'CINEMA-1'
 
-      // Update shareable URL query parameter without reloading
+      // Keep URL clean (single shared lounge space, no room query parameters needed)
       const nextUrl = new URL(window.location.href)
-      nextUrl.searchParams.set('room', normalizedRoom)
-      window.history.replaceState({}, '', nextUrl.toString())
+      if (nextUrl.searchParams.has('room')) {
+        nextUrl.searchParams.delete('room')
+        window.history.replaceState({}, '', nextUrl.toString())
+      }
 
       await onJoinRoom(
         {
-          roomCode: normalizedRoom,
+          roomCode: CANONICAL_ROOM_CODE,
           displayName: cleanName,
           avatarColor,
           avatarStyle,
@@ -412,7 +405,7 @@ export function CompanionOverlay({
 
   const handleCopyInvite = async () => {
     const shareUrl = new URL(window.location.href)
-    shareUrl.searchParams.set('room', joined ? roomCode : lobbyRoomCode)
+    shareUrl.searchParams.delete('room')
     try {
       await navigator.clipboard.writeText(shareUrl.toString())
       setCopiedCode(true)
@@ -443,7 +436,7 @@ export function CompanionOverlay({
                   id="vr-lounge-version-badge"
                   className="rounded-md border border-[#e5a93c]/35 bg-[#e5a93c]/12 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[#e5a93c]"
                 >
-                  v2.0
+                  v2.1
                 </span>
               </div>
               <h1
@@ -453,9 +446,8 @@ export function CompanionOverlay({
                 VR Lounge
               </h1>
               <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-[#c7c2b8]">
-                Step into your customizable 3D hangout from Meta Quest 3 or desktop. Decorate
-                the room together, hop onto any couch or barstool, talk with spatial voice, and
-                watch YouTube or live browser tabs.
+                Step into our single persistent 3D hangout space. Everything we move,
+                decorate, or customize stays right where we left it when we return.
               </p>
             </div>
 
@@ -470,8 +462,8 @@ export function CompanionOverlay({
                 />
                 <span className="font-medium text-[#f4f1ea]">
                   {transportMode === 'supabase'
-                    ? 'Supabase Realtime Ready'
-                    : 'Global Cloud Rooms Ready'}
+                    ? 'Persistent Cloud Lounge Ready'
+                    : 'Persistent Lounge Sync Ready'}
                 </span>
               </div>
 
@@ -528,42 +520,35 @@ export function CompanionOverlay({
                 </div>
 
                 <div>
-                  <label
-                    htmlFor="input-room-code"
-                    className="block text-xs font-medium uppercase tracking-wider text-[#c7c2b8]"
-                  >
-                    Room Code
-                  </label>
-                  <div className="mt-1.5 flex gap-2">
-                    <input
-                      id="input-room-code"
-                      type="text"
-                      maxLength={14}
-                      value={lobbyRoomCode}
-                      onChange={(e) => setLobbyRoomCode(e.target.value.toUpperCase())}
-                      placeholder="CINEMA-1"
-                      className="lounge-input w-full rounded-xl px-3.5 py-2.5 font-mono text-sm uppercase tracking-wider"
-                    />
-                    <button
-                      id="btn-generate-room-code"
-                      type="button"
-                      title="Generate a fresh Room Code"
-                      onClick={() => setLobbyRoomCode(generateRoomCode())}
-                      className="flex shrink-0 items-center justify-center rounded-xl border border-[#f4f1ea]/12 bg-[#141922] px-3 text-[#c7c2b8] transition hover:border-[#e5a93c]/50 hover:text-[#f4f1ea]"
-                    >
-                      <RefreshCw className="h-4 w-4" />
-                    </button>
+                  <span className="block text-xs font-medium uppercase tracking-wider text-[#c7c2b8]">
+                    Shared Hangout Space
+                  </span>
+                  <div className="mt-1.5 flex items-center justify-between gap-2 rounded-xl border border-[#f4f1ea]/12 bg-[#141922] px-3.5 py-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-semibold text-[#f4f1ea]">
+                        Single Persistent Lounge
+                      </div>
+                      <div className="truncate text-[11px] text-[#8a867e]">
+                        {roomCustomization.furniture.length} items · Layout saved
+                      </div>
+                    </div>
                     <button
                       id="btn-copy-lobby-invite"
                       type="button"
-                      title="Copy invite URL"
+                      title="Copy lounge invite link"
                       onClick={() => void handleCopyInvite()}
-                      className="flex shrink-0 items-center justify-center rounded-xl border border-[#f4f1ea]/12 bg-[#141922] px-3 text-[#c7c2b8] transition hover:border-[#e5a93c]/50 hover:text-[#f4f1ea]"
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[#f4f1ea]/12 bg-[#080a0d]/80 px-2.5 py-1.5 text-xs font-medium text-[#e5a93c] transition hover:border-[#e5a93c]/50 hover:text-[#f4f1ea]"
                     >
                       {copiedCode ? (
-                        <Check className="h-4 w-4 text-[#49b384]" />
+                        <>
+                          <Check className="h-3.5 w-3.5 text-[#49b384]" />
+                          <span className="text-[#49b384]">Copied</span>
+                        </>
                       ) : (
-                        <Copy className="h-4 w-4" />
+                        <>
+                          <Copy className="h-3.5 w-3.5" />
+                          <span>Invite Link</span>
+                        </>
                       )}
                     </button>
                   </div>
@@ -744,10 +729,10 @@ export function CompanionOverlay({
             id="btn-copy-room-code"
             type="button"
             onClick={() => void handleCopyInvite()}
-            title="Copy shareable room invite link"
+            title="Copy shareable lounge invite link"
             className="flex items-center gap-1.5 rounded-lg bg-[#080a0d]/70 px-2.5 py-1 font-mono text-xs text-[#e5a93c] transition hover:bg-[#080a0d]"
           >
-            <span>{roomCode}</span>
+            <span>{copiedCode ? 'Invite Copied' : 'Invite Friends'}</span>
             {copiedCode ? (
               <Check className="h-3.5 w-3.5 text-[#49b384]" />
             ) : (
@@ -1512,8 +1497,7 @@ export function CompanionOverlay({
         !buildDrawerOpen &&
         !urlDrawerOpen &&
         !barGamesOpen &&
-        !wardrobeOpen &&
-        !clubhouseOpen && (
+        !wardrobeOpen && (
           <div className="pointer-events-none mx-auto mb-2 flex items-center gap-2 rounded-full border border-[#38bdf8]/35 bg-[#080a0d]/85 px-3.5 py-1 text-[11px] text-[#cbd5e1] shadow-lg backdrop-blur-md">
             <Footprints className="h-3.5 w-3.5 text-[#38bdf8]" />
             <span>
@@ -1536,7 +1520,7 @@ export function CompanionOverlay({
 
       {/* Bottom Companion Presenter & Watch-Party Dock */}
       <footer className="pointer-events-auto lounge-dock-bar mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-2.5 rounded-2xl px-3.5 py-2.5">
-        {/* Left: Presenter Handoff + Tab Share + URL Player + Customize Room + Games + Rooms + Avatar */}
+        {/* Left: Presenter Handoff + Tab Share + URL Player + Customize Room + Games + Avatar */}
         <div className="flex flex-wrap items-center gap-2">
           <button
             id="btn-take-or-release-control"
@@ -1584,7 +1568,6 @@ export function CompanionOverlay({
                 if (next) {
                   setBuildDrawerOpen(false)
                   onToggleWardrobe?.(false)
-                  onToggleClubhouse?.(false)
                 }
                 return next
               })
@@ -1608,7 +1591,6 @@ export function CompanionOverlay({
                 if (next) {
                   setUrlDrawerOpen(false)
                   onToggleWardrobe?.(false)
-                  onToggleClubhouse?.(false)
                   onToggleBuildMode(true)
                 } else {
                   onToggleBuildMode(false)
@@ -1636,7 +1618,6 @@ export function CompanionOverlay({
                   setUrlDrawerOpen(false)
                   onToggleBuildMode(false)
                   onToggleWardrobe?.(false)
-                  onToggleClubhouse?.(false)
                 }
                 onToggleBarGames()
               }}
@@ -1651,31 +1632,6 @@ export function CompanionOverlay({
             </button>
           )}
 
-          {onToggleClubhouse && (
-            <button
-              id="btn-open-clubhouse-rooms"
-              type="button"
-              onClick={() => {
-                if (!clubhouseOpen) {
-                  setBuildDrawerOpen(false)
-                  setUrlDrawerOpen(false)
-                  setChatDrawerOpen(false)
-                  onToggleBuildMode(false)
-                  onToggleWardrobe?.(false)
-                }
-                onToggleClubhouse()
-              }}
-              className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition ${
-                clubhouseOpen
-                  ? 'border-[#34d399] bg-[#34d399]/18 text-[#a7f3d0]'
-                  : 'border-[#f4f1ea]/12 bg-[#141922] text-[#f4f1ea] hover:border-[#34d399]/60'
-              }`}
-            >
-              <Compass className="h-3.5 w-3.5 text-[#34d399]" />
-              <span>Rooms &amp; Ops</span>
-            </button>
-          )}
-
           {onToggleWardrobe && (
             <button
               id="btn-open-avatar-wardrobe"
@@ -1686,7 +1642,6 @@ export function CompanionOverlay({
                   setUrlDrawerOpen(false)
                   setChatDrawerOpen(false)
                   onToggleBuildMode(false)
-                  onToggleClubhouse?.(false)
                 }
                 onToggleWardrobe()
               }}

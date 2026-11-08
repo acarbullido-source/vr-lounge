@@ -2,6 +2,11 @@ import type { PresenterState, SampleMediaPreset, SeatDefinition } from '../types
 export { AVATAR_COLORS, AVATAR_STYLES } from './avatars'
 
 /**
+ * Single permanent room identifier shared by everyone who enters the lounge.
+ */
+export const CANONICAL_ROOM_CODE = 'LOUNGE'
+
+/**
  * Curved cinema screen placement & dimensions (16:9 aspect ratio)
  * Positioned at the front of the room (-Z) facing +Z toward the tiered seats.
  */

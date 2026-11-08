@@ -9,6 +9,7 @@ import type {
 } from '../types/barGames'
 import { hasSupabaseCredentials } from './realtime'
 
+const CANONICAL_CLUBHOUSE_KEY = 'vr-lounge:single-room-clubhouse:v1'
 const LOCAL_CLUBHOUSE_PREFIX = 'vr-lounge:clubhouse-v3:'
 
 const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim() ?? ''
@@ -48,12 +49,25 @@ export function sanitizeClubhouseState(raw: unknown): ClubhousePersistentState |
 }
 
 export function loadLocalClubhouseState(roomCode: string): ClubhousePersistentState | null {
-  if (typeof window === 'undefined' || !roomCode) return null
+  if (typeof window === 'undefined') return null
   try {
-    const key = `${LOCAL_CLUBHOUSE_PREFIX}${roomCode.toUpperCase().trim()}`
-    const raw = window.localStorage.getItem(key)
-    if (!raw) return null
-    return sanitizeClubhouseState(JSON.parse(raw))
+    const primaryRaw = window.localStorage.getItem(CANONICAL_CLUBHOUSE_KEY)
+    if (primaryRaw) {
+      const parsed = sanitizeClubhouseState(JSON.parse(primaryRaw))
+      if (parsed) return parsed
+    }
+    if (roomCode) {
+      const key = `${LOCAL_CLUBHOUSE_PREFIX}${roomCode.toUpperCase().trim()}`
+      const raw = window.localStorage.getItem(key)
+      if (raw) {
+        const parsed = sanitizeClubhouseState(JSON.parse(raw))
+        if (parsed) {
+          window.localStorage.setItem(CANONICAL_CLUBHOUSE_KEY, JSON.stringify(parsed))
+          return parsed
+        }
+      }
+    }
+    return null
   } catch {
     return null
   }
@@ -63,10 +77,14 @@ export function saveLocalClubhouseState(
   roomCode: string,
   state: ClubhousePersistentState,
 ): void {
-  if (typeof window === 'undefined' || !roomCode) return
+  if (typeof window === 'undefined') return
   try {
-    const key = `${LOCAL_CLUBHOUSE_PREFIX}${roomCode.toUpperCase().trim()}`
-    window.localStorage.setItem(key, JSON.stringify(state))
+    const serialized = JSON.stringify(state)
+    window.localStorage.setItem(CANONICAL_CLUBHOUSE_KEY, serialized)
+    if (roomCode) {
+      const key = `${LOCAL_CLUBHOUSE_PREFIX}${roomCode.toUpperCase().trim()}`
+      window.localStorage.setItem(key, serialized)
+    }
   } catch {
     // Ignore storage quota errors
   }
