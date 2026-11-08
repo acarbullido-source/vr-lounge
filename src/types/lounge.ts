@@ -83,6 +83,7 @@ export interface AvatarPose6DoF {
   seatIndex: number
   seatId?: string
   inVR: boolean
+  isFlying?: boolean
   timestamp: number
 }
 

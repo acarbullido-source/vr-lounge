@@ -1,4 +1,6 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { resolve } from 'node:path'
 import { Readable } from 'node:stream'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import tailwindcss from '@tailwindcss/vite'
@@ -172,6 +174,28 @@ function streamCorsProxyPlugin(): Plugin {
   }
 }
 
+function spaMobileRouteFallbackPlugin(): Plugin {
+  return {
+    name: 'vr-lounge-spa-mobile-route-fallback',
+    closeBundle() {
+      try {
+        const distDir = resolve(process.cwd(), 'dist')
+        const indexPath = resolve(distDir, 'index.html')
+        if (!existsSync(indexPath)) return
+        const html = readFileSync(indexPath, 'utf8')
+        writeFileSync(resolve(distDir, '404.html'), html, 'utf8')
+        const mobileDir = resolve(distDir, 'mobile')
+        mkdirSync(mobileDir, { recursive: true })
+        const mobileHtml = html
+          .replace(/(src|href)="\.\//g, '$1="../')
+        writeFileSync(resolve(mobileDir, 'index.html'), mobileHtml, 'utf8')
+      } catch {
+        // Non-fatal fallback
+      }
+    },
+  }
+}
+
 export default defineConfig(({ command }) => ({
   base: './',
   resolve: {
@@ -182,6 +206,7 @@ export default defineConfig(({ command }) => ({
     tailwindcss(),
     react(),
     streamCorsProxyPlugin(),
+    spaMobileRouteFallbackPlugin(),
   ],
   build: {
     chunkSizeWarningLimit: 1600,

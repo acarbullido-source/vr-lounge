@@ -93,6 +93,7 @@ import { AvatarCustomizerControls } from './AvatarCustomizerControls'
 import { BuildCatalogDrawer } from './BuildCatalogDrawer'
 import { NesConsoleModal } from './NesConsoleModal'
 import { YouTubeAccountAndTVPanel } from './YouTubeAccountAndTVPanel'
+import { getShareableMobileUrl } from '../../services/mobileMode'
 
 function formatDuration(sec: number): string {
   if (!Number.isFinite(sec) || sec <= 0) return '0:00'
@@ -186,6 +187,10 @@ export interface CompanionOverlayProps {
   clubhouseOpen?: boolean
   onToggleClubhouse?: (open?: boolean) => void
   openYouTubeAccountNonce?: number
+  flyMode?: boolean
+  onToggleFlyMode?: () => void
+  onDropToFloor?: () => void
+  onOpenMobileMode?: (mode: 'pocket-2d' | 'touch-3d') => void
 }
 
 export function CompanionOverlay({
@@ -264,6 +269,10 @@ export function CompanionOverlay({
   clubhouseOpen = false,
   onToggleClubhouse,
   openYouTubeAccountNonce = 0,
+  flyMode = false,
+  onToggleFlyMode,
+  onDropToFloor,
+  onOpenMobileMode,
 }: CompanionOverlayProps) {
   // Pre-join lobby form state hydrated from saved avatar preferences
   const [savedAvatarPrefs] = useState(() => loadSavedAvatarPreferences())
@@ -325,10 +334,23 @@ export function CompanionOverlay({
   const [useCorsProxy, setUseCorsProxy] = useState(presenterState.useCorsProxy)
   const [chatDraft, setChatDraft] = useState('')
   const [copiedCode, setCopiedCode] = useState(false)
+  const [copiedMobileLink, setCopiedMobileLink] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const lastSeenMsgCountRef = useRef(0)
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const handledOpenYtNonceRef = useRef(0)
+
+  const handleCopyMobileInvite = async () => {
+    const mobileUrl = getShareableMobileUrl()
+    try {
+      await navigator.clipboard.writeText(mobileUrl)
+      setCopiedMobileLink(true)
+      window.setTimeout(() => setCopiedMobileLink(false), 2200)
+    } catch {
+      setCopiedMobileLink(true)
+      window.setTimeout(() => setCopiedMobileLink(false), 2200)
+    }
+  }
 
   useEffect(() => {
     if (
@@ -817,6 +839,31 @@ export function CompanionOverlay({
                   <MonitorUp className="h-4 w-4 text-[#e5a93c]" />
                   <span>Join in Desktop / Companion Presenter Mode</span>
                 </button>
+
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button
+                    id="btn-join-mobile-pocket"
+                    type="button"
+                    disabled={joining}
+                    onClick={() => {
+                      onOpenMobileMode?.('pocket-2d')
+                      void handleLobbySubmit(false)
+                    }}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-sky-400/35 bg-sky-500/12 px-3 py-2 text-xs font-semibold text-sky-200 transition hover:bg-sky-500/20"
+                  >
+                    <span>📱 Join Mobile Pocket View</span>
+                  </button>
+                  <button
+                    id="btn-copy-mobile-link"
+                    type="button"
+                    onClick={() => void handleCopyMobileInvite()}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-[#e5a93c]/35 bg-[#e5a93c]/12 px-3 py-2 text-xs font-semibold text-[#e5a93c] transition hover:bg-[#e5a93c]/20"
+                  >
+                    <span>
+                      {copiedMobileLink ? '✓ Mobile Link Copied' : '🔗 Copy Mobile Link'}
+                    </span>
+                  </button>
+                </div>
               </div>
             </section>
           </div>
@@ -862,6 +909,16 @@ export function CompanionOverlay({
             ) : (
               <Copy className="h-3.5 w-3.5 text-[#8a867e]" />
             )}
+          </button>
+
+          <button
+            id="btn-hud-copy-mobile-link"
+            type="button"
+            onClick={() => void handleCopyMobileInvite()}
+            title="Copy dedicated phone-optimized /mobile link"
+            className="flex items-center gap-1 rounded-lg border border-sky-400/35 bg-sky-500/15 px-2 py-1 text-xs font-semibold text-sky-200 transition hover:bg-sky-500/25"
+          >
+            <span>{copiedMobileLink ? '✓ Mobile Link' : '📱 Mobile Link'}</span>
           </button>
 
           <button
@@ -970,7 +1027,7 @@ export function CompanionOverlay({
           )}
         </div>
 
-        {/* Right Utility Actions: Walk Free Toggle, Seat Selector, Enter VR, Leave */}
+        {/* Right Utility Actions: Walk Free Toggle, Fly Mode Toggle, Mobile View, Seat Selector, Enter VR, Leave */}
         <div className="lounge-dock-bar flex items-center gap-2 rounded-xl px-2.5 py-1.5">
           <button
             id="btn-hud-free-roam"
@@ -1016,6 +1073,46 @@ export function CompanionOverlay({
               {localProfile.seatId === FREE_ROAM_SEAT_ID ? 'Walking' : 'Walk Free'}
             </span>
           </button>
+
+          {onToggleFlyMode && (
+            <button
+              id="btn-hud-fly-mode"
+              type="button"
+              onClick={onToggleFlyMode}
+              title="Toggle Untethered 3D Fly Mode (Shortcut: F · Ascend: Space/E · Descend: C/Q)"
+              className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-semibold transition ${
+                flyMode
+                  ? 'border-sky-400 bg-sky-500 text-slate-950 shadow'
+                  : 'border-[#f4f1ea]/12 bg-[#141922] text-[#c7c2b8] hover:border-sky-400/50 hover:text-[#f4f1ea]'
+              }`}
+            >
+              <span>{flyMode ? '🚀 Fly: ON' : '🚀 Fly'}</span>
+            </button>
+          )}
+
+          {flyMode && onDropToFloor && (
+            <button
+              id="btn-hud-drop-floor"
+              type="button"
+              onClick={onDropToFloor}
+              title="Drop back to floor level (Y = 0)"
+              className="inline-flex items-center gap-1 rounded-lg border border-amber-400/40 bg-amber-500/15 px-2 py-1 text-xs font-semibold text-amber-200 transition hover:bg-amber-500/25"
+            >
+              <span>⬇ Floor</span>
+            </button>
+          )}
+
+          {onOpenMobileMode && (
+            <button
+              id="btn-hud-open-mobile-pocket"
+              type="button"
+              onClick={() => onOpenMobileMode('pocket-2d')}
+              title="Open Phone-Optimized Pocket Companion View"
+              className="inline-flex items-center gap-1 rounded-lg border border-[#f4f1ea]/12 bg-[#141922] px-2 py-1 text-xs font-medium text-[#c7c2b8] hover:border-[#e5a93c]/45 hover:text-[#f4f1ea]"
+            >
+              <span>📱 Pocket</span>
+            </button>
+          )}
 
           <select
             id="select-hud-seat"

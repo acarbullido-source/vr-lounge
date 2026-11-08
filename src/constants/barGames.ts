@@ -1070,6 +1070,32 @@ export function createInitialClubhouseState(): ClubhousePersistentState {
     ledger: {},
     recentMatches: [],
     props: [defaultProp],
+    watchlist: [
+      {
+        id: 'wl-bbb-60fps',
+        title: 'Big Buck Bunny (1080p 60fps Open Movie)',
+        url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+        addedBy: 'Clubhouse',
+        addedAt: Date.now() - 120_000,
+        votes: ['clubhouse'],
+      },
+      {
+        id: 'wl-tears-of-steel',
+        title: 'Tears of Steel (Sci-Fi Live Action Short)',
+        url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
+        addedBy: 'Clubhouse',
+        addedAt: Date.now() - 90_000,
+        votes: ['clubhouse'],
+      },
+      {
+        id: 'wl-sintel',
+        title: 'Sintel (Blender Fantasy Epic)',
+        url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
+        addedBy: 'Clubhouse',
+        addedAt: Date.now() - 60_000,
+        votes: [],
+      },
+    ],
   }
 }
 

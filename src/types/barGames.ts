@@ -189,6 +189,23 @@ export interface LedgerEntry {
   updatedAt: number
 }
 
+export interface WatchlistQueueItem {
+  id: string
+  title: string
+  url: string
+  addedBy: string
+  addedAt: number
+  votes: string[] // normalized player keys who upvoted
+}
+
+export type SoundboardEffectId =
+  | 'airhorn'
+  | 'rimshot'
+  | 'applause'
+  | 'cheer'
+  | 'arcade-coin'
+  | 'dramatic'
+
 export interface ClubhousePersistentState {
   revision: number
   updatedAt: number
@@ -196,6 +213,7 @@ export interface ClubhousePersistentState {
   ledger: Record<string, LedgerEntry>
   recentMatches: CompletedMatchRecord[]
   props: PredictionProp[]
+  watchlist?: WatchlistQueueItem[]
 }
 
 // ============================================================================
@@ -419,6 +437,12 @@ export type BarGamesWireEvent =
   | { kind: 'cornhole-state'; payload: CornholeState }
   | { kind: 'holotable-state'; payload: HolotableState }
   | { kind: 'clubhouse-state'; payload: ClubhousePersistentState }
+  | {
+      kind: 'soundboard-fx'
+      effectId: SoundboardEffectId
+      senderName: string
+      timestamp: number
+    }
   | {
       kind: 'bar-games-full-sync'
       darts: DartsMatchState

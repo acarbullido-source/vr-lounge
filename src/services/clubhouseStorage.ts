@@ -45,6 +45,10 @@ export function sanitizeClubhouseState(raw: unknown): ClubhousePersistentState |
     ledger: c.ledger && typeof c.ledger === 'object' ? c.ledger : defaults.ledger,
     recentMatches: Array.isArray(c.recentMatches) ? c.recentMatches.slice(0, 40) : [],
     props: Array.isArray(c.props) && c.props.length > 0 ? c.props.slice(0, 25) : defaults.props,
+    watchlist:
+      Array.isArray(c.watchlist) && c.watchlist.length > 0
+        ? c.watchlist.slice(0, 24)
+        : defaults.watchlist,
   }
 }
 

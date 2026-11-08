@@ -25,6 +25,7 @@ export interface AvatarManagerProps {
     position: [number, number, number]
     yaw: number
   }>
+  isFlying?: boolean
   remoteVoiceStreams: Record<string, MediaStream>
   voiceVolume: number
   broadcastPose: (pose: AvatarPose6DoF) => void
@@ -82,6 +83,7 @@ function RemoteAvatar({
   const rightHandRef = useRef<THREE.Group>(null)
   const nameplateRef = useRef<THREE.Group>(null)
   const speakRingRef = useRef<THREE.Mesh>(null)
+  const hoverRingRef = useRef<THREE.Group>(null)
   const speakLevelRef = useRef(0)
   const positionalAudioRef = useRef<THREE.PositionalAudio | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
@@ -290,11 +292,36 @@ function RemoteAvatar({
       mat.opacity = speaking ? Math.min(0.95, 0.38 + level * 0.75) : 0.12
       mat.color.set(speaking ? '#52B788' : participant.avatarColor)
     }
+
+    // Antigravity Hover Ring & Thruster Glow when remote player is flying in 3D space
+    if (hoverRingRef.current && headGroupRef.current) {
+      const airborne = Boolean(
+        pose?.isFlying || (pose && pose.head.position[1] > 2.15),
+      )
+      hoverRingRef.current.visible = airborne
+      if (airborne) {
+        hoverRingRef.current.position.set(
+          headGroupRef.current.position.x,
+          headGroupRef.current.position.y - 0.68,
+          headGroupRef.current.position.z,
+        )
+        hoverRingRef.current.rotation.y += delta * 2.4
+      }
+    }
   })
+
+  const latestPose = remotePosesRef.current?.get(participant.userId)
+  const isRemoteFlying = Boolean(
+    latestPose?.isFlying || (latestPose && latestPose.head.position[1] > 2.15),
+  )
 
   const statusTag = [
     participant.inVR ? 'VR' : 'DESKTOP',
-    participant.seatId === FREE_ROAM_SEAT_ID ? 'WALKING' : null,
+    isRemoteFlying
+      ? '🚀 FLYING'
+      : participant.seatId === FREE_ROAM_SEAT_ID
+        ? 'WALKING'
+        : null,
     isPresenter ? 'PRESENTING' : null,
     participant.isMuted ? 'MUTED' : null,
   ]
@@ -341,6 +368,28 @@ function RemoteAvatar({
           side={THREE.DoubleSide}
         />
       </mesh>
+
+      {/* Airborne Antigravity Hover Thruster Disc (visible when remote player is in Fly Mode) */}
+      <group ref={hoverRingRef} visible={false}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[0.24, 0.34, 28]} />
+          <meshBasicMaterial
+            color="#38BDF8"
+            transparent
+            opacity={0.72}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.04, 0]}>
+          <ringGeometry args={[0.12, 0.2, 24]} />
+          <meshBasicMaterial
+            color="#E5A93C"
+            transparent
+            opacity={0.62}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      </group>
 
       {/* Tracked Left Hand / Controller */}
       <group ref={leftHandRef} visible={false}>
@@ -395,6 +444,7 @@ export function AvatarManager({
   activePresenterId,
   remotePosesRef,
   localRoamPoseRef,
+  isFlying = false,
   remoteVoiceStreams,
   voiceVolume,
   broadcastPose,
@@ -443,7 +493,7 @@ export function AvatarManager({
       camera.getWorldPosition(scratchHeadPos)
       camera.getWorldQuaternion(scratchHeadQuat)
     } else if (isRoaming && localRoamPoseRef?.current) {
-      // Desktop Free-Roam: broadcast live standing world coordinates across the lounge
+      // Desktop Free-Roam / Fly Mode: broadcast live 3D world coordinates across the lounge
       const roamPos = localRoamPoseRef.current.position
       scratchHeadPos.set(roamPos[0], roamPos[1] + 1.54, roamPos[2])
       camera.getWorldQuaternion(scratchHeadQuat)
@@ -576,6 +626,7 @@ export function AvatarManager({
       seatIndex: isRoaming ? -1 : seat.index,
       seatId: isRoaming ? FREE_ROAM_SEAT_ID : seat.id,
       inVR: inXRSession,
+      isFlying: Boolean(isFlying && isRoaming),
       timestamp: Date.now(),
     })
   })

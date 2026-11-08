@@ -28,6 +28,11 @@ import {
   type ClubhouseDrawerTabId,
 } from './components/ui/ClubhouseRoomsAndOpsDrawer'
 import { CompanionOverlay } from './components/ui/CompanionOverlay'
+import { MobileCompanionDashboard } from './components/ui/MobileCompanionDashboard'
+import {
+  MobileTouchControlsOverlay,
+  type MobileTouchLocomotionInput,
+} from './components/ui/MobileTouchControlsOverlay'
 import { PasscodeGate } from './components/ui/PasscodeGate'
 import { AvatarManager } from './components/xr/AvatarManager'
 import { BarGamesCorner3D } from './components/xr/BarGamesCorner3D'
@@ -38,8 +43,10 @@ import { SpatialChatPanel } from './components/xr/SpatialChatPanel'
 import { SpatialControlDock } from './components/xr/SpatialControlDock'
 import type { VRKeyboardMode } from './components/xr/VRKeyboard3D'
 import { WardrobeMirror3D } from './components/xr/WardrobeMirror3D'
+import { WristWatchHUD3D } from './components/xr/WristWatchHUD3D'
 import { YouTubeBrowser3D } from './components/xr/YouTubeBrowser3D'
 import {
+  computeExpansionWingLayout,
   detectActiveLoungeWing,
   resolveExpansionWingState,
   type ExpansionRoomDestination,
@@ -49,6 +56,7 @@ import {
   LIGHTING_PRESETS,
   ROOM_SIZE_SPECS,
   getCatalogEntry,
+  resolveFlyablePosition,
   resolveWalkablePosition,
 } from './constants/hangout'
 import { useBarGames } from './hooks/useBarGames'
@@ -56,6 +64,10 @@ import { useMediaScreen } from './hooks/useMediaScreen'
 import { useRoomSession, type JoinRoomOptions } from './hooks/useRoomSession'
 import { useWebRTC, type ScreenShareQualityMode } from './hooks/useWebRTC'
 import { fireplaceAudio } from './services/fireplaceAudio'
+import {
+  detectInitialMobileViewMode,
+  type MobileViewMode,
+} from './services/mobileMode'
 import {
   isDeviceUnlocked,
   isPasscodeGateEnabled,
@@ -79,6 +91,7 @@ import type {
   LightingPresetId,
   LoungeWingId,
   PlacedFurnitureItem,
+  PresenterState,
   RoomArchitectureConfig,
   RoomLightingConfig,
   RoomScreenTransform,
@@ -134,6 +147,10 @@ const MOVEMENT_KEY_CODES = new Set([
   'KeyA',
   'KeyS',
   'KeyD',
+  'KeyE',
+  'KeyQ',
+  'KeyC',
+  'Space',
   'ArrowUp',
   'ArrowDown',
   'ArrowLeft',
@@ -157,6 +174,12 @@ interface SeatRigProps {
   joined: boolean
   seat: ComputedSeat
   isFreeRoaming: boolean
+  flyMode: boolean
+  activeLoungeWing: LoungeWingId
+  isMuted: boolean
+  cinemaVolume: number
+  effectiveCinemaVolume: number
+  presenterState: PresenterState
   architecture: RoomArchitectureConfig
   screenCenter: [number, number, number]
   recenterVersion: number
@@ -168,7 +191,14 @@ interface SeatRigProps {
     position: [number, number, number]
     yaw: number
   }>
+  mobileTouchInputRef: React.MutableRefObject<MobileTouchLocomotionInput>
   onEnterFreeRoam: () => void
+  onToggleFlyMode: () => void
+  onDropToFloor: () => void
+  onJumpToWing: (wingId: LoungeWingId) => void
+  onRecenterView: () => void
+  onToggleMute: () => void
+  onCycleStreamVolume: () => void
   onSummonDockToggle: () => void
   onInVRChange: (inVR: boolean) => void
   onRoamWingChange?: (wing: LoungeWingId) => void
@@ -176,23 +206,29 @@ interface SeatRigProps {
 }
 
 /**
- * Unified Seated + Free-Roam Locomotion Rig for both Meta Quest 3 and Desktop:
+ * Unified Seated + Free-Roam + 3D Free-Flight Locomotion Rig for Meta Quest 3, Desktop, and Mobile 3D:
  * 1. Immersive VR:
  *    - Left (or single) thumbstick smooth headset-relative walking clamped to room/alcove walls
- *      with smooth `0.38m` Rear Balcony step-up (or 8-way NES D-Pad when an NES game is active).
- *    - Right (or single) thumbstick `45°` comfort snap-turn pivoting around the user's exact
- *      physical `headWorld` position so room-scale walkers are never swung sideways.
+ *      with smooth `0.38m` Rear Balcony step-up (or 3D free flight when `flyMode` is active).
+ *    - Right thumbstick vertical axis (`rightStick.y`) smoothly ascends/descends in `flyMode`,
+ *      while horizontal axis (`rightStick.x`) performs `45°` comfort snap-turn around `headWorld`.
  *    - `A` / `X` hold-to-aim & release comfort floor teleport ring (mapped to NES `A` / `B` when playing NES).
  *    - `B` / `Y` press summons or minimizes the floating `SpatialControlDock`.
- * 2. Desktop / Companion:
- *    - `WASD` / Arrow keys smooth walking (`Shift` faster) + floor double-click smooth glide,
- *      preserving natural first-person `OrbitControls` mouse-look while roaming.
- *    - 1-click snap-to-seat back onto any chair, sofa, barstool, or Bar Games station.
+ * 2. Desktop / Mobile 3D Companion:
+ *    - `WASD` / Arrow keys smooth walking (`Shift` faster) + `F` to toggle Fly Mode (`Space`/`E` ascend, `C`/`Q` descend),
+ *      plus virtual mobile touch thumbstick & altitude buttons via `mobileTouchInputRef`.
+ *    - 1-click snap-to-seat or "Drop to Floor" returns cleanly to `Y = 0` floor level and disables flight.
  */
 function SeatCameraAndOriginRig({
   joined,
   seat,
   isFreeRoaming,
+  flyMode,
+  activeLoungeWing,
+  isMuted,
+  cinemaVolume,
+  effectiveCinemaVolume,
+  presenterState,
   architecture,
   screenCenter,
   recenterVersion,
@@ -201,7 +237,14 @@ function SeatCameraAndOriginRig({
   nesActiveOnScreen = false,
   teleportRequest,
   localRoamPoseRef,
+  mobileTouchInputRef,
   onEnterFreeRoam,
+  onToggleFlyMode,
+  onDropToFloor,
+  onJumpToWing,
+  onRecenterView,
+  onToggleMute,
+  onCycleStreamVolume,
   onSummonDockToggle,
   onInVRChange,
   onRoamWingChange,
@@ -249,6 +292,9 @@ function SeatCameraAndOriginRig({
   const prevIsFreeRoamingRef = useRef(isFreeRoaming)
   const isFreeRoamingRef = useRef(isFreeRoaming)
   isFreeRoamingRef.current = isFreeRoaming
+  const prevFlyModeRef = useRef(flyMode)
+  const flyModeRef = useRef(flyMode)
+  flyModeRef.current = flyMode
   const nesActiveOnScreenRef = useRef(nesActiveOnScreen)
   nesActiveOnScreenRef.current = nesActiveOnScreen
 
@@ -270,6 +316,8 @@ function SeatCameraAndOriginRig({
   onInVRChangeRef.current = onInVRChange
   const onEnterFreeRoamRef = useRef(onEnterFreeRoam)
   onEnterFreeRoamRef.current = onEnterFreeRoam
+  const onToggleFlyModeRef = useRef(onToggleFlyMode)
+  onToggleFlyModeRef.current = onToggleFlyMode
   const onSummonDockToggleRef = useRef(onSummonDockToggle)
   onSummonDockToggleRef.current = onSummonDockToggle
   const onRoamWingChangeRef = useRef(onRoamWingChange)
@@ -296,7 +344,41 @@ function SeatCameraAndOriginRig({
     onInVRChangeRef.current(inVR)
   }, [inVR])
 
-  // Desktop WASD / Arrow-Key Walk Listener + Global NES Controller Keyboard Listener
+  // Smoothly recover to floor level when Fly Mode is disabled or lifted slightly when enabled
+  useEffect(() => {
+    if (flyMode && !prevFlyModeRef.current) {
+      // Gentle hover liftoff (+0.65m) when activating Fly Mode from floor level
+      const curPos = localRoamPoseRef.current.position
+      if (curPos[1] < 0.45) {
+        const hoverY = Number((curPos[1] + 0.65).toFixed(3))
+        localRoamPoseRef.current.position = [curPos[0], hoverY, curPos[2]]
+        if (inVR) {
+          vrOriginTargetPosRef.current.y = hoverY
+        } else {
+          const dy = hoverY - desktopFloorYRef.current
+          desktopFloorYRef.current = hoverY
+          camera.position.y += dy
+          if (orbitRef.current) {
+            orbitRef.current.target.y += dy
+            orbitRef.current.update()
+          }
+        }
+      }
+    } else if (!flyMode && prevFlyModeRef.current && isFreeRoaming) {
+      // Drop to floor level cleanly when disabling Fly Mode
+      const curPos = localRoamPoseRef.current.position
+      const grounded = resolveWalkablePosition(curPos[0], curPos[2], architecture)
+      localRoamPoseRef.current.position = grounded
+      if (inVR) {
+        vrOriginTargetPosRef.current.y = grounded[1]
+      } else {
+        desktopGlideTargetRef.current = grounded
+      }
+    }
+    prevFlyModeRef.current = flyMode
+  }, [architecture, camera, flyMode, inVR, isFreeRoaming, localRoamPoseRef])
+
+  // Desktop WASD / Arrow-Key Walk + Fly Listener + Global NES Controller Keyboard Listener
   useEffect(() => {
     const mapNesKeyCode = (code: string) => {
       if (code === 'ArrowUp') return 'up' as const
@@ -320,12 +402,23 @@ function SeatCameraAndOriginRig({
           return
         }
       }
+      if (e.code === 'KeyF' && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault()
+        onToggleFlyModeRef.current()
+        return
+      }
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
         pressedKeysRef.current.add(e.code)
         return
       }
       if (!MOVEMENT_KEY_CODES.has(e.code)) return
-      if (e.code.startsWith('Arrow')) {
+      if (
+        (e.code === 'Space' || e.code === 'KeyE' || e.code === 'KeyQ' || e.code === 'KeyC') &&
+        !flyModeRef.current
+      ) {
+        return
+      }
+      if (e.code.startsWith('Arrow') || e.code === 'Space') {
         e.preventDefault()
       }
       pressedKeysRef.current.add(e.code)
@@ -653,12 +746,13 @@ function SeatCameraAndOriginRig({
       }
       prevAOrXPressedRef.current = aOrXPressed
 
-      // 3. VR Thumbstick Smooth Walk + Head-Pivoted 45° Snap-Turn (supports 1 or 2 controllers!)
+      // 3. VR Thumbstick Smooth Walk / 3D Free-Flight + Head-Pivoted 45° Snap-Turn (supports 1 or 2 controllers!)
       //    When an NES game is active on screen, Left Stick drives the NES 8-way D-Pad while Right Stick walks & snap-turns.
       if (joined && !keyboardOpen) {
         const hasBothControllers = Boolean(leftController && rightController)
         let moveX = 0
         let moveY = 0
+        let flyVert = 0
         let turnX = 0
 
         if (hasBothControllers) {
@@ -669,6 +763,14 @@ function SeatCameraAndOriginRig({
             moveY =
               Math.abs(rightStick.y) > 0.36 && Math.abs(rightStick.x) < 0.42
                 ? rightStick.y
+                : 0
+            turnX = rightStick.x
+          } else if (flyModeRef.current) {
+            moveX = Math.abs(leftStick.x) > 0.18 ? leftStick.x : 0
+            moveY = Math.abs(leftStick.y) > 0.18 ? leftStick.y : 0
+            flyVert =
+              Math.abs(rightStick.y) > 0.22 && Math.abs(rightStick.x) < 0.55
+                ? -rightStick.y
                 : 0
             turnX = rightStick.x
           } else {
@@ -717,8 +819,8 @@ function SeatCameraAndOriginRig({
           }
         }
 
-        // Smooth headset-relative walk
-        if (moveX !== 0 || moveY !== 0) {
+        // Smooth headset-relative walk OR untethered 3D Free-Flight
+        if (moveX !== 0 || moveY !== 0 || flyVert !== 0) {
           if (!isFreeRoamingRef.current) {
             if (originRef.current) {
               vrOriginTargetPosRef.current.copy(originRef.current.position)
@@ -733,27 +835,61 @@ function SeatCameraAndOriginRig({
 
           const fwdAmt = -moveY
           const rightAmt = moveX
-          const walkSpeed = 2.65
-          const stepX =
-            (-Math.sin(headYaw) * fwdAmt + Math.cos(headYaw) * rightAmt) *
-            walkSpeed *
-            dt
-          const stepZ =
-            (-Math.cos(headYaw) * fwdAmt - Math.sin(headYaw) * rightAmt) *
-            walkSpeed *
-            dt
 
-          const [clampedHeadX, floorY, clampedHeadZ] = resolveWalkablePosition(
-            scratchHeadWorld.x + stepX,
-            scratchHeadWorld.z + stepZ,
-            architecture,
-          )
-          vrOriginTargetPosRef.current.x += clampedHeadX - scratchHeadWorld.x
-          vrOriginTargetPosRef.current.z += clampedHeadZ - scratchHeadWorld.z
-          vrOriginTargetPosRef.current.y = floorY
-          localRoamPoseRef.current = {
-            position: [clampedHeadX, floorY, clampedHeadZ],
-            yaw: headYaw,
+          if (flyModeRef.current) {
+            camera.getWorldDirection(scratchCamForward)
+            const flySpeed = 3.8
+            const vertSpeed = 3.1
+            const stepX =
+              (scratchCamForward.x * fwdAmt + Math.cos(headYaw) * rightAmt) *
+              flySpeed *
+              dt
+            const stepZ =
+              (scratchCamForward.z * fwdAmt - Math.sin(headYaw) * rightAmt) *
+              flySpeed *
+              dt
+            const stepY =
+              (scratchCamForward.y * 0.65 * fwdAmt * flySpeed +
+                flyVert * vertSpeed) *
+              dt
+
+            const [clampedHeadX, clampedFootY, clampedHeadZ] =
+              resolveFlyablePosition(
+                scratchHeadWorld.x + stepX,
+                vrOriginTargetPosRef.current.y + stepY,
+                scratchHeadWorld.z + stepZ,
+                architecture,
+              )
+            vrOriginTargetPosRef.current.x += clampedHeadX - scratchHeadWorld.x
+            vrOriginTargetPosRef.current.z += clampedHeadZ - scratchHeadWorld.z
+            vrOriginTargetPosRef.current.y = clampedFootY
+            localRoamPoseRef.current = {
+              position: [clampedHeadX, clampedFootY, clampedHeadZ],
+              yaw: headYaw,
+            }
+          } else {
+            const walkSpeed = 2.65
+            const stepX =
+              (-Math.sin(headYaw) * fwdAmt + Math.cos(headYaw) * rightAmt) *
+              walkSpeed *
+              dt
+            const stepZ =
+              (-Math.cos(headYaw) * fwdAmt - Math.sin(headYaw) * rightAmt) *
+              walkSpeed *
+              dt
+
+            const [clampedHeadX, floorY, clampedHeadZ] = resolveWalkablePosition(
+              scratchHeadWorld.x + stepX,
+              scratchHeadWorld.z + stepZ,
+              architecture,
+            )
+            vrOriginTargetPosRef.current.x += clampedHeadX - scratchHeadWorld.x
+            vrOriginTargetPosRef.current.z += clampedHeadZ - scratchHeadWorld.z
+            vrOriginTargetPosRef.current.y = floorY
+            localRoamPoseRef.current = {
+              position: [clampedHeadX, floorY, clampedHeadZ],
+              yaw: headYaw,
+            }
           }
         }
       }
@@ -808,20 +944,40 @@ function SeatCameraAndOriginRig({
     }
 
     // =========================================================================
-    // DESKTOP / COMPANION MODE: SEATED GLIDE + WASD / FLOOR-GLIDE FREE ROAM
+    // DESKTOP & MOBILE 3D MODE: SEATED GLIDE + WASD / TOUCH / 3D FLIGHT ROAM
     // =========================================================================
+    const touchIn = mobileTouchInputRef.current
+    if (
+      !isFreeRoaming &&
+      joined &&
+      (Math.abs(touchIn.moveX) > 0.05 ||
+        Math.abs(touchIn.moveY) > 0.05 ||
+        Math.abs(touchIn.vertY) > 0.05)
+    ) {
+      onEnterFreeRoamRef.current()
+    }
+
     if (isFreeRoaming) {
       const keys = pressedKeysRef.current
-      const fwd =
+      const keyFwd =
         (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) -
         (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0)
-      const strafe =
+      const keyStrafe =
         (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) -
         (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0)
+      const keyVert =
+        (keys.has('Space') || keys.has('KeyE') ? 1 : 0) -
+        (keys.has('KeyC') || keys.has('KeyQ') ? 1 : 0)
+
+      const fwd = Math.max(-1, Math.min(1, keyFwd + touchIn.moveY))
+      const strafe = Math.max(-1, Math.min(1, keyStrafe + touchIn.moveX))
+      const vert = flyModeRef.current
+        ? Math.max(-1, Math.min(1, keyVert + touchIn.vertY))
+        : 0
 
       const curRoam = localRoamPoseRef.current.position
 
-      if (fwd !== 0 || strafe !== 0) {
+      if (fwd !== 0 || strafe !== 0 || vert !== 0) {
         desktopGlideTargetRef.current = null
         camera.getWorldDirection(scratchCamForward)
         const hLen = Math.hypot(scratchCamForward.x, scratchCamForward.z)
@@ -830,44 +986,83 @@ function SeatCameraAndOriginRig({
         const rx = -fz
         const rz = fx
 
-        let moveX = fx * fwd + rx * strafe
-        let moveZ = fz * fwd + rz * strafe
-        const mLen = Math.hypot(moveX, moveZ)
-        if (mLen > 0.001) {
-          moveX /= mLen
-          moveZ /= mLen
-        }
+        if (flyModeRef.current) {
+          const flySpeed =
+            keys.has('ShiftLeft') || keys.has('ShiftRight') ? 6.2 : 4.2
+          const vertSpeed = 3.2
+          const stepX =
+            (scratchCamForward.x * fwd + rx * strafe) * flySpeed * dt
+          const stepZ =
+            (scratchCamForward.z * fwd + rz * strafe) * flySpeed * dt
+          const stepY =
+            (scratchCamForward.y * 0.65 * fwd * flySpeed + vert * vertSpeed) *
+            dt
 
-        const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 5.0 : 3.1
-        const nextWalk = resolveWalkablePosition(
-          curRoam[0] + moveX * speed * dt,
-          curRoam[2] + moveZ * speed * dt,
-          architecture,
-        )
+          const nextFly = resolveFlyablePosition(
+            curRoam[0] + stepX,
+            desktopFloorYRef.current + stepY,
+            curRoam[2] + stepZ,
+            architecture,
+          )
+          const dx = nextFly[0] - curRoam[0]
+          const dy = nextFly[1] - desktopFloorYRef.current
+          const dz = nextFly[2] - curRoam[2]
+          desktopFloorYRef.current = nextFly[1]
 
-        const dx = nextWalk[0] - curRoam[0]
-        const dz = nextWalk[2] - curRoam[2]
-        const nextFloorY = THREE.MathUtils.lerp(
-          desktopFloorYRef.current,
-          nextWalk[1],
-          1 - Math.exp(-12 * dt),
-        )
-        const dyFloor = nextFloorY - desktopFloorYRef.current
-        desktopFloorYRef.current = nextFloorY
+          localRoamPoseRef.current = {
+            position: [nextFly[0], nextFly[1], nextFly[2]],
+            yaw: Math.atan2(-fx, -fz),
+          }
 
-        localRoamPoseRef.current = {
-          position: [nextWalk[0], nextWalk[1], nextWalk[2]],
-          yaw: Math.atan2(-fx, -fz),
-        }
+          camera.position.x += dx
+          camera.position.y += dy
+          camera.position.z += dz
+          if (orbitRef.current) {
+            orbitRef.current.target.x += dx
+            orbitRef.current.target.y += dy
+            orbitRef.current.target.z += dz
+            orbitRef.current.update()
+          }
+        } else {
+          let moveX = fx * fwd + rx * strafe
+          let moveZ = fz * fwd + rz * strafe
+          const mLen = Math.hypot(moveX, moveZ)
+          if (mLen > 0.001) {
+            moveX /= mLen
+            moveZ /= mLen
+          }
 
-        camera.position.x += dx
-        camera.position.y += dyFloor
-        camera.position.z += dz
-        if (orbitRef.current) {
-          orbitRef.current.target.x += dx
-          orbitRef.current.target.y += dyFloor
-          orbitRef.current.target.z += dz
-          orbitRef.current.update()
+          const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 5.0 : 3.1
+          const nextWalk = resolveWalkablePosition(
+            curRoam[0] + moveX * speed * dt,
+            curRoam[2] + moveZ * speed * dt,
+            architecture,
+          )
+
+          const dx = nextWalk[0] - curRoam[0]
+          const dz = nextWalk[2] - curRoam[2]
+          const nextFloorY = THREE.MathUtils.lerp(
+            desktopFloorYRef.current,
+            nextWalk[1],
+            1 - Math.exp(-12 * dt),
+          )
+          const dyFloor = nextFloorY - desktopFloorYRef.current
+          desktopFloorYRef.current = nextFloorY
+
+          localRoamPoseRef.current = {
+            position: [nextWalk[0], nextWalk[1], nextWalk[2]],
+            yaw: Math.atan2(-fx, -fz),
+          }
+
+          camera.position.x += dx
+          camera.position.y += dyFloor
+          camera.position.z += dz
+          if (orbitRef.current) {
+            orbitRef.current.target.x += dx
+            orbitRef.current.target.y += dyFloor
+            orbitRef.current.target.z += dz
+            orbitRef.current.update()
+          }
         }
       } else if (desktopGlideTargetRef.current) {
         const target = desktopGlideTargetRef.current
@@ -978,6 +1173,27 @@ function SeatCameraAndOriginRig({
     <>
       <XROrigin ref={originRef} />
 
+      {/* Left-Wrist Smartwatch & Holographic Quick HUD (Active in VR & Simulator) */}
+      <SceneSectionBoundary>
+        <WristWatchHUD3D
+          visible={joined}
+          xrOriginRef={originRef}
+          activeLoungeWing={activeLoungeWing}
+          flyMode={flyMode}
+          isMuted={isMuted}
+          cinemaVolume={cinemaVolume}
+          effectiveCinemaVolume={effectiveCinemaVolume}
+          presenterState={presenterState}
+          onJumpToWing={onJumpToWing}
+          onToggleFlyMode={onToggleFlyMode}
+          onDropToFloor={onDropToFloor}
+          onRecenterView={onRecenterView}
+          onToggleMute={onToggleMute}
+          onCycleStreamVolume={onCycleStreamVolume}
+          onSummonMainDock={onSummonDockToggle}
+        />
+      </SceneSectionBoundary>
+
       {/* VR A/X Hold-to-Aim Comfort Teleport Ring */}
       {inVR && vrTeleportRingPos && (
         <group position={vrTeleportRingPos}>
@@ -1024,6 +1240,10 @@ export function App() {
   const [cinemaVolume, setCinemaVolume] = useState(0.8)
   const [voiceVolume, setVoiceVolume] = useState(0.9)
   const [freeRoamWing, setFreeRoamWing] = useState<LoungeWingId>('main-lounge')
+  const [flyMode, setFlyMode] = useState(false)
+  const [mobileViewMode, setMobileViewMode] = useState<MobileViewMode>(() =>
+    detectInitialMobileViewMode(),
+  )
   const [gameRoomStreamMuted, setGameRoomStreamMuted] = useState(false)
   const [inVRSession, setInVRSession] = useState(false)
   const [recenterVersion, setRecenterVersion] = useState(0)
@@ -1053,6 +1273,11 @@ export function App() {
   }>({
     position: [0, 0, 0.8],
     yaw: 0,
+  })
+  const mobileTouchInputRef = useRef<MobileTouchLocomotionInput>({
+    moveX: 0,
+    moveY: 0,
+    vertY: 0,
   })
 
   const room = useRoomSession(signalHandlerRef)
@@ -1109,14 +1334,59 @@ export function App() {
   const effectiveCinemaVolume =
     isLibraryQuietZone || isGameRoomStreamMuted ? 0 : cinemaVolume
 
+  const handleSelectSeat = useCallback(
+    (seatIdOrIndex: string | number) => {
+      if (seatIdOrIndex !== FREE_ROAM_SEAT_ID) {
+        setFlyMode(false)
+      }
+      roomSelectSeat(seatIdOrIndex)
+    },
+    [roomSelectSeat],
+  )
+
   const handleEnterFreeRoam = useCallback(() => {
     setFreeRoamWing(activeSeat?.roomWing ?? 'main-lounge')
     roomSelectSeat(FREE_ROAM_SEAT_ID)
   }, [activeSeat?.roomWing, roomSelectSeat])
 
+  const handleToggleFlyMode = useCallback(() => {
+    setFlyMode((prev) => {
+      const next = !prev
+      if (next && !isFreeRoaming) {
+        setFreeRoamWing(activeSeat?.roomWing ?? 'main-lounge')
+        roomSelectSeat(FREE_ROAM_SEAT_ID)
+      }
+      return next
+    })
+  }, [activeSeat?.roomWing, isFreeRoaming, roomSelectSeat])
+
+  const handleDropToFloor = useCallback(() => {
+    setFlyMode(false)
+    const cur = localRoamPoseRef.current.position
+    const grounded = resolveWalkablePosition(
+      cur[0],
+      cur[2],
+      roomCustomization.architecture,
+    )
+    localRoamPoseRef.current.position = grounded
+    if (!isFreeRoaming) {
+      roomSelectSeat(FREE_ROAM_SEAT_ID)
+    }
+  }, [isFreeRoaming, roomCustomization.architecture, roomSelectSeat])
+
+  const handleCycleStreamVolume = useCallback(() => {
+    setCinemaVolume((v) => {
+      if (v < 0.05) return 0.5
+      if (v < 0.65) return 0.85
+      if (v < 0.95) return 1.0
+      return 0
+    })
+  }, [])
+
   const handleTeleportToFloor = useCallback(
     (worldPoint: [number, number, number]) => {
       if (!roomJoined) return
+      setFlyMode(false)
       roomSelectSeat(FREE_ROAM_SEAT_ID)
       localRoamPoseRef.current.position = worldPoint
       const spec =
@@ -1466,6 +1736,7 @@ export function App() {
 
   const handleJumpToDestination = useCallback(
     (dest: ExpansionRoomDestination) => {
+      setFlyMode(false)
       roomSelectSeat(FREE_ROAM_SEAT_ID)
       localRoamPoseRef.current = {
         position: dest.spawnPosition,
@@ -1479,6 +1750,20 @@ export function App() {
       }))
     },
     [roomSelectSeat],
+  )
+
+  const handleJumpToWing = useCallback(
+    (wingId: LoungeWingId) => {
+      const spec =
+        ROOM_SIZE_SPECS[roomCustomization.architecture.sizePreset] ??
+        ROOM_SIZE_SPECS.classic
+      const layout = computeExpansionWingLayout(spec.backZ)
+      const dest = layout.destinations.find((d) => d.id === wingId)
+      if (dest) {
+        handleJumpToDestination(dest)
+      }
+    },
+    [handleJumpToDestination, roomCustomization.architecture.sizePreset],
   )
 
   const handleUpdateWingState = useCallback(
@@ -1752,7 +2037,15 @@ export function App() {
       {/* Persistent WebGL / WebXR Canvas (mounted behind Gate & Lobby so store.enterVR() works on click 0) */}
       <Canvas
         events={noEvents}
-        dpr={[1, 1.75]}
+        frameloop={
+          passcodeUnlocked &&
+          room.joined &&
+          mobileViewMode === 'pocket-2d' &&
+          !inVRSession
+            ? 'never'
+            : 'always'
+        }
+        dpr={mobileViewMode !== 'off' && !inVRSession ? [1, 1.15] : [1, 1.75]}
         gl={{
           antialias: true,
           powerPreference: 'high-performance',
@@ -1772,6 +2065,12 @@ export function App() {
               joined={room.joined}
               seat={activeSeat}
               isFreeRoaming={isFreeRoaming}
+              flyMode={flyMode}
+              activeLoungeWing={activeLoungeWing}
+              isMuted={room.localProfile.isMuted}
+              cinemaVolume={cinemaVolume}
+              effectiveCinemaVolume={effectiveCinemaVolume}
+              presenterState={room.presenterState}
               architecture={roomCustomization.architecture}
               screenCenter={roomCustomization.screen.position}
               recenterVersion={recenterVersion}
@@ -1783,7 +2082,14 @@ export function App() {
               }
               teleportRequest={teleportRequest}
               localRoamPoseRef={localRoamPoseRef}
+              mobileTouchInputRef={mobileTouchInputRef}
               onEnterFreeRoam={handleEnterFreeRoam}
+              onToggleFlyMode={handleToggleFlyMode}
+              onDropToFloor={handleDropToFloor}
+              onJumpToWing={handleJumpToWing}
+              onRecenterView={() => setRecenterVersion((v) => v + 1)}
+              onToggleMute={handleToggleMute}
+              onCycleStreamVolume={handleCycleStreamVolume}
               onRoamWingChange={setFreeRoamWing}
               onSummonDockToggle={() => setDockSummonToggleVersion((v) => v + 1)}
               onInVRChange={handleInVRChange}
@@ -1887,13 +2193,16 @@ export function App() {
                         onToggleChatPanel={() => setSpatialChatOpen((v) => !v)}
                         onRecenterSeat={() => setRecenterVersion((v) => v + 1)}
                         localSeatId={room.localProfile.seatId}
-                        onSelectSeat={room.selectSeat}
+                        onSelectSeat={handleSelectSeat}
                         atGameStation={Boolean(
                           !isFreeRoaming &&
                             activeSeat?.stationKind &&
                             activeSeat.stationKind !== 'seat',
                         )}
                         isFreeRoaming={isFreeRoaming}
+                        flyMode={flyMode}
+                        onToggleFlyMode={handleToggleFlyMode}
+                        onDropToFloor={handleDropToFloor}
                         dockSummonToggleVersion={dockSummonToggleVersion}
                       />
                     </SceneSectionBoundary>
@@ -1922,7 +2231,7 @@ export function App() {
               onTakeControl={() => room.takeControl()}
               onOpenYouTubeBrowser={room.joined ? handleOpenYouTubeBrowser : undefined}
               onUnlockAudio={media.unlockAudio}
-              onSelectSeat={room.selectSeat}
+              onSelectSeat={handleSelectSeat}
               onTeleportToFloor={room.joined ? handleTeleportToFloor : undefined}
               onSelectFurniture={setSelectedFurnitureId}
               onUpdateFurnitureItem={handleUpdateFurnitureItem}
@@ -1962,7 +2271,7 @@ export function App() {
                 onRevealAllHolotableFog={barGames.revealAllHolotableFog}
                 onShroudAllHolotableFog={barGames.shroudAllHolotableFog}
                 onRecordArcadeScore={barGames.recordArcadeStationScore}
-                onSelectSeat={room.selectSeat}
+                onSelectSeat={handleSelectSeat}
                 onTeleportToFloor={room.joined ? handleTeleportToFloor : undefined}
                 onJumpToDestination={handleJumpToDestination}
                 onUpdateWingState={handleUpdateWingState}
@@ -1991,7 +2300,7 @@ export function App() {
                 clubhouseState={barGames.clubhouseState}
                 activeDartShot={barGames.activeDartShot}
                 activePuttShot={barGames.activePuttShot}
-                onSelectSeat={room.selectSeat}
+                onSelectSeat={handleSelectSeat}
                 onOpen2DPropsDrawer={
                   !inVRSession
                     ? () => {
@@ -2050,6 +2359,7 @@ export function App() {
                 activePresenterId={room.presenterState.activePresenterId}
                 remotePosesRef={room.remotePosesRef}
                 localRoamPoseRef={localRoamPoseRef}
+                isFlying={flyMode && isFreeRoaming}
                 remoteVoiceStreams={webrtc.remoteVoiceStreams}
                 voiceVolume={voiceVolume}
                 broadcastPose={room.broadcastPose}
@@ -2136,6 +2446,7 @@ export function App() {
           onEnterVR={handleEnterVR}
           onLeaveRoom={async () => {
             webrtc.stopTabShare()
+            setFlyMode(false)
             setBuildMode(false)
             setBarGamesOpen(false)
             setWardrobeOpen(false)
@@ -2144,8 +2455,12 @@ export function App() {
             await room.leaveRoom()
           }}
           onToggleMute={handleToggleMute}
-          onSelectSeat={room.selectSeat}
+          onSelectSeat={handleSelectSeat}
           onRecenterSeat={() => setRecenterVersion((v) => v + 1)}
+          flyMode={flyMode}
+          onToggleFlyMode={handleToggleFlyMode}
+          onDropToFloor={handleDropToFloor}
+          onOpenMobileMode={(mode) => setMobileViewMode(mode)}
           onToggleBuildMode={handleToggleBuildMode}
           onSelectFurniture={setSelectedFurnitureId}
           onSpawnFurniture={handleSpawnFurniture}
@@ -2192,6 +2507,67 @@ export function App() {
         />
       )}
 
+      {/* Mobile Mode #1: 2D Pocket Companion Dashboard (Default on Phone / /mobile / ?mobile=1) */}
+      {passcodeUnlocked &&
+        room.joined &&
+        !inVRSession &&
+        mobileViewMode === 'pocket-2d' && (
+          <MobileCompanionDashboard
+            roomCode={room.roomCode}
+            connected={room.connected}
+            localProfile={room.localProfile}
+            participants={room.participants}
+            presenterState={room.presenterState}
+            messages={room.messages}
+            clubhouseState={barGames.clubhouseState}
+            roomCustomization={roomCustomization}
+            activeLoungeWing={activeLoungeWing}
+            isMuted={room.localProfile.isMuted}
+            cinemaVolume={cinemaVolume}
+            effectiveCinemaVolume={effectiveCinemaVolume}
+            onSwitchTo3DTouch={() => setMobileViewMode('touch-3d')}
+            onExitMobileMode={() => setMobileViewMode('off')}
+            onToggleMute={handleToggleMute}
+            onChangeCinemaVolume={setCinemaVolume}
+            onSendChat={room.sendChatMessage}
+            onSendReaction={(emoji) => room.sendReaction(emoji)}
+            onJumpToWing={handleJumpToWing}
+            onCreateProp={barGames.createPredictionProp}
+            onPickPropOption={barGames.pickPropOption}
+            onLockProp={barGames.lockPredictionProp}
+            onResolveProp={barGames.resolvePredictionProp}
+            onAddWatchlistItem={barGames.addWatchlistItem}
+            onToggleWatchlistVote={barGames.toggleWatchlistVote}
+            onRemoveWatchlistItem={barGames.removeWatchlistItem}
+            onLoadStreamUrl={(url, title) => handleLoadStreamUrl(url, title, false)}
+            onTriggerSoundboard={barGames.triggerSoundboardEffect}
+            onSpawnFurniture={handleSpawnFurniture}
+            onUpdateFurnitureItem={handleUpdateFurnitureItem}
+          />
+        )}
+
+      {/* Mobile Mode #2: 3D Touch View Virtual Thumbstick, Flight Altitude & Room Pills */}
+      {passcodeUnlocked &&
+        room.joined &&
+        !inVRSession &&
+        mobileViewMode === 'touch-3d' && (
+          <MobileTouchControlsOverlay
+            activeLoungeWing={activeLoungeWing}
+            flyMode={flyMode}
+            isMuted={room.localProfile.isMuted}
+            effectiveCinemaVolume={effectiveCinemaVolume}
+            touchInputRef={mobileTouchInputRef}
+            onSwitchToPocket2D={() => setMobileViewMode('pocket-2d')}
+            onToggleFlyMode={handleToggleFlyMode}
+            onDropToFloor={handleDropToFloor}
+            onJumpToWing={handleJumpToWing}
+            onToggleMute={handleToggleMute}
+            onToggleStreamMute={() =>
+              setCinemaVolume((v) => (v > 0.05 ? 0 : 0.8))
+            }
+          />
+        )}
+
       {/* 2D Clubhouse Wing Directory & Command Ops Drawer */}
       {passcodeUnlocked && room.joined && !inVRSession && (
         <ClubhouseRoomsAndOpsDrawer
@@ -2204,7 +2580,7 @@ export function App() {
           participants={room.participants}
           localUserId={room.localUserId}
           localRoamPosition={localRoamPoseRef.current.position}
-          onSelectSeat={room.selectSeat}
+          onSelectSeat={handleSelectSeat}
           onJumpToDestination={handleJumpToDestination}
           onUpdateWingState={handleUpdateWingState}
           onUpdateLighting={handleUpdateLighting}
@@ -2239,7 +2615,7 @@ export function App() {
           clubhouseState={barGames.clubhouseState}
           hasActiveDartShot={Boolean(barGames.activeDartShot)}
           hasActivePuttShot={Boolean(barGames.activePuttShot)}
-          onSelectSeat={room.selectSeat}
+          onSelectSeat={handleSelectSeat}
           onLaunchDartShot={barGames.launchDartShot}
           onJoinDarts={barGames.joinDartsMatch}
           onConfigureDarts={barGames.configureDartsMatch}

@@ -698,6 +698,31 @@ export function resolveWalkablePosition(
 }
 
 /**
+ * Clamps 3D free-flight coordinates (`x, y, z`) across the entire VR Lounge volume
+ * (Main Theater rafters, West/East Expansion Wings, and the Outdoor Alpine Lake Vista)
+ * without snapping to floor polygons or table obstacles.
+ */
+export function resolveFlyablePosition(
+  x: number,
+  y: number,
+  z: number,
+  architecture: RoomArchitectureConfig,
+): [number, number, number] {
+  const sizeSpec = ROOM_SIZE_SPECS[architecture.sizePreset] ?? ROOM_SIZE_SPECS.classic
+  const clampedX = Math.max(-16.0, Math.min(17.5, Number.isFinite(x) ? x : 0))
+  const clampedY = Math.max(0.0, Math.min(14.0, Number.isFinite(y) ? y : 0))
+  const clampedZ = Math.max(
+    sizeSpec.frontZ + 1.2,
+    Math.min(sizeSpec.backZ + 42.0, Number.isFinite(z) ? z : 0),
+  )
+  return [
+    Number(clampedX.toFixed(3)),
+    Number(clampedY.toFixed(3)),
+    Number(clampedZ.toFixed(3)),
+  ]
+}
+
+/**
  * Computes world-space interactive seats attached to all seating furniture
  * currently placed in the room, perimeter snap-to-seat spots around the
  * Interactive Game & Dice Table / Bar Games stations, AND all seats across

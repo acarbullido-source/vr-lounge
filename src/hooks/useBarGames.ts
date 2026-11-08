@@ -36,6 +36,10 @@ import {
   saveLocalClubhouseState,
   scheduleCloudClubhouseSave,
 } from '../services/clubhouseStorage'
+import {
+  SOUNDBOARD_EFFECTS,
+  playSoundboardEffect,
+} from '../services/soundboardAudio'
 import type {
   BarGamesWireEvent,
   ClubhousePersistentState,
@@ -61,9 +65,11 @@ import type {
   RolledDie,
   ShuffleboardPuck,
   ShuffleboardState,
+  SoundboardEffectId,
   TableGameMode,
   TableSurfaceStyle,
   TabletopState,
+  WatchlistQueueItem,
 } from '../types/barGames'
 import type { ParticipantProfile } from '../types/lounge'
 import type { BarGamesTransportBridge } from './useRoomSession'
@@ -387,6 +393,10 @@ export function useBarGames({
             }
             return clean
           })
+          break
+        }
+        case 'soundboard-fx': {
+          playSoundboardEffect(event.effectId)
           break
         }
         case 'bar-games-full-sync': {
@@ -2429,6 +2439,101 @@ export function useBarGames({
     [appendSystemMessage, localUserId, persistAndBroadcastClubhouse],
   )
 
+  const addWatchlistItem = useCallback(
+    (title: string, url: string) => {
+      const cleanUrl = url.trim().slice(0, 600)
+      if (!cleanUrl) return
+      const cleanTitle =
+        title.trim().slice(0, 80) ||
+        cleanUrl.replace(/^https?:\/\//i, '').slice(0, 48)
+      const me = localProfileRef.current
+      const prev = clubhouseRef.current
+      const existingList = prev.watchlist ?? []
+      const userKey = normalizePlayerKey(me.displayName)
+      const newItem: WatchlistQueueItem = {
+        id: `wl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        title: cleanTitle,
+        url: cleanUrl,
+        addedBy: me.displayName,
+        addedAt: Date.now(),
+        votes: [userKey],
+      }
+      const next: ClubhousePersistentState = {
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        watchlist: [newItem, ...existingList].slice(0, 24),
+      }
+      persistAndBroadcastClubhouse(next)
+      appendSystemMessage(`📺 ${me.displayName} queued "${cleanTitle}" on the Watchlist!`)
+    },
+    [appendSystemMessage, persistAndBroadcastClubhouse],
+  )
+
+  const toggleWatchlistVote = useCallback(
+    (itemId: string) => {
+      const me = localProfileRef.current
+      const prev = clubhouseRef.current
+      const userKey = normalizePlayerKey(me.displayName)
+      const list = prev.watchlist ?? []
+      if (!list.some((item) => item.id === itemId)) return
+      const nextList = list
+        .map((item) => {
+          if (item.id !== itemId) return item
+          const hasVoted = item.votes.includes(userKey)
+          return {
+            ...item,
+            votes: hasVoted
+              ? item.votes.filter((k) => k !== userKey)
+              : [...item.votes, userKey],
+          }
+        })
+        .sort((a, b) => b.votes.length - a.votes.length || b.addedAt - a.addedAt)
+
+      const next: ClubhousePersistentState = {
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        watchlist: nextList,
+      }
+      persistAndBroadcastClubhouse(next)
+    },
+    [persistAndBroadcastClubhouse],
+  )
+
+  const removeWatchlistItem = useCallback(
+    (itemId: string) => {
+      const prev = clubhouseRef.current
+      const list = prev.watchlist ?? []
+      const next: ClubhousePersistentState = {
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        watchlist: list.filter((item) => item.id !== itemId),
+      }
+      persistAndBroadcastClubhouse(next)
+    },
+    [persistAndBroadcastClubhouse],
+  )
+
+  const triggerSoundboardEffect = useCallback(
+    (effectId: SoundboardEffectId) => {
+      const me = localProfileRef.current
+      playSoundboardEffect(effectId)
+      broadcastBarGamesEvent({
+        kind: 'soundboard-fx',
+        effectId,
+        senderName: me.displayName,
+        timestamp: Date.now(),
+      })
+      const spec = SOUNDBOARD_EFFECTS.find((s) => s.id === effectId)
+      if (spec) {
+        appendSystemMessage(`${spec.emoji} ${me.displayName} triggered ${spec.label}!`)
+      }
+    },
+    [appendSystemMessage, broadcastBarGamesEvent],
+  )
+
   return {
     dartsState,
     puttingState,
@@ -2472,12 +2577,16 @@ export function useBarGames({
     spawnTableToken,
     moveTableToken,
     clearTableTokens,
-    // Prediction Chalkboard & Ledger
+    // Prediction Chalkboard, Watchlist & Soundboard
     createPredictionProp,
     pickPropOption,
     lockPredictionProp,
     resolvePredictionProp,
     deletePredictionProp,
+    addWatchlistItem,
+    toggleWatchlistVote,
+    removeWatchlistItem,
+    triggerSoundboardEffect,
     // Shuffleboard
     recordShuffleboardShot,
     resetShuffleboard,

@@ -149,6 +149,9 @@ export interface SpatialControlDockProps {
   onSelectSeat?: (seatId: string) => void
   atGameStation?: boolean
   isFreeRoaming?: boolean
+  flyMode?: boolean
+  onToggleFlyMode?: () => void
+  onDropToFloor?: () => void
   dockSummonToggleVersion?: number
 }
 
@@ -192,6 +195,9 @@ export function SpatialControlDock({
   onSelectSeat,
   atGameStation = false,
   isFreeRoaming = false,
+  flyMode = false,
+  onToggleFlyMode,
+  onDropToFloor,
   dockSummonToggleVersion = 0,
 }: SpatialControlDockProps) {
   const [minimized, setMinimized] = useState(() => Boolean(isFreeRoaming))
@@ -233,12 +239,24 @@ export function SpatialControlDock({
         rotation={atGameStation && !isFreeRoaming ? [-0.42, 0.28, 0] : [-0.45, 0, 0]}
       >
         <DockButton
-          label={isFreeRoaming ? '🚶 Walking · Controls ▲' : 'Open Lounge Controls ▲'}
-          sublabel={isFreeRoaming ? 'Tap or press B/Y' : undefined}
+          label={
+            flyMode
+              ? '🚀 Flying · Controls ▲'
+              : isFreeRoaming
+                ? '🚶 Walking · Controls ▲'
+                : 'Open Lounge Controls ▲'
+          }
+          sublabel={
+            flyMode
+              ? 'Glance left wrist or press B/Y'
+              : isFreeRoaming
+                ? 'Tap or press B/Y'
+                : undefined
+          }
           position={[0, 0, 0]}
-          width={0.48}
+          width={0.5}
           height={isFreeRoaming ? 0.098 : 0.09}
-          variant="active"
+          variant={flyMode ? 'primary' : 'active'}
           onClick={() => setMinimized(false)}
         />
       </group>
@@ -670,6 +688,47 @@ export function SpatialControlDock({
               )
             }}
           />
+
+          {/* 3D Untethered Flight & Floor Recovery Strip */}
+          {onToggleFlyMode && (
+            <>
+              <RoundedBox
+                args={[1.24, 0.08, 0.018]}
+                position={[0, -0.188, 0]}
+                radius={0.022}
+                smoothness={2}
+              >
+                <meshBasicMaterial color="#070A10" />
+              </RoundedBox>
+              <DockButton
+                label={flyMode ? '🚀 Fly Mode: ON' : '🚀 Fly Mode: OFF'}
+                sublabel={flyMode ? '3D Free-Flight Active' : 'Soar Above Lounge'}
+                position={[-0.36, -0.188, 0.008]}
+                width={0.46}
+                height={0.064}
+                variant={flyMode ? 'primary' : 'active'}
+                onClick={onToggleFlyMode}
+              />
+              <DockButton
+                label="⬇ Drop to Floor"
+                sublabel="Reset Y = 0"
+                position={[0.08, -0.188, 0.008]}
+                width={0.36}
+                height={0.064}
+                variant="default"
+                onClick={() => onDropToFloor?.()}
+              />
+              <DockButton
+                label="🎯 Recenter View"
+                sublabel="Align Horizon"
+                position={[0.45, -0.188, 0.008]}
+                width={0.33}
+                height={0.064}
+                variant="default"
+                onClick={onRecenterSeat}
+              />
+            </>
+          )}
         </group>
       )}
     </group>

@@ -145,7 +145,7 @@ export function SafeXRController() {
       <CombinedPointer>
         <DefaultXRInputSourceRayPointer
           makeDefault
-          minDistance={0.15}
+          minDistance={0.04}
           rayModel={{
             color: '#E5A93C',
             opacity: 0.84,
@@ -180,11 +180,11 @@ export function SafeXRHand() {
         />
         <DefaultXRInputSourceRayPointer
           makeDefault
-          minDistance={0.2}
+          minDistance={0.04}
           rayModel={{
             color: '#E5A93C',
             opacity: 0.65,
-            maxLength: 0.2,
+            maxLength: 0.25,
           }}
           cursorModel={{
             color: '#F4F1EA',
