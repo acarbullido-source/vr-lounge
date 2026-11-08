@@ -13,6 +13,7 @@ import type {
   PuttingMatchState,
   ShuffleboardPuck,
   ShuffleboardState,
+  TableGameMode,
   TableSurfaceStyle,
   TabletopState,
 } from '../../types/barGames'
@@ -63,6 +64,13 @@ export interface BarGamesCorner3DProps {
   onRollDice: (kinds: DieKind[]) => void
   onRerollSingleDie: (dieId: string) => void
   onSetSurface: (surface: TableSurfaceStyle) => void
+  onSetGameMode?: (mode: TableGameMode) => void
+  onBetChips?: (amount: number) => void
+  onDealBlackjack?: () => void
+  onHitBlackjack?: () => void
+  onStandBlackjack?: () => void
+  onDealHoldem?: () => void
+  onAdvanceHoldemStreet?: () => void
   onShuffleDeck: () => void
   onDrawCardToHand: () => void
   onPlayCardFromHand: (cardId: string, faceUp: boolean) => void
@@ -114,6 +122,13 @@ export function BarGamesCorner3D({
   onRollDice,
   onRerollSingleDie,
   onSetSurface,
+  onSetGameMode,
+  onBetChips,
+  onDealBlackjack,
+  onHitBlackjack,
+  onStandBlackjack,
+  onDealHoldem,
+  onAdvanceHoldemStreet,
   onShuffleDeck,
   onDrawCardToHand,
   onPlayCardFromHand,
@@ -186,6 +201,13 @@ export function BarGamesCorner3D({
         onRollDice={onRollDice}
         onRerollSingleDie={onRerollSingleDie}
         onSetSurface={onSetSurface}
+        onSetGameMode={onSetGameMode}
+        onBetChips={onBetChips}
+        onDealBlackjack={onDealBlackjack}
+        onHitBlackjack={onHitBlackjack}
+        onStandBlackjack={onStandBlackjack}
+        onDealHoldem={onDealHoldem}
+        onAdvanceHoldemStreet={onAdvanceHoldemStreet}
         onShuffleDeck={onShuffleDeck}
         onDrawCardToHand={onDrawCardToHand}
         onPlayCardFromHand={onPlayCardFromHand}

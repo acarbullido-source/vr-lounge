@@ -549,10 +549,10 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
   })
 
   // -------------------------------------------------------------------------
-  // 4. THE GAME ROOM: TACTICAL HOLOTABLE SANCTUM SEATS (6 seats around [+6.925, gameRoomZ])
-  //    + Arcade Perimeter Station
+  // 4. THE GAME ROOM: TACTICAL HOLOTABLE SANCTUM SEATS (6 seats around [+9.25, gameRoomZ])
+  //    + Arcade Perimeter Station (Enlarged 15.2m x 11.2m Arena)
   // -------------------------------------------------------------------------
-  const holoCenter: [number, number, number] = [6.925, 0.88, gameRoomZ]
+  const holoCenter: [number, number, number] = [9.25, 0.88, gameRoomZ]
   const holoAngles = [
     { suffix: 'DM West', angle: Math.PI, rotY: -Math.PI / 2 },
     { suffix: 'North-West', angle: -Math.PI * 0.68, rotY: -Math.PI * 0.82 },
@@ -562,8 +562,8 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
     { suffix: 'South-West', angle: Math.PI * 0.68, rotY: -Math.PI * 0.18 },
   ]
   holoAngles.forEach((spot, idx) => {
-    const r = 1.72
-    const sx = Number((6.925 + Math.cos(spot.angle) * r).toFixed(2))
+    const r = 2.08
+    const sx = Number((9.25 + Math.cos(spot.angle) * r).toFixed(2))
     const sz = Number((gameRoomZ + Math.sin(spot.angle) * r).toFixed(2))
     wingSeats.push({
       id: `wing:gameroom-holo-${idx + 1}`,
@@ -585,11 +585,11 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
     furnitureId: 'wing-gameroom-arcade',
     furnitureType: 'game-station',
     label: '🕹 Game Room · Neon Arcade Row',
-    position: [9.85, 0, gameRoomZ],
+    position: [13.8, 0, gameRoomZ],
     localCushionOffset: [0, 0, 0],
     seatHeightOffset: 0.48,
     rotationY: -Math.PI / 2,
-    lookAtTarget: [11.8, 1.55, gameRoomZ],
+    lookAtTarget: [16.2, 1.55, gameRoomZ],
     stationKind: 'arcade',
     roomWing: 'game-room',
   })
@@ -689,7 +689,7 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
     boardroomCenter: [-6.42, 0, boardZ],
     libraryCenter: [6.42, 0, libZ],
     commandCenter: [-6.92, 0, cmdZ],
-    gameRoomCenter: [6.925, 0, gameRoomZ],
+    gameRoomCenter: [9.25, 0, gameRoomZ],
     outdoorDeckCenter: [0, 0, deckZ],
     destinations,
     wingSeats,
@@ -703,12 +703,12 @@ export function detectActiveLoungeWing(
 ): LoungeWingId {
   const dz = z - backZ
   if (dz < -0.15) return 'main-lounge'
-  if (dz >= 20.1) return 'outdoor-deck'
+  if (dz >= 20.85) return 'outdoor-deck'
   if (x < -1.75) {
-    return dz < 10.2 ? 'boardroom' : 'command-center'
+    return dz < 9.5 ? 'boardroom' : 'command-center'
   }
   if (x > 1.75) {
-    return dz < 10.2 ? 'library' : 'game-room'
+    return dz < 9.5 ? 'library' : 'game-room'
   }
   return 'hallway'
 }
@@ -733,9 +733,9 @@ const EXPANSION_WALK_RECTS: readonly WalkRect[] = [
   // 4. Command & Control Center Doorway + Interior (West Rear)
   { minX: -2.35, maxX: -0.95, minDz: 14.25, maxDz: 15.95, floorY: 0 },
   { minX: -11.25, maxX: -2.15, minDz: 11.2, maxDz: 19.0, floorY: 0 },
-  // 5. The Game Room Doorway + Interior (East Rear)
+  // 5. The Game Room Doorway + Enlarged Interior (East Rear: 15.2m W x 11.2m D)
   { minX: 0.95, maxX: 2.35, minDz: 14.25, maxDz: 15.95, floorY: 0 },
-  { minX: 2.15, maxX: 11.25, minDz: 11.2, maxDz: 19.0, floorY: 0 },
+  { minX: 2.15, maxX: 16.35, minDz: 9.85, maxDz: 20.35, floorY: 0 },
   // 6. Outdoor Lake & Mountain Observation Deck + Central Lakeshore Pier
   { minX: -8.05, maxX: 8.05, minDz: 20.85, maxDz: 29.15, floorY: 0 },
   { minX: -1.15, maxX: 1.15, minDz: 28.9, maxDz: 33.15, floorY: 0.02 },
@@ -819,8 +819,8 @@ export function resolveExpansionWingWalkablePosition(
   ;[bestX, bestDz] = pushOutOfBox(bestX, bestDz, 9.75, 11.2, 4.05, 6.75)
   // 3) Command & Control Center octagonal hologram globe table
   ;[bestX, bestDz] = pushOutOfCircle(bestX, bestDz, -5.85, 15.1, 1.08)
-  // 4) The Game Room central Tactical Holotable Sanctum
-  ;[bestX, bestDz] = pushOutOfCircle(bestX, bestDz, 6.925, 15.1, 1.24)
+  // 4) The Game Room central Tactical Holotable Sanctum (Enlarged at x = 9.25)
+  ;[bestX, bestDz] = pushOutOfCircle(bestX, bestDz, 9.25, 15.1, 1.48)
   // 5) Outdoor Lake Deck circular stone firepit
   ;[bestX, bestDz] = pushOutOfCircle(bestX, bestDz, -3.8, 25.0, 1.05)
 

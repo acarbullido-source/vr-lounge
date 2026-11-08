@@ -2,10 +2,11 @@ import { RoundedBox, Text } from '@react-three/drei'
 import { useFrame, type ThreeEvent } from '@react-three/fiber'
 import { Suspense, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
-import { SUIT_SYMBOLS, TOKEN_PALETTE } from '../../constants/barGames'
+import { SUIT_SYMBOLS, TOKEN_PALETTE, scoreBlackjackHand } from '../../constants/barGames'
 import type {
   DieKind,
   RolledDie,
+  TableGameMode,
   TableSurfaceStyle,
   TabletopState,
 } from '../../types/barGames'
@@ -23,6 +24,13 @@ export interface InteractiveGameTable3DProps {
   onRollDice: (kinds: DieKind[]) => void
   onRerollSingleDie: (dieId: string) => void
   onSetSurface: (surface: TableSurfaceStyle) => void
+  onSetGameMode?: (mode: TableGameMode) => void
+  onBetChips?: (amount: number) => void
+  onDealBlackjack?: () => void
+  onHitBlackjack?: () => void
+  onStandBlackjack?: () => void
+  onDealHoldem?: () => void
+  onAdvanceHoldemStreet?: () => void
   onShuffleDeck: () => void
   onDrawCardToHand: () => void
   onPlayCardFromHand: (cardId: string, faceUp: boolean) => void
@@ -326,6 +334,13 @@ export function InteractiveGameTable3D({
   onRollDice,
   onRerollSingleDie,
   onSetSurface,
+  onSetGameMode,
+  onBetChips,
+  onDealBlackjack,
+  onHitBlackjack,
+  onStandBlackjack,
+  onDealHoldem,
+  onAdvanceHoldemStreet,
   onShuffleDeck,
   onDrawCardToHand,
   onPlayCardFromHand,
@@ -345,7 +360,22 @@ export function InteractiveGameTable3D({
     [tabletopState.surface],
   )
 
+  const gameMode: TableGameMode = tabletopState.gameMode ?? 'blackjack'
   const myPrivateCards = tabletopState.hands[localUserId]?.cards ?? []
+  const myBlackjackScore = useMemo(
+    () => (myPrivateCards.length > 0 ? scoreBlackjackHand(myPrivateCards) : null),
+    [myPrivateCards],
+  )
+  const dealerCards = tabletopState.dealerCards ?? []
+  const dealerRevealed = tabletopState.dealerHoleRevealed ?? false
+  const dealerBlackjackScore = useMemo(
+    () =>
+      dealerCards.length > 0
+        ? scoreBlackjackHand(dealerRevealed ? dealerCards : [dealerCards[0]])
+        : null,
+    [dealerCards, dealerRevealed],
+  )
+
   const otherHandSummaries = useMemo(
     () =>
       Object.values(tabletopState.hands).filter(
@@ -353,6 +383,14 @@ export function InteractiveGameTable3D({
       ),
     [localUserId, tabletopState.hands],
   )
+
+  const potChips = tabletopState.potChips ?? 50
+  const localParticipantName =
+    participants.find((p) => p.userId === localUserId)?.displayName ?? 'Lounge'
+  const myStack =
+    tabletopState.playerChips?.[localParticipantName] ??
+    tabletopState.playerChips?.Lounge ??
+    500
 
   const tabletopY = 0.76
 
@@ -406,40 +444,67 @@ export function InteractiveGameTable3D({
         />
       </mesh>
 
-      {/* Surface & Grid Selector Chips on North-West Rim */}
-      <group position={[0, tabletopY + 0.016, 0]}>
+      {/* Surface & Game Mode Rim Controls */}
+      <group name="game-table-dealer-console" position={[0, tabletopY + 0.016, 0]}>
+        {/* Game Mode Tabs along North Rim */}
+        <RimChip
+          label="🃏 Blackjack 21"
+          position={[-0.27, 0, -0.61]}
+          width={0.165}
+          active={gameMode === 'blackjack'}
+          color="#065F46"
+          onClick={() => onSetGameMode?.('blackjack')}
+        />
+        <RimChip
+          label="♠️ Hold'em Poker"
+          position={[-0.08, 0, -0.61]}
+          width={0.175}
+          active={gameMode === 'holdem'}
+          color="#1E3A8A"
+          onClick={() => onSetGameMode?.('holdem')}
+        />
+        <RimChip
+          label="🎲 RPG & Dice"
+          position={[0.11, 0, -0.61]}
+          width={0.155}
+          active={gameMode === 'freeform'}
+          color="#4C1D95"
+          onClick={() => onSetGameMode?.('freeform')}
+        />
+
+        {/* Surface & Grid Selector Chips on North-West Rim */}
         <RimChip
           label="Felt"
-          position={[-0.36, 0, -0.54]}
-          width={0.088}
+          position={[-0.36, 0, -0.52]}
+          width={0.085}
           active={tabletopState.surface === 'felt'}
           onClick={() => onSetSurface('felt')}
         />
         <RimChip
           label="Wood"
-          position={[-0.26, 0, -0.54]}
-          width={0.088}
+          position={[-0.26, 0, -0.52]}
+          width={0.085}
           active={tabletopState.surface === 'wood'}
           onClick={() => onSetSurface('wood')}
         />
         <RimChip
           label="Sq Grid"
-          position={[-0.145, 0, -0.54]}
-          width={0.115}
+          position={[-0.145, 0, -0.52]}
+          width={0.11}
           active={tabletopState.surface === 'square-grid'}
           onClick={() => onSetSurface('square-grid')}
         />
         <RimChip
           label="Hex Grid"
-          position={[-0.015, 0, -0.54]}
-          width={0.12}
+          position={[-0.015, 0, -0.52]}
+          width={0.115}
           active={tabletopState.surface === 'hex-grid'}
           onClick={() => onSetSurface('hex-grid')}
         />
         <RimChip
           label="+ Token"
-          position={[0.12, 0, -0.54]}
-          width={0.11}
+          position={[0.115, 0, -0.52]}
+          width={0.105}
           color="#0F766E"
           onClick={() => {
             const pick =
@@ -448,12 +513,93 @@ export function InteractiveGameTable3D({
           }}
         />
 
-        {/* Quick Polyhedral Dice Tray along South-West Rim */}
+        {/* =============================================================== */}
+        {/* MODE-SPECIFIC INTERACTIVE DEALER & BETTING CONTROLS             */}
+        {/* =============================================================== */}
+        {gameMode === 'blackjack' && (
+          <group position={[0, 0.002, 0.42]}>
+            <RimChip
+              label="🃏 DEAL 21"
+              position={[-0.27, 0, 0]}
+              width={0.145}
+              color="#15803D"
+              onClick={() => (onDealBlackjack ? onDealBlackjack() : onDealCardToTable(true))}
+            />
+            <RimChip
+              label="👆 HIT"
+              position={[-0.11, 0, 0]}
+              width={0.115}
+              color="#B45309"
+              onClick={() => (onHitBlackjack ? onHitBlackjack() : onDrawCardToHand())}
+            />
+            <RimChip
+              label="✋ STAND"
+              position={[0.03, 0, 0]}
+              width={0.125}
+              color="#991B1B"
+              onClick={() => (onStandBlackjack ? onStandBlackjack() : onDealCardToTable(true))}
+            />
+            <RimChip
+              label="🪙 BET +$25"
+              position={[0.19, 0, 0]}
+              width={0.145}
+              color="#0369A1"
+              onClick={() => onBetChips?.(25)}
+            />
+          </group>
+        )}
+
+        {gameMode === 'holdem' && (
+          <group position={[0, 0.002, 0.42]}>
+            <RimChip
+              label="♠️ DEAL HAND"
+              position={[-0.28, 0, 0]}
+              width={0.155}
+              color="#1D4ED8"
+              onClick={() => (onDealHoldem ? onDealHoldem() : onDrawCardToHand())}
+            />
+            <RimChip
+              label={
+                tabletopState.holdemStreet === 'preflop'
+                  ? '🔥 DEAL FLOP'
+                  : tabletopState.holdemStreet === 'flop'
+                    ? '🔥 DEAL TURN'
+                    : tabletopState.holdemStreet === 'turn'
+                      ? '🔥 DEAL RIVER'
+                      : tabletopState.holdemStreet === 'river'
+                        ? '🏆 SHOWDOWN'
+                        : '🔥 NEXT STREET'
+              }
+              position={[-0.08, 0, 0]}
+              width={0.18}
+              color="#B45309"
+              onClick={() =>
+                onAdvanceHoldemStreet ? onAdvanceHoldemStreet() : onDealCardToTable(true)
+              }
+            />
+            <RimChip
+              label="🪙 BET +$25"
+              position={[0.12, 0, 0]}
+              width={0.135}
+              color="#15803D"
+              onClick={() => onBetChips?.(25)}
+            />
+            <RimChip
+              label="💰 +$100"
+              position={[0.26, 0, 0]}
+              width={0.11}
+              color="#7C2D12"
+              onClick={() => onBetChips?.(100)}
+            />
+          </group>
+        )}
+
+        {/* Quick Polyhedral Dice Tray along South Rim */}
         {(['d4', 'd6', 'd8', 'd10', 'd12', 'd20'] as const).map((dk, idx) => (
           <RimChip
             key={dk}
             label={dk}
-            position={[-0.38 + idx * 0.088, 0, 0.52]}
+            position={[-0.38 + idx * 0.088, 0, 0.54]}
             width={0.078}
             color="#312E81"
             onClick={() => onRollDice([dk])}
@@ -461,11 +607,105 @@ export function InteractiveGameTable3D({
         ))}
         <RimChip
           label="🎲 2d6+d20"
-          position={[0.21, 0, 0.52]}
+          position={[0.21, 0, 0.54]}
           width={0.145}
           color="#7C2D12"
           onClick={() => onRollDice(['d20', 'd6', 'd6'])}
         />
+
+        {/* =============================================================== */}
+        {/* 3D DEALER CARDS ZONE & POKER CHIP STACKS                        */}
+        {/* =============================================================== */}
+        {dealerCards.length > 0 && (
+          <group name="table-dealer-cards" position={[-0.12, 0.005, -0.28]}>
+            <Suspense fallback={null}>
+              <Text
+                position={[0.06, 0.008, -0.085]}
+                rotation={[-Math.PI / 2, 0, 0]}
+                fontSize={0.019}
+                color="#FDE68A"
+                anchorX="center"
+                anchorY="middle"
+              >
+                {gameMode === 'blackjack' && dealerBlackjackScore
+                  ? `DEALER (${dealerRevealed ? dealerBlackjackScore.total : `${dealerBlackjackScore.total}+?`})`
+                  : `HOUSE HOLE CARDS`}
+              </Text>
+            </Suspense>
+            {dealerCards.map((dc, idx) => {
+              const showFace = idx === 0 || dealerRevealed
+              const suitMeta = SUIT_SYMBOLS[dc.suit]
+              return (
+                <group
+                  key={`dealer-${dc.id}-${idx}`}
+                  position={[idx * 0.095, idx * 0.001, 0]}
+                >
+                  <RoundedBox args={[0.076, 0.004, 0.11]} radius={0.004} smoothness={1}>
+                    <meshStandardMaterial
+                      color={showFace ? '#F8FAFC' : '#7F1D1D'}
+                      roughness={0.4}
+                    />
+                  </RoundedBox>
+                  <Suspense fallback={null}>
+                    <Text
+                      position={[0, 0.004, 0]}
+                      rotation={[-Math.PI / 2, 0, 0]}
+                      fontSize={0.025}
+                      color={showFace ? suitMeta.color : '#FDE68A'}
+                      anchorX="center"
+                      anchorY="middle"
+                    >
+                      {showFace ? `${dc.rank}${suitMeta.glyph}` : '❖'}
+                    </Text>
+                  </Suspense>
+                </group>
+              )
+            })}
+          </group>
+        )}
+
+        {/* 3D Casino Chip Stacks & Central Pot Readout */}
+        <group name="table-chip-pot" position={[-0.36, 0.004, 0.02]}>
+          {[0, 1, 2, 3].map((stackIdx) => (
+            <mesh
+              key={`chip-red-${stackIdx}`}
+              position={[0, 0.006 + stackIdx * 0.007, 0]}
+            >
+              <cylinderGeometry args={[0.024, 0.024, 0.006, 16]} />
+              <meshStandardMaterial color="#EF4444" roughness={0.35} metalness={0.2} />
+            </mesh>
+          ))}
+          {[0, 1, 2].map((stackIdx) => (
+            <mesh
+              key={`chip-green-${stackIdx}`}
+              position={[0.056, 0.006 + stackIdx * 0.007, 0.015]}
+            >
+              <cylinderGeometry args={[0.024, 0.024, 0.006, 16]} />
+              <meshStandardMaterial color="#10B981" roughness={0.35} metalness={0.2} />
+            </mesh>
+          ))}
+          {[0, 1].map((stackIdx) => (
+            <mesh
+              key={`chip-gold-${stackIdx}`}
+              position={[0.028, 0.006 + stackIdx * 0.007, -0.042]}
+            >
+              <cylinderGeometry args={[0.024, 0.024, 0.006, 16]} />
+              <meshStandardMaterial color="#F59E0B" roughness={0.3} metalness={0.35} />
+            </mesh>
+          ))}
+          <Suspense fallback={null}>
+            <Text
+              position={[0.025, 0.046, 0.055]}
+              rotation={[-Math.PI / 2, 0, 0]}
+              fontSize={0.02}
+              color="#FDE68A"
+              anchorX="center"
+              anchorY="middle"
+            >
+              {`POT $${potChips} · STACK $${myStack}`}
+            </Text>
+          </Suspense>
+        </group>
 
         {/* =============================================================== */}
         {/* 3D POLYHEDRAL DICE & FLOATING RESULT BANNER                     */}
@@ -474,30 +714,34 @@ export function InteractiveGameTable3D({
           <PolyhedralDie3D key={die.id} die={die} onReroll={onRerollSingleDie} />
         ))}
 
-        {/* Floating 3D Roll Sum Banner above Center of Table */}
+        {/* Floating 3D Table Status & Roll Sum Banner above Center of Table */}
         <group position={[0, 0.34, 0]}>
-          <RoundedBox args={[0.72, 0.11, 0.014]} radius={0.02} smoothness={2}>
-            <meshBasicMaterial color="#0D131F" transparent opacity={0.9} />
+          <RoundedBox args={[0.84, 0.135, 0.014]} radius={0.02} smoothness={2}>
+            <meshBasicMaterial color="#0D131F" transparent opacity={0.92} />
           </RoundedBox>
           <Suspense fallback={null}>
             <Text
-              position={[0, 0.018, 0.01]}
-              fontSize={0.03}
+              position={[0, 0.032, 0.01]}
+              fontSize={0.025}
               color={accentColor}
               anchorX="center"
               anchorY="middle"
             >
-              {`🎲 SUM: ${tabletopState.lastRollTotal} (${tabletopState.lastRollerName})`}
+              {gameMode === 'blackjack'
+                ? `🃏 BLACKJACK 21 · POT $${potChips}${myBlackjackScore ? ` · YOUR HAND: ${myBlackjackScore.total}` : ''}`
+                : gameMode === 'holdem'
+                  ? `♠️ TEXAS HOLD'EM (${(tabletopState.holdemStreet ?? 'idle').toUpperCase()}) · POT $${potChips}`
+                  : `🎲 DICE SUM: ${tabletopState.lastRollTotal} (${tabletopState.lastRollerName})`}
             </Text>
             <Text
-              position={[0, -0.022, 0.01]}
-              fontSize={0.019}
-              color="#CBD5E1"
-              maxWidth={0.68}
+              position={[0, -0.016, 0.01]}
+              fontSize={0.018}
+              color="#E2E8F0"
+              maxWidth={0.78}
               anchorX="center"
               anchorY="middle"
             >
-              {tabletopState.lastRollSummary}
+              {tabletopState.tableBanner || tabletopState.lastRollSummary}
             </Text>
           </Suspense>
         </group>

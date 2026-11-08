@@ -478,23 +478,52 @@ export function ExpansionWing3D({
 
   const handleCycleLoungeCamPreset = () => {
     setLoungeCamPreset((prev) =>
-      prev === 'wide' ? 'screen' : prev === 'screen' ? 'games' : 'wide',
+      prev === 'wide'
+        ? 'screen'
+        : prev === 'screen'
+          ? 'games'
+          : prev === 'games'
+            ? 'gameroom'
+            : 'wide',
     )
   }
 
-  // Real-time 3D Main Lounge mirror camera & offscreen render target (640x360, Quest 3 safe)
+  // Real-time 3D Internal Security Camera Render Targets (480x270 each, Quest 3 safe)
   const wingGroupRef = useRef<THREE.Group>(null)
   const lastMirrorRenderRef = useRef(-10)
-  const loungeMirrorTarget = useMemo(() => {
-    const rt = new THREE.WebGLRenderTarget(640, 360, {
-      minFilter: THREE.LinearFilter,
-      magFilter: THREE.LinearFilter,
-      depthBuffer: true,
-      stencilBuffer: false,
-    })
-    rt.texture.colorSpace = THREE.SRGBColorSpace
-    return rt
+  const camRoundRobinIdxRef = useRef(0)
+
+  const loungeCamTargets = useMemo(() => {
+    const createTarget = () => {
+      const rt = new THREE.WebGLRenderTarget(480, 270, {
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+        depthBuffer: true,
+        stencilBuffer: false,
+      })
+      rt.texture.colorSpace = THREE.SRGBColorSpace
+      return rt
+    }
+    return {
+      wide: createTarget(),
+      screen: createTarget(),
+      games: createTarget(),
+      gameroom: createTarget(),
+    } satisfies Record<LoungeMirrorCamPreset, THREE.WebGLRenderTarget>
   }, [])
+
+  const loungeCamWallTextures = useMemo(
+    () => ({
+      wide: loungeCamTargets.wide.texture,
+      screen: loungeCamTargets.screen.texture,
+      games: loungeCamTargets.games.texture,
+      gameroom: loungeCamTargets.gameroom.texture,
+    }),
+    [loungeCamTargets],
+  )
+
+  const loungeMirrorTarget = loungeCamTargets[loungeCamPreset] ?? loungeCamTargets.wide
+
   const loungeCamera = useMemo(
     () => new THREE.PerspectiveCamera(58, 16 / 9, 0.2, 65),
     [],
@@ -503,9 +532,12 @@ export function ExpansionWing3D({
   useEffect(() => {
     return () => {
       fireplaceAudio.stop()
-      loungeMirrorTarget.dispose()
+      loungeCamTargets.wide.dispose()
+      loungeCamTargets.screen.dispose()
+      loungeCamTargets.games.dispose()
+      loungeCamTargets.gameroom.dispose()
     }
-  }, [loungeMirrorTarget])
+  }, [loungeCamTargets])
 
   const wingFrontLightRef = useRef<THREE.PointLight>(null)
   const wingRearLightRef = useRef<THREE.PointLight>(null)
@@ -517,7 +549,7 @@ export function ExpansionWing3D({
     [lighting.ambientTint],
   )
 
-  // Consolidated single useFrame for Wing lighting, hearth animation, & Main Lounge mirror camera (72Hz/90Hz Quest 3 safe)
+  // Consolidated single useFrame for Wing lighting, hearth animation, & 4 Internal Security Cams (72Hz/90Hz Quest 3 safe)
   useFrame(({ clock, gl, scene }, delta) => {
     const t = clock.getElapsedTime()
     const lerpAlpha = 1 - Math.exp(-5.0 * Math.min(delta, 0.1))
@@ -553,23 +585,33 @@ export function ExpansionWing3D({
         : 0
     }
 
-    // Render live 3D Main Lounge feed at ~20 FPS whenever Command Center or Boardroom is mirroring
-    const needsMirrorCam =
-      wingState.commandScreenMode === 'mirror-lounge' ||
-      wingState.boardroomScreenMode === 'mirror-lounge'
-
-    if (needsMirrorCam && t - lastMirrorRenderRef.current >= 0.048) {
+    // Round-robin update the 4 internal security cameras (~14 FPS total, 1 pass per tick)
+    if (t - lastMirrorRenderRef.current >= 0.068) {
       lastMirrorRenderRef.current = t
 
+      const camOrder: readonly LoungeMirrorCamPreset[] = [
+        'wide',
+        'screen',
+        'games',
+        'gameroom',
+      ]
+      const currentCam =
+        camOrder[camRoundRobinIdxRef.current % camOrder.length] ?? 'wide'
+      camRoundRobinIdxRef.current = (camRoundRobinIdxRef.current + 1) % camOrder.length
+
       const scrPos = roomCustomization.screen.position
-      if (loungeCamPreset === 'screen') {
+      if (currentCam === 'screen') {
         loungeCamera.fov = 46
         loungeCamera.position.set(0, 2.32, 0.45)
         loungeCamera.lookAt(scrPos[0], scrPos[1], scrPos[2])
-      } else if (loungeCamPreset === 'games') {
+      } else if (currentCam === 'games') {
         loungeCamera.fov = 56
         loungeCamera.position.set(-1.35, 2.35, 1.1)
         loungeCamera.lookAt(2.35, 1.25, sizeSpec.backZ - 1.35)
+      } else if (currentCam === 'gameroom') {
+        loungeCamera.fov = 60
+        loungeCamera.position.set(2.85, 2.85, sizeSpec.backZ + 11.6)
+        loungeCamera.lookAt(9.25, 1.1, sizeSpec.backZ + 15.1)
       } else {
         loungeCamera.fov = 58
         loungeCamera.position.set(0, 2.55, Math.min(sizeSpec.backZ - 0.65, 5.15))
@@ -585,10 +627,12 @@ export function ExpansionWing3D({
       const prevAutoClear = gl.autoClear
 
       try {
-        if (wingGroup) wingGroup.visible = false
+        // Hide wingGroup only when looking into Main Lounge so the back wall doesn't block the lens;
+        // keep wingGroup visible when rendering the Game Room internal cam!
+        if (wingGroup) wingGroup.visible = currentCam === 'gameroom'
         gl.xr.enabled = false
         gl.autoClear = true
-        gl.setRenderTarget(loungeMirrorTarget)
+        gl.setRenderTarget(loungeCamTargets[currentCam])
         gl.clear()
         gl.render(scene, loungeCamera)
       } finally {
@@ -1808,8 +1852,10 @@ export function ExpansionWing3D({
         mainVideoTexture={mainVideoTexture}
         hasMainVideoFrames={hasMainVideoFrames}
         loungeMirrorTexture={loungeMirrorTarget.texture}
+        loungeCamWallTextures={loungeCamWallTextures}
         loungeCamPreset={loungeCamPreset}
         onCycleLoungeCamPreset={handleCycleLoungeCamPreset}
+        onSelectLoungeCamPreset={setLoungeCamPreset}
         computedSeats={computedSeats}
         localSeatId={localSeatId}
         participants={participants}

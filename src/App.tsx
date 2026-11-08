@@ -1913,6 +1913,13 @@ export function App() {
                 onRollDice={barGames.rollPolyhedralDice}
                 onRerollSingleDie={barGames.rerollSingleDie}
                 onSetSurface={barGames.setTableSurface}
+                onSetGameMode={barGames.setTableGameMode}
+                onBetChips={barGames.betTableChips}
+                onDealBlackjack={barGames.dealBlackjackRound}
+                onHitBlackjack={barGames.hitBlackjack}
+                onStandBlackjack={barGames.standBlackjack}
+                onDealHoldem={barGames.dealHoldemRound}
+                onAdvanceHoldemStreet={barGames.advanceHoldemStreet}
                 onShuffleDeck={barGames.shuffleDeck}
                 onDrawCardToHand={barGames.drawCardToHand}
                 onPlayCardFromHand={barGames.playCardFromHand}

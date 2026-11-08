@@ -16,6 +16,7 @@
     "@react-three/xr": "^6.6.32",
     "@supabase/supabase-js": "^2.119.0",
     "hls.js": "^1.7.4",
+    "jsnes": "^2.1.0",
     "lucide-react": "^1.70.0",
     "mqtt": "^5.16.1",
     "react": "^19.3.1",

@@ -91,6 +91,7 @@ import type {
 } from '../../types/lounge'
 import { AvatarCustomizerControls } from './AvatarCustomizerControls'
 import { BuildCatalogDrawer } from './BuildCatalogDrawer'
+import { NesConsoleModal } from './NesConsoleModal'
 import { YouTubeAccountAndTVPanel } from './YouTubeAccountAndTVPanel'
 
 function formatDuration(sec: number): string {
@@ -300,6 +301,7 @@ export function CompanionOverlay({
   // In-room companion drawers
   const [urlDrawerOpen, setUrlDrawerOpen] = useState(false)
   const [buildDrawerOpen, setBuildDrawerOpen] = useState(false)
+  const [nesModalOpen, setNesModalOpen] = useState(false)
   const [drawerTab, setDrawerTab] = useState<
     'youtube' | 'my-youtube' | 'youtube-tv' | 'direct'
   >('youtube')
@@ -897,6 +899,17 @@ export function CompanionOverlay({
                 ? `YT: ${accountState.handle || accountState.displayName}`
                 : 'YouTube Login'}
             </span>
+          </button>
+
+          <button
+            id="btn-hud-nes-console"
+            type="button"
+            onClick={() => setNesModalOpen(true)}
+            title="Launch 8-Bit NES Emulator & 24-Game Library on Main Screen & Mirrored Screens"
+            className="flex items-center gap-1.5 rounded-lg border border-[#ef4444]/60 bg-[#dc2626]/22 px-2.5 py-1 text-xs font-semibold text-[#f8fafc] transition hover:bg-[#dc2626]/35"
+          >
+            <Dices className="h-3.5 w-3.5 text-[#facc15]" />
+            <span>🕹 NES Console (24 Games)</span>
           </button>
         </div>
 
@@ -1963,6 +1976,17 @@ export function CompanionOverlay({
           </button>
         </div>
       </footer>
+
+      <div className="pointer-events-auto">
+        <NesConsoleModal
+          open={nesModalOpen}
+          activeMediaUrl={presenterState.mediaUrl}
+          onClose={() => setNesModalOpen(false)}
+          onLaunchNesToMainScreen={(nesUrl, title) => {
+            onLoadStreamUrl(nesUrl, title, false)
+          }}
+        />
+      </div>
     </div>
   )
 }

@@ -248,6 +248,8 @@ export interface TableCardInstance {
 
 export type TableSurfaceStyle = 'felt' | 'wood' | 'square-grid' | 'hex-grid'
 
+export type TableGameMode = 'freeform' | 'blackjack' | 'holdem'
+
 export interface TabletopToken {
   id: string
   label: string
@@ -260,6 +262,7 @@ export interface TabletopState {
   revision: number
   updatedAt: number
   surface: TableSurfaceStyle
+  gameMode?: TableGameMode
   dice: RolledDie[]
   lastRollSummary: string
   lastRollerName: string
@@ -276,6 +279,13 @@ export interface TabletopState {
     }
   >
   tokens: TabletopToken[]
+  potChips?: number
+  playerChips?: Record<string, number>
+  dealerCards?: PlayingCard[]
+  dealerHoleRevealed?: boolean
+  blackjackPhase?: 'betting' | 'player-turn' | 'settled'
+  holdemStreet?: 'idle' | 'preflop' | 'flop' | 'turn' | 'river' | 'showdown'
+  tableBanner?: string
 }
 
 // ============================================================================
@@ -333,8 +343,10 @@ export interface CornholeState {
 }
 
 // ============================================================================
-// Pillar 7: The Game Room — Tactical Holotable Sanctum (Terrain, Minis, Fog)
+// Pillar 7: The Game Room — Tactical Holotable Sanctum & Classic Board Games
 // ============================================================================
+
+export type HolotableGameMode = 'adventure-rpg' | 'checkers' | 'chess' | 'connect4'
 
 export type HolotableTerrainPresetId =
   | 'dungeon-keep'
@@ -361,17 +373,34 @@ export interface HolotableMiniature {
   rotationY: number
   scale: number // 0.65..1.85
   ownerName: string
+  hp?: number
+  maxHp?: number
 }
 
 export interface HolotableState {
   revision: number
   updatedAt: number
+  gameMode?: HolotableGameMode
   terrain: HolotableTerrainPresetId
   miniatures: HolotableMiniature[]
   selectedMiniId: string | null
   fogEnabled: boolean
   revealedFogCells: string[] // "row,col" for row, col in 0..5
   lastActionSummary: string
+  rpgRound?: number
+  rpgActiveTurnIndex?: number
+  rpgCombatLog?: string[]
+  checkersBoard?: number[]
+  checkersTurn?: 'red' | 'black'
+  checkersSelectedIdx?: number | null
+  checkersWinner?: 'red' | 'black' | null
+  chessBoard?: string[]
+  chessTurn?: 'w' | 'b'
+  chessSelectedIdx?: number | null
+  chessWinner?: 'w' | 'b' | null
+  connect4Grid?: number[]
+  connect4Turn?: 1 | 2
+  connect4Winner?: 1 | 2 | null
 }
 
 // ============================================================================

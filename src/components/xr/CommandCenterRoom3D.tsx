@@ -193,7 +193,7 @@ function TacticalOperatorChair({
   )
 }
 
-export type LoungeMirrorCamPreset = 'wide' | 'screen' | 'games'
+export type LoungeMirrorCamPreset = 'wide' | 'screen' | 'games' | 'gameroom'
 
 export interface CommandCenterRoom3DProps {
   wingLayout: ExpansionWingLayout
@@ -203,8 +203,10 @@ export interface CommandCenterRoom3DProps {
   mainVideoTexture: THREE.VideoTexture
   hasMainVideoFrames: boolean
   loungeMirrorTexture: THREE.Texture
+  loungeCamWallTextures: Record<LoungeMirrorCamPreset, THREE.Texture>
   loungeCamPreset: LoungeMirrorCamPreset
   onCycleLoungeCamPreset: () => void
+  onSelectLoungeCamPreset?: (preset: LoungeMirrorCamPreset) => void
   computedSeats: ComputedSeat[]
   localSeatId?: string
   participants: ParticipantProfile[]
@@ -223,8 +225,10 @@ export function CommandCenterRoom3D({
   mainVideoTexture,
   hasMainVideoFrames,
   loungeMirrorTexture,
+  loungeCamWallTextures,
   loungeCamPreset,
   onCycleLoungeCamPreset,
+  onSelectLoungeCamPreset,
   computedSeats,
   localSeatId,
   participants,
@@ -725,42 +729,17 @@ export function CommandCenterRoom3D({
               >
                 {showingDirectVideoMirror
                   ? `🟢 LIVE MAIN LOUNGE STREAM · ${presenterState.mediaTitle || 'Active Feed'}`
-                  : `🟢 LIVE MAIN LOUNGE CAM · ${loungeCamPreset === 'wide' ? 'WIDE HANGOUT' : loungeCamPreset === 'screen' ? 'CINEMA SCREEN' : 'BAR & GAMES'}`}
+                  : `🟢 LIVE INTERNAL CAM · ${
+                      loungeCamPreset === 'wide'
+                        ? 'WIDE HANGOUT'
+                        : loungeCamPreset === 'screen'
+                          ? 'CINEMA SCREEN'
+                          : loungeCamPreset === 'games'
+                            ? 'BAR & GAMES'
+                            : 'THE GAME ROOM'
+                    }`}
               </Text>
             </group>
-
-            {/* Picture-in-Picture (PiP) 3D Room Cam when Main Video is Fullscreen */}
-            {showingDirectVideoMirror && (
-              <group
-                position={[1.26, -0.58, 0.003]}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setPreferRoomCam(true)
-                }}
-              >
-                <RoundedBox args={[1.16, 0.66, 0.008]} radius={0.015}>
-                  <meshBasicMaterial color="#E5A93C" />
-                </RoundedBox>
-                <mesh position={[0, 0, 0.006]}>
-                  <planeGeometry args={[1.11, 0.61]} />
-                  <meshBasicMaterial
-                    key="cmd-pip-lounge-cam"
-                    map={loungeMirrorTexture}
-                    color="#ffffff"
-                    toneMapped={false}
-                  />
-                </mesh>
-                <Text
-                  position={[0, -0.25, 0.01]}
-                  fontSize={0.036}
-                  color="#FDE68A"
-                  anchorX="center"
-                  anchorY="middle"
-                >
-                  🎥 LOUNGE ROOM CAM (CLICK TO EXPAND)
-                </Text>
-              </group>
-            )}
           </group>
         )}
 
@@ -1295,6 +1274,166 @@ export function CommandCenterRoom3D({
             </Text>
           </group>
         )}
+      </group>
+
+      {/* =================================================================== */}
+      {/* SOUTH / LEFT WALL — INDIVIDUAL INTERNAL "CAM" VIEW DISPLAYS         */}
+      {/* (Directly opposite the North Wall Sports Scoreboard at z = z0+19.46)*/}
+      {/* Each internal camera view is mounted in its own dedicated display   */}
+      {/* =================================================================== */}
+      <group
+        name="control-room-cam-wall"
+        position={[-6.85, 2.08, z0 + 19.46]}
+        rotation={[0, Math.PI, 0]}
+      >
+        {/* Top Architectural Header Banner Above the Individual Cam Monitors */}
+        <RoundedBox args={[5.4, 0.24, 0.04]} position={[0, 1.32, 0]} radius={0.02}>
+          <meshStandardMaterial color="#07101E" metalness={0.55} roughness={0.35} />
+        </RoundedBox>
+        <mesh position={[0, 1.425, 0.022]}>
+          <planeGeometry args={[5.2, 0.022]} />
+          <meshBasicMaterial color="#E5A93C" />
+        </mesh>
+        <Text
+          position={[-2.52, 1.32, 0.025]}
+          fontSize={0.068}
+          color="#FDE68A"
+          anchorX="left"
+          anchorY="middle"
+        >
+          🎥 INTERNAL LOUNGE SECURITY &amp; TELEMETRY CAMERAS · LIVE MULTI-DISPLAY WALL
+        </Text>
+        <Text
+          position={[2.52, 1.32, 0.025]}
+          fontSize={0.046}
+          color="#34D399"
+          anchorX="right"
+          anchorY="middle"
+        >
+          ● 4 INDIVIDUAL LIVE FEEDS · CLICK ANY MONITOR TO FOCUS
+        </Text>
+
+        {(
+          [
+            {
+              id: 'wide' as LoungeMirrorCamPreset,
+              code: 'CAM 01',
+              title: 'MAIN LOUNGE WIDE HANGOUT',
+              subtitle: 'Seating Area · Rear Balcony · Social Floor',
+              pos: [-1.42, 0.56, 0] as [number, number, number],
+              accent: '#E5A93C',
+            },
+            {
+              id: 'screen' as LoungeMirrorCamPreset,
+              code: 'CAM 02',
+              title: 'MAIN CINEMA STAGE & SCREEN',
+              subtitle: 'Front Theater Screen · Stage Feed',
+              pos: [1.42, 0.56, 0] as [number, number, number],
+              accent: '#38BDF8',
+            },
+            {
+              id: 'games' as LoungeMirrorCamPreset,
+              code: 'CAM 03',
+              title: 'BAR GAMES, TABLE & PUTTING',
+              subtitle: 'Darts · Putting Green · Game Table · Shuffleboard',
+              pos: [-1.42, -0.68, 0] as [number, number, number],
+              accent: '#34D399',
+            },
+            {
+              id: 'gameroom' as LoungeMirrorCamPreset,
+              code: 'CAM 04',
+              title: 'THE GAME ROOM & HOLOTABLE',
+              subtitle: 'Tactical Holotable · Classic Board Games · Arcade Row',
+              pos: [1.42, -0.68, 0] as [number, number, number],
+              accent: '#C084FC',
+            },
+          ] as const
+        ).map((cam) => {
+          const isFocused = loungeCamPreset === cam.id
+          const camTex = loungeCamWallTextures[cam.id] ?? loungeMirrorTexture
+          return (
+            <group
+              key={cam.id}
+              name={`control-room-cam-display-${cam.id}`}
+              position={cam.pos}
+              onClick={(e) => {
+                e.stopPropagation()
+                onSelectLoungeCamPreset?.(cam.id)
+                setPreferRoomCam(true)
+                onUpdateWingState({ commandScreenMode: 'mirror-lounge' })
+              }}
+            >
+              {/* Individual Wall-Mounted Display Bezel */}
+              <RoundedBox args={[2.62, 1.12, 0.05]} radius={0.026} smoothness={2}>
+                <meshStandardMaterial
+                  color={isFocused ? '#17253B' : '#08111F'}
+                  metalness={0.58}
+                  roughness={0.34}
+                />
+              </RoundedBox>
+              {/* Glowing Accent Trim Around Individual Monitor */}
+              <mesh position={[0, 0.535, 0.028]}>
+                <planeGeometry args={[2.5, 0.022]} />
+                <meshBasicMaterial color={isFocused ? '#FDE68A' : cam.accent} />
+              </mesh>
+              <mesh position={[0, -0.535, 0.028]}>
+                <planeGeometry args={[2.5, 0.016]} />
+                <meshBasicMaterial color={isFocused ? '#FDE68A' : cam.accent} />
+              </mesh>
+
+              {/* Top Monitor Telemetry Bar */}
+              <Text
+                position={[-1.22, 0.45, 0.03]}
+                fontSize={0.052}
+                color={cam.accent}
+                anchorX="left"
+                anchorY="middle"
+              >
+                {`🎥 ${cam.code} · ${cam.title}`}
+              </Text>
+              <Text
+                position={[1.22, 0.45, 0.03]}
+                fontSize={0.04}
+                color={isFocused ? '#FDE68A' : '#34D399'}
+                anchorX="right"
+                anchorY="middle"
+              >
+                {isFocused ? '★ ROUTED TO MAIN' : '● LIVE REC'}
+              </Text>
+
+              {/* Live 3D Offscreen Camera Feed Surface */}
+              <mesh position={[0, -0.02, 0.03]}>
+                <planeGeometry args={[2.44, 0.78]} />
+                <meshBasicMaterial
+                  key={`cam-wall-tex-${cam.id}`}
+                  map={camTex}
+                  color="#ffffff"
+                  toneMapped={false}
+                />
+              </mesh>
+
+              {/* Bottom Monitor Subtitle & Status Strip */}
+              <Text
+                position={[-1.22, -0.46, 0.03]}
+                fontSize={0.038}
+                color="#94A3B8"
+                anchorX="left"
+                anchorY="middle"
+              >
+                {cam.subtitle}
+              </Text>
+              <Text
+                position={[1.22, -0.46, 0.03]}
+                fontSize={0.036}
+                color="#CBD5E1"
+                anchorX="right"
+                anchorY="middle"
+              >
+                CLICK TO ROUTE ↗
+              </Text>
+            </group>
+          )
+        })}
       </group>
 
       {/* =================================================================== */}

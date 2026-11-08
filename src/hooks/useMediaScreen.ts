@@ -2,6 +2,11 @@ import type Hls from 'hls.js'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import {
+  getNesEmulator,
+  isNesMediaUrl,
+  parseNesCartridgeIdFromUrl,
+} from '../services/nesEmulator'
+import {
   extractPeerTubeRef,
   extractYouTubeVideoId,
   isYouTubeWatchUrl,
@@ -404,6 +409,30 @@ export function useMediaScreen({
       destroyHls()
       clearCompanionAudio()
       videoElement.srcObject = null
+
+      if (isNesMediaUrl(rawUrl)) {
+        const nes = getNesEmulator()
+        const cartId = parseNesCartridgeIdFromUrl(rawUrl)
+        if (cartId !== 'custom-rom') {
+          nes.loadLibraryCartridge(cartId)
+        }
+        const nesStream = nes.getStream()
+        sourceAttached = true
+        setIsResolvingMedia(false)
+        setActiveStreamQuality('60fps NES Console')
+        videoElement.removeAttribute('src')
+        videoElement.srcObject = nesStream
+        videoElement.muted = true
+        try {
+          await videoElement.play()
+        } catch {
+          // Stream autoplay fallback
+        }
+        if (!cancelled) {
+          setHasVideoFrames(true)
+        }
+        return
+      }
 
       const ytVideoId = isYouTubeWatchUrl(rawUrl)
         ? extractYouTubeVideoId(rawUrl)

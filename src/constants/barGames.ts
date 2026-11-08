@@ -681,18 +681,327 @@ export function snapTabletopCoords(
   return [Number(clampedX.toFixed(3)), Number(clampedZ.toFixed(3))]
 }
 
+export function scoreBlackjackHand(cards: PlayingCard[]): { total: number; soft: boolean; blackjack: boolean } {
+  let total = 0
+  let aces = 0
+  for (const c of cards) {
+    if (c.rank === 'A') {
+      aces += 1
+      total += 11
+    } else if (c.rank === 'K' || c.rank === 'Q' || c.rank === 'J' || c.rank === '10') {
+      total += 10
+    } else {
+      total += Number(c.rank) || 0
+    }
+  }
+  while (total > 21 && aces > 0) {
+    total -= 10
+    aces -= 1
+  }
+  const blackjack = cards.length === 2 && total === 21
+  return { total, soft: aces > 0, blackjack }
+}
+
+const RANK_NUM: Record<CardRank, number> = {
+  '2': 2,
+  '3': 3,
+  '4': 4,
+  '5': 5,
+  '6': 6,
+  '7': 7,
+  '8': 8,
+  '9': 9,
+  '10': 10,
+  J: 11,
+  Q: 12,
+  K: 13,
+  A: 14,
+}
+
+export function evaluateHoldemHand(cards: PlayingCard[]): { score: number; label: string } {
+  if (cards.length === 0) return { score: 0, label: 'No Cards' }
+  const counts: Record<number, number> = {}
+  const suitCounts: Record<CardSuit, number[]> = {
+    spades: [],
+    hearts: [],
+    diamonds: [],
+    clubs: [],
+  }
+  for (const c of cards) {
+    const v = RANK_NUM[c.rank]
+    counts[v] = (counts[v] || 0) + 1
+    suitCounts[c.suit].push(v)
+  }
+  const uniqueVals = Object.keys(counts)
+    .map(Number)
+    .sort((a, b) => b - a)
+
+  // Check flush
+  let flushSuit: CardSuit | null = null
+  for (const s of SUITS) {
+    if (suitCounts[s].length >= 5) {
+      flushSuit = s
+      break
+    }
+  }
+
+  // Check straight
+  const checkStraightHigh = (vals: number[]): number => {
+    const set = new Set(vals)
+    if (set.has(14)) set.add(1)
+    for (let high = 14; high >= 5; high--) {
+      if (
+        set.has(high) &&
+        set.has(high - 1) &&
+        set.has(high - 2) &&
+        set.has(high - 3) &&
+        set.has(high - 4)
+      ) {
+        return high
+      }
+    }
+    return 0
+  }
+
+  if (flushSuit) {
+    const sfHigh = checkStraightHigh(suitCounts[flushSuit])
+    if (sfHigh > 0) {
+      return {
+        score: 8000 + sfHigh,
+        label: sfHigh === 14 ? 'Royal Flush!' : 'Straight Flush',
+      }
+    }
+  }
+
+  const groups = Object.entries(counts)
+    .map(([v, cnt]) => ({ val: Number(v), count: cnt }))
+    .sort((a, b) => b.count - a.count || b.val - a.val)
+
+  if (groups[0]?.count === 4) {
+    return { score: 7000 + groups[0].val, label: 'Four of a Kind' }
+  }
+  if (groups[0]?.count === 3 && (groups[1]?.count ?? 0) >= 2) {
+    return { score: 6000 + groups[0].val * 15 + groups[1].val, label: 'Full House' }
+  }
+  if (flushSuit) {
+    const topFlush = [...suitCounts[flushSuit]].sort((a, b) => b - a)[0] ?? 0
+    return { score: 5000 + topFlush, label: 'Flush' }
+  }
+  const straightHigh = checkStraightHigh(uniqueVals)
+  if (straightHigh > 0) {
+    return { score: 4000 + straightHigh, label: 'Straight' }
+  }
+  if (groups[0]?.count === 3) {
+    return { score: 3000 + groups[0].val, label: 'Three of a Kind' }
+  }
+  if (groups[0]?.count === 2 && groups[1]?.count === 2) {
+    return {
+      score: 2000 + groups[0].val * 15 + groups[1].val,
+      label: 'Two Pair',
+    }
+  }
+  if (groups[0]?.count === 2) {
+    return { score: 1000 + groups[0].val, label: 'One Pair' }
+  }
+  return {
+    score: uniqueVals[0] ?? 0,
+    label: `High Card`,
+  }
+}
+
+export function createInitialCheckersBoard(): number[] {
+  // 8x8 board (row 0..7, col 0..7). 0=empty, 1=Red (bottom rows 5..7), 2=Black (top rows 0..2), 3=Red King, 4=Black King
+  const board = new Array<number>(64).fill(0)
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      if ((r + c) % 2 === 1) {
+        if (r <= 2) board[r * 8 + c] = 2
+        else if (r >= 5) board[r * 8 + c] = 1
+      }
+    }
+  }
+  return board
+}
+
+export function getCheckersLegalMoves(
+  board: number[],
+  fromIdx: number,
+  turn: 'red' | 'black',
+): Array<{ toIdx: number; jumpedIdx: number | null }> {
+  const piece = board[fromIdx] ?? 0
+  if (piece === 0) return []
+  const isRed = piece === 1 || piece === 3
+  if ((turn === 'red' && !isRed) || (turn === 'black' && isRed)) return []
+
+  const isKing = piece === 3 || piece === 4
+  const r = Math.floor(fromIdx / 8)
+  const c = fromIdx % 8
+  const rowDirs = isKing ? [-1, 1] : isRed ? [-1] : [1]
+  const moves: Array<{ toIdx: number; jumpedIdx: number | null }> = []
+
+  for (const dr of rowDirs) {
+    for (const dc of [-1, 1]) {
+      const nr = r + dr
+      const nc = c + dc
+      if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
+        const nIdx = nr * 8 + nc
+        if (board[nIdx] === 0) {
+          moves.push({ toIdx: nIdx, jumpedIdx: null })
+        } else {
+          const midPiece = board[nIdx]
+          const midIsRed = midPiece === 1 || midPiece === 3
+          if (midIsRed !== isRed) {
+            const jr = r + dr * 2
+            const jc = c + dc * 2
+            if (jr >= 0 && jr < 8 && jc >= 0 && jc < 8) {
+              const jIdx = jr * 8 + jc
+              if (board[jIdx] === 0) {
+                moves.push({ toIdx: jIdx, jumpedIdx: nIdx })
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return moves
+}
+
+export function createInitialChessBoard(): string[] {
+  return [
+    'bR', 'bN', 'bB', 'bQ', 'bK', 'bB', 'bN', 'bR',
+    'bP', 'bP', 'bP', 'bP', 'bP', 'bP', 'bP', 'bP',
+    '', '', '', '', '', '', '', '',
+    '', '', '', '', '', '', '', '',
+    '', '', '', '', '', '', '', '',
+    '', '', '', '', '', '', '', '',
+    'wP', 'wP', 'wP', 'wP', 'wP', 'wP', 'wP', 'wP',
+    'wR', 'wN', 'wB', 'wQ', 'wK', 'wB', 'wN', 'wR',
+  ]
+}
+
+export function getChessLegalMoves(
+  board: string[],
+  fromIdx: number,
+  turn: 'w' | 'b',
+): number[] {
+  const piece = board[fromIdx] || ''
+  if (!piece || piece[0] !== turn) return []
+  const role = piece[1]
+  const r = Math.floor(fromIdx / 8)
+  const c = fromIdx % 8
+  const targets: number[] = []
+
+  const addIfValid = (nr: number, nc: number): boolean => {
+    if (nr < 0 || nr >= 8 || nc < 0 || nc >= 8) return false
+    const dest = board[nr * 8 + nc] || ''
+    if (!dest) {
+      targets.push(nr * 8 + nc)
+      return true
+    }
+    if (dest[0] !== turn) {
+      targets.push(nr * 8 + nc)
+    }
+    return false
+  }
+
+  if (role === 'P') {
+    const dir = turn === 'w' ? -1 : 1
+    const startRow = turn === 'w' ? 6 : 1
+    const f1 = r + dir
+    if (f1 >= 0 && f1 < 8 && !board[f1 * 8 + c]) {
+      targets.push(f1 * 8 + c)
+      const f2 = r + dir * 2
+      if (r === startRow && !board[f2 * 8 + c]) {
+        targets.push(f2 * 8 + c)
+      }
+    }
+    for (const dc of [-1, 1]) {
+      const nc = c + dc
+      if (f1 >= 0 && f1 < 8 && nc >= 0 && nc < 8) {
+        const diag = board[f1 * 8 + nc] || ''
+        if (diag && diag[0] !== turn) {
+          targets.push(f1 * 8 + nc)
+        }
+      }
+    }
+  } else if (role === 'N') {
+    for (const [dr, dc] of [
+      [-2, -1], [-2, 1], [-1, -2], [-1, 2],
+      [1, -2], [1, 2], [2, -1], [2, 1],
+    ]) {
+      addIfValid(r + dr, c + dc)
+    }
+  } else if (role === 'K') {
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        if (dr !== 0 || dc !== 0) addIfValid(r + dr, c + dc)
+      }
+    }
+  } else {
+    const dirs: Array<[number, number]> = []
+    if (role === 'R' || role === 'Q') {
+      dirs.push([-1, 0], [1, 0], [0, -1], [0, 1])
+    }
+    if (role === 'B' || role === 'Q') {
+      dirs.push([-1, -1], [-1, 1], [1, -1], [1, 1])
+    }
+    for (const [dr, dc] of dirs) {
+      for (let step = 1; step < 8; step++) {
+        if (!addIfValid(r + dr * step, c + dc * step)) break
+      }
+    }
+  }
+
+  return targets
+}
+
+export function createInitialConnect4Grid(): number[] {
+  // 6 rows x 7 cols = 42 cells (row 0 = top, row 5 = bottom)
+  return new Array<number>(42).fill(0)
+}
+
+export function checkConnect4Winner(grid: number[]): 1 | 2 | null {
+  const dirs = [
+    [0, 1],
+    [1, 0],
+    [1, 1],
+    [1, -1],
+  ]
+  for (let r = 0; r < 6; r++) {
+    for (let c = 0; c < 7; c++) {
+      const p = grid[r * 7 + c]
+      if (p !== 1 && p !== 2) continue
+      for (const [dr, dc] of dirs) {
+        let match = true
+        for (let k = 1; k < 4; k++) {
+          const nr = r + dr * k
+          const nc = c + dc * k
+          if (nr < 0 || nr >= 6 || nc < 0 || nc >= 7 || grid[nr * 7 + nc] !== p) {
+            match = false
+            break
+          }
+        }
+        if (match) return p
+      }
+    }
+  }
+  return null
+}
+
 export function createInitialTabletopState(): TabletopState {
   return {
     revision: 0,
     updatedAt: 0,
     surface: 'felt',
+    gameMode: 'blackjack',
     dice: [
       {
         id: 'init-d20',
         kind: 'd20',
         value: 20,
         color: DIE_COLORS.d20,
-        localPos: [-0.14, -0.06],
+        localPos: [-0.36, -0.18],
         rotation: [0.3, 0.5, 0.1],
         rolledBy: 'Lounge',
         rolledAt: 0,
@@ -702,13 +1011,13 @@ export function createInitialTabletopState(): TabletopState {
         kind: 'd6',
         value: 6,
         color: DIE_COLORS.d6,
-        localPos: [0.06, -0.08],
+        localPos: [-0.24, -0.22],
         rotation: [0, 0.4, 0],
         rolledBy: 'Lounge',
         rolledAt: 0,
       },
     ],
-    lastRollSummary: 'Grab or tap any polyhedral die (d4–d20) to roll for the table!',
+    lastRollSummary: 'Switch between Blackjack 21, Texas Hold’em Poker, or Freeform RPG & Dice!',
     lastRollerName: 'Lounge',
     lastRollTotal: 26,
     lastRollTimestamp: 0,
@@ -720,17 +1029,24 @@ export function createInitialTabletopState(): TabletopState {
         id: 'tok-gold',
         label: 'Hero',
         color: '#E5A93C',
-        localPos: [-0.22, 0.22],
+        localPos: [-0.32, 0.28],
         ownerName: 'Lounge',
       },
       {
         id: 'tok-mage',
         label: 'Mage',
         color: '#38BDF8',
-        localPos: [0.22, 0.22],
+        localPos: [0.32, 0.28],
         ownerName: 'Lounge',
       },
     ],
+    potChips: 50,
+    playerChips: { Lounge: 500 },
+    dealerCards: [],
+    dealerHoleRevealed: false,
+    blackjackPhase: 'betting',
+    holdemStreet: 'idle',
+    tableBanner: '🃏 Blackjack 21 Ready — Click DEAL 21 on the table rim to play!',
   }
 }
 
@@ -819,11 +1135,29 @@ export function createInitialHolotableState(): HolotableState {
   return {
     revision: 0,
     updatedAt: 0,
+    gameMode: 'adventure-rpg',
     terrain: 'dungeon-keep',
     fogEnabled: false,
     revealedFogCells: ['2,2', '2,3', '3,2', '3,3'],
     selectedMiniId: 'holo-hero-paladin',
-    lastActionSummary: 'Tactical Holotable Sanctum online — select terrain, move miniatures, or toggle Fog of War.',
+    lastActionSummary: 'Tactical Sanctum ready — play Adventure Quest RPG, Checkers, Chess, or Connect-4!',
+    rpgRound: 1,
+    rpgActiveTurnIndex: 0,
+    rpgCombatLog: [
+      '⚔️ Round 1: Party enters the Elder Dragon Sanctum!',
+      '🛡️ Select a Hero miniature and click Roll Attack (D20) or Cast Spell!',
+    ],
+    checkersBoard: createInitialCheckersBoard(),
+    checkersTurn: 'red',
+    checkersSelectedIdx: null,
+    checkersWinner: null,
+    chessBoard: createInitialChessBoard(),
+    chessTurn: 'w',
+    chessSelectedIdx: null,
+    chessWinner: null,
+    connect4Grid: createInitialConnect4Grid(),
+    connect4Turn: 1,
+    connect4Winner: null,
     miniatures: [
       {
         id: 'holo-hero-paladin',
@@ -834,6 +1168,8 @@ export function createInitialHolotableState(): HolotableState {
         rotationY: 0.4,
         scale: 1,
         ownerName: 'Clubhouse',
+        hp: 45,
+        maxHp: 45,
       },
       {
         id: 'holo-hero-mage',
@@ -844,6 +1180,8 @@ export function createInitialHolotableState(): HolotableState {
         rotationY: 0.15,
         scale: 1,
         ownerName: 'Clubhouse',
+        hp: 32,
+        maxHp: 32,
       },
       {
         id: 'holo-hero-rogue',
@@ -854,6 +1192,8 @@ export function createInitialHolotableState(): HolotableState {
         rotationY: -0.35,
         scale: 1,
         ownerName: 'Clubhouse',
+        hp: 36,
+        maxHp: 36,
       },
       {
         id: 'holo-monster-dragon',
@@ -864,6 +1204,8 @@ export function createInitialHolotableState(): HolotableState {
         rotationY: Math.PI,
         scale: 1.25,
         ownerName: 'Dungeon Master',
+        hp: 120,
+        maxHp: 120,
       },
       {
         id: 'holo-prop-chest',
@@ -874,8 +1216,11 @@ export function createInitialHolotableState(): HolotableState {
         rotationY: 0.6,
         scale: 1,
         ownerName: 'Dungeon Master',
+        hp: 25,
+        maxHp: 25,
       },
     ],
   }
 }
+
 

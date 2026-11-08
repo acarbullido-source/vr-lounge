@@ -153,8 +153,10 @@ export function stepDartFlightCCD(
 }
 
 // ============================================================================
-// Mini-Golf Putting Strip Sub-Stepped CCD Solver
+// Mini-Golf Putting Strip Sub-Stepped CCD Solver (with Break, Bunkers & Cup Rim)
 // ============================================================================
+
+export type PuttingCourseHoleId = 'straight' | 'breaking-ridge' | 'bunker-island'
 
 export interface ActivePuttSim {
   localPos: [number, number, number] // [x, y, z] in putting strip local space
@@ -164,34 +166,70 @@ export interface ActivePuttSim {
   lipOut: boolean
 }
 
-export function getPuttingSurfaceHeight(localZ: number, rampEnabled: boolean): {
+export function getPuttingSurfaceHeight(
+  localZ: number,
+  rampEnabled: boolean,
+  localX = 0,
+  courseHole: PuttingCourseHoleId = 'straight',
+): {
   height: number
   slopeDz: number
+  slopeDx: number
+  inSandBunker: boolean
 } {
-  if (!rampEnabled) {
-    return { height: 0, slopeDz: 0 }
+  let height = 0
+  let slopeDz = 0
+  let slopeDx = 0
+  let inSandBunker = false
+
+  if (rampEnabled || courseHole === 'bunker-island') {
+    const { rampCenterZ, rampHalfLength, rampPeakHeight } = PUTTING_STRIP_SPECS
+    const rel = localZ - rampCenterZ
+    if (Math.abs(rel) < rampHalfLength) {
+      // Smooth raised cosine bridge profile: h(u) = 0.5 * peak * (1 + cos(pi * u))
+      const u = rel / rampHalfLength
+      height += 0.5 * rampPeakHeight * (1 + Math.cos(Math.PI * u))
+      slopeDz +=
+        (-0.5 * rampPeakHeight * Math.PI * Math.sin(Math.PI * u)) / rampHalfLength
+    }
   }
-  const { rampCenterZ, rampHalfLength, rampPeakHeight } = PUTTING_STRIP_SPECS
-  const rel = localZ - rampCenterZ
-  if (Math.abs(rel) >= rampHalfLength) {
-    return { height: 0, slopeDz: 0 }
+
+  // Course Hole 2: Augusta Right-to-Left Breaking Ridge (lateral break dh/dx)
+  if (courseHole === 'breaking-ridge') {
+    if (localZ > -1.35 && localZ < 1.25) {
+      const zWeight = Math.cos(((localZ + 0.05) / 1.35) * (Math.PI * 0.5))
+      const breakGrade = 0.032 * Math.max(0, zWeight)
+      height += Math.max(-0.014, localX * breakGrade)
+      slopeDx += breakGrade
+      if (localZ < -0.5) {
+        slopeDz += 0.011
+      }
+    }
   }
-  // Smooth raised cosine bridge profile: h(u) = 0.5 * peak * (1 + cos(pi * u))
-  const u = rel / rampHalfLength
-  const height = 0.5 * rampPeakHeight * (1 + Math.cos(Math.PI * u))
-  const slopeDz =
-    (-0.5 * rampPeakHeight * Math.PI * Math.sin(Math.PI * u)) / rampHalfLength
-  return { height, slopeDz }
+
+  // Course Hole 3: Twin Sand Bunkers flanking the green
+  if (courseHole === 'bunker-island') {
+    const leftBunkerDist = Math.hypot(localX + 0.25, localZ + 0.68)
+    const rightBunkerDist = Math.hypot(localX - 0.25, localZ + 0.42)
+    if (leftBunkerDist < 0.165 || rightBunkerDist < 0.165) {
+      inSandBunker = true
+      height -= 0.004
+    }
+  }
+
+  return { height, slopeDz, slopeDx, inSandBunker }
 }
 
 /**
  * Fixed-timestep (180Hz) sub-stepped CCD putting green physics with bumper reflection,
- * ramp incline gravity, Stimpmeter turf deceleration, and realistic cup capture vs. lip-out.
+ * 2D terrain gradient (ramp + lateral break), sand bunker drag, Stimpmeter turf deceleration,
+ * cup-lip gravity torque, and realistic cup capture vs. lip-out.
  */
 export function stepPuttingBallCCD(
   sim: ActivePuttSim,
   dt: number,
   rampEnabled: boolean,
+  courseHole: PuttingCourseHoleId = 'straight',
 ): void {
   if (sim.settled) return
 
@@ -211,14 +249,31 @@ export function stepPuttingBallCCD(
     let [x, , z] = sim.localPos
     let [vx, vz] = sim.localVel
 
-    // Ramp slope longitudinal acceleration (a_z = -g * dh/dz)
-    const { slopeDz } = getPuttingSurfaceHeight(z, rampEnabled)
+    // 2D Terrain slope acceleration: a_x = -g * dh/dx, a_z = -g * dh/dz
+    const { slopeDz, slopeDx, inSandBunker } = getPuttingSurfaceHeight(
+      z,
+      rampEnabled,
+      x,
+      courseHole,
+    )
+    vx += -9.81 * slopeDx * 0.62 * subDt
     vz += -9.81 * slopeDz * 0.58 * subDt
 
-    // Rolling turf deceleration
+    // Cup Rim Gravity Pull when rolling along the lip of the cup
+    const dxCupPre = x - 0
+    const dzCupPre = z - cupZ
+    const distCupPre = Math.hypot(dxCupPre, dzCupPre)
+    if (distCupPre > 0.002 && distCupPre < cupR * 1.48) {
+      const pull = 1.35 * (1 - distCupPre / (cupR * 1.48))
+      vx -= (dxCupPre / distCupPre) * pull * subDt
+      vz -= (dzCupPre / distCupPre) * pull * subDt
+    }
+
+    // Rolling turf deceleration (Stimp 11 green + Sand Bunker resistance)
     const speed = Math.hypot(vx, vz)
     if (speed > 1e-5) {
-      const decel = 0.76 * subDt
+      const dragMultiplier = inSandBunker ? 4.1 : 1.0
+      const decel = 0.76 * dragMultiplier * subDt
       const nextSpeed = Math.max(0, speed - decel)
       const scale = nextSpeed / speed
       vx *= scale
@@ -279,13 +334,22 @@ export function stepPuttingBallCCD(
       vz *= 0.78
     }
 
-    const { height: nextSurfH } = getPuttingSurfaceHeight(nz, rampEnabled)
+    const { height: nextSurfH } = getPuttingSurfaceHeight(
+      nz,
+      rampEnabled,
+      nx,
+      courseHole,
+    )
     const nextY = nextSurfH + PUTTING_STRIP_SPECS.ballRadius
     sim.localPos = [nx, nextY, nz]
     sim.localVel = [vx, vz]
 
     // Rest settle check (only settle when not perched on steep ramp face)
-    if (Math.hypot(vx, vz) < 0.022 && Math.abs(slopeDz) < 0.03) {
+    if (
+      Math.hypot(vx, vz) < 0.022 &&
+      Math.abs(slopeDz) < 0.03 &&
+      Math.abs(slopeDx) < 0.04
+    ) {
       sim.localPos = [
         Number(nx.toFixed(4)),
         Number(nextY.toFixed(4)),
@@ -297,3 +361,48 @@ export function stepPuttingBallCCD(
     }
   }
 }
+
+/**
+ * Predicts the 3D putting roll path `[x, y, z][]` for the live aiming guide arc,
+ * accounting for lateral green break, ramp elevation, and sand bunkers.
+ */
+export function computePuttingTrajectoryPreview(
+  localOriginXZ: [number, number],
+  localVelocityXZ: [number, number],
+  rampEnabled: boolean,
+  courseHole: PuttingCourseHoleId = 'straight',
+  maxSteps = 48,
+): Array<[number, number, number]> {
+  const startSurf = getPuttingSurfaceHeight(
+    localOriginXZ[1],
+    rampEnabled,
+    localOriginXZ[0],
+    courseHole,
+  )
+  const sim: ActivePuttSim = {
+    localPos: [
+      localOriginXZ[0],
+      startSurf.height + PUTTING_STRIP_SPECS.ballRadius,
+      localOriginXZ[1],
+    ],
+    localVel: [localVelocityXZ[0], localVelocityXZ[1]],
+    settled: false,
+    holed: false,
+    lipOut: false,
+  }
+
+  const points: Array<[number, number, number]> = [
+    [sim.localPos[0], sim.localPos[1] + 0.012, sim.localPos[2]],
+  ]
+  for (let i = 0; i < maxSteps; i++) {
+    stepPuttingBallCCD(sim, 0.055, rampEnabled, courseHole)
+    points.push([
+      Number(sim.localPos[0].toFixed(3)),
+      Number((Math.max(0.018, sim.localPos[1]) + 0.012).toFixed(3)),
+      Number(sim.localPos[2].toFixed(3)),
+    ])
+    if (sim.settled || sim.holed) break
+  }
+  return points
+}
+

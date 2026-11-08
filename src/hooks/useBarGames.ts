@@ -5,9 +5,13 @@ import {
   PUTTING_STRIP_SPECS,
   applyDartHitToMatch,
   applyPuttSettleToMatch,
+  checkConnect4Winner,
   createDartPlayerSlot,
   createEmptyCricketMarks,
+  createInitialCheckersBoard,
+  createInitialChessBoard,
   createInitialClubhouseState,
+  createInitialConnect4Grid,
   createInitialCornholeState,
   createInitialDartsMatchState,
   createInitialHolotableState,
@@ -16,7 +20,11 @@ import {
   createInitialTabletopState,
   createOrderedDeck52,
   createPuttingPlayerSlot,
+  evaluateHoldemHand,
+  getCheckersLegalMoves,
+  getChessLegalMoves,
   normalizePlayerKey,
+  scoreBlackjackHand,
   shuffleCards,
   snapTabletopCoords,
 } from '../constants/barGames'
@@ -38,6 +46,7 @@ import type {
   DartShotSettlePacket,
   DartsMatchState,
   DieKind,
+  HolotableGameMode,
   HolotableMiniKind,
   HolotableMiniature,
   HolotableState,
@@ -52,6 +61,7 @@ import type {
   RolledDie,
   ShuffleboardPuck,
   ShuffleboardState,
+  TableGameMode,
   TableSurfaceStyle,
   TabletopState,
 } from '../types/barGames'
@@ -1614,6 +1624,728 @@ export function useBarGames({
     })
   }, [commitHolotable])
 
+  const setTableGameMode = useCallback(
+    (gameMode: TableGameMode) => {
+      const me = localProfileRef.current
+      const prev = tabletopRef.current
+      const banner =
+        gameMode === 'blackjack'
+          ? `🃏 ${me.displayName} switched table to Blackjack 21 — Click DEAL 21!`
+          : gameMode === 'holdem'
+            ? `♠️ ${me.displayName} switched table to Texas Hold'em Poker — Click DEAL HOLD'EM!`
+            : `🎲 ${me.displayName} switched table to Freeform RPG, Cards & Polyhedral Dice!`
+      commitTabletop({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        gameMode,
+        tableBanner: banner,
+      })
+    },
+    [commitTabletop],
+  )
+
+  const betTableChips = useCallback(
+    (amount: number) => {
+      const me = localProfileRef.current
+      const prev = tabletopRef.current
+      const chipsMap = { ...(prev.playerChips ?? {}) }
+      const currentBankroll = chipsMap[me.displayName] ?? 500
+      const wager = Math.max(5, Math.min(currentBankroll, amount))
+      chipsMap[me.displayName] = Math.max(0, currentBankroll - wager)
+      const nextPot = (prev.potChips ?? 0) + wager
+
+      commitTabletop({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        potChips: nextPot,
+        playerChips: chipsMap,
+        tableBanner: `🪙 ${me.displayName} bet +$${wager} into the Pot (Pot: $${nextPot} · Stack: $${chipsMap[me.displayName]})`,
+      })
+    },
+    [commitTabletop],
+  )
+
+  const dealBlackjackRound = useCallback(() => {
+    const me = localProfileRef.current
+    const prev = tabletopRef.current
+    const freshDeck =
+      prev.deck.length < 15 ? shuffleCards(createOrderedDeck52()) : [...prev.deck]
+    const p1 = freshDeck.shift()!
+    const d1 = freshDeck.shift()!
+    const p2 = freshDeck.shift()!
+    const d2 = freshDeck.shift()!
+
+    const playerCards = [p1, p2]
+    const dealerCards = [d1, d2]
+    const pScore = scoreBlackjackHand(playerCards)
+    const dScore = scoreBlackjackHand(dealerCards)
+
+    const chipsMap = { ...(prev.playerChips ?? {}) }
+    if (chipsMap[me.displayName] === undefined) chipsMap[me.displayName] = 500
+    const ante = Math.min(25, chipsMap[me.displayName] || 25)
+    chipsMap[me.displayName] = Math.max(0, (chipsMap[me.displayName] ?? 500) - ante)
+    let pot = (prev.potChips ?? 0) + ante * 2
+
+    let phase: 'betting' | 'player-turn' | 'settled' = 'player-turn'
+    let holeRevealed = false
+    let banner = `🃏 ${me.displayName}: ${pScore.total}${pScore.soft ? ' (soft)' : ''} vs Dealer [${d1.rank}${d1.suit[0].toUpperCase()} + ?] — HIT or STAND!`
+
+    if (pScore.blackjack) {
+      phase = 'settled'
+      holeRevealed = true
+      if (dScore.blackjack) {
+        chipsMap[me.displayName] += ante
+        pot = 0
+        banner = `🤝 Double Blackjack Push (21 vs 21)! Ante returned.`
+      } else {
+        const win = Math.round(ante * 2.5)
+        chipsMap[me.displayName] += win
+        pot = 0
+        banner = `🔥 BLACKJACK 21! ${me.displayName} wins +$${win}!`
+      }
+    }
+
+    commitTabletop({
+      ...prev,
+      revision: prev.revision + 1,
+      updatedAt: Date.now(),
+      gameMode: 'blackjack',
+      deck: freshDeck,
+      dealerCards,
+      dealerHoleRevealed: holeRevealed,
+      blackjackPhase: phase,
+      potChips: pot,
+      playerChips: chipsMap,
+      hands: {
+        ...prev.hands,
+        [localUserId]: {
+          userId: localUserId,
+          displayName: me.displayName,
+          cards: playerCards,
+        },
+      },
+      tableCards: [
+        {
+          card: p1,
+          faceUp: true,
+          localPos: [-0.09, 0.24],
+          rotationY: -0.05,
+          playedBy: me.displayName,
+        },
+        {
+          card: p2,
+          faceUp: true,
+          localPos: [0.05, 0.24],
+          rotationY: 0.05,
+          playedBy: me.displayName,
+        },
+      ],
+      tableBanner: banner,
+    })
+  }, [commitTabletop, localUserId])
+
+  const hitBlackjack = useCallback(() => {
+    const me = localProfileRef.current
+    const prev = tabletopRef.current
+    if (prev.blackjackPhase !== 'player-turn') return
+    const freshDeck =
+      prev.deck.length < 5 ? shuffleCards(createOrderedDeck52()) : [...prev.deck]
+    const drawn = freshDeck.shift()!
+    const existing = prev.hands[localUserId]?.cards ?? []
+    const nextCards = [...existing, drawn]
+    const pScore = scoreBlackjackHand(nextCards)
+
+    let phase: 'betting' | 'player-turn' | 'settled' = 'player-turn'
+    let holeRevealed = prev.dealerHoleRevealed ?? false
+    let pot = prev.potChips ?? 50
+    const chipsMap = { ...(prev.playerChips ?? {}) }
+    let banner = `🃏 ${me.displayName} drew ${drawn.rank} (${pScore.total}) — HIT or STAND!`
+
+    if (pScore.total > 21) {
+      phase = 'settled'
+      holeRevealed = true
+      pot = 0
+      banner = `💥 BUST (${pScore.total})! Dealer wins pot. Click DEAL 21 for next hand!`
+    } else if (pScore.total === 21) {
+      // Auto-stand at 21
+      const dealerCards = [...(prev.dealerCards ?? [])]
+      while (scoreBlackjackHand(dealerCards).total < 17 && freshDeck.length > 0) {
+        dealerCards.push(freshDeck.shift()!)
+      }
+      const dScore = scoreBlackjackHand(dealerCards)
+      phase = 'settled'
+      holeRevealed = true
+      if (dScore.total > 21 || pScore.total > dScore.total) {
+        chipsMap[me.displayName] = (chipsMap[me.displayName] ?? 500) + pot
+        banner = `🏆 21! ${me.displayName} beats Dealer (${dScore.total}) and wins +$${pot}!`
+      } else if (pScore.total === dScore.total) {
+        chipsMap[me.displayName] = (chipsMap[me.displayName] ?? 500) + Math.floor(pot / 2)
+        banner = `🤝 Push at 21 vs Dealer 21!`
+      } else {
+        banner = `Dealer wins (${dScore.total} vs ${pScore.total}).`
+      }
+      pot = 0
+      commitTabletop({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        deck: freshDeck,
+        dealerCards,
+        dealerHoleRevealed: holeRevealed,
+        blackjackPhase: phase,
+        potChips: pot,
+        playerChips: chipsMap,
+        hands: {
+          ...prev.hands,
+          [localUserId]: { userId: localUserId, displayName: me.displayName, cards: nextCards },
+        },
+        tableCards: nextCards.map((c, idx) => ({
+          card: c,
+          faceUp: true,
+          localPos: [Number((-0.18 + idx * 0.12).toFixed(3)), 0.24],
+          rotationY: 0,
+          playedBy: me.displayName,
+        })),
+        tableBanner: banner,
+      })
+      return
+    }
+
+    commitTabletop({
+      ...prev,
+      revision: prev.revision + 1,
+      updatedAt: Date.now(),
+      deck: freshDeck,
+      dealerHoleRevealed: holeRevealed,
+      blackjackPhase: phase,
+      potChips: pot,
+      playerChips: chipsMap,
+      hands: {
+        ...prev.hands,
+        [localUserId]: { userId: localUserId, displayName: me.displayName, cards: nextCards },
+      },
+      tableCards: nextCards.map((c, idx) => ({
+        card: c,
+        faceUp: true,
+        localPos: [Number((-0.18 + idx * 0.12).toFixed(3)), 0.24],
+        rotationY: 0,
+        playedBy: me.displayName,
+      })),
+      tableBanner: banner,
+    })
+  }, [commitTabletop, localUserId])
+
+  const standBlackjack = useCallback(() => {
+    const me = localProfileRef.current
+    const prev = tabletopRef.current
+    const freshDeck =
+      prev.deck.length < 8 ? shuffleCards(createOrderedDeck52()) : [...prev.deck]
+    const playerCards = prev.hands[localUserId]?.cards ?? []
+    if (playerCards.length === 0) return
+
+    const dealerCards = [...(prev.dealerCards ?? [])]
+    while (scoreBlackjackHand(dealerCards).total < 17 && freshDeck.length > 0) {
+      dealerCards.push(freshDeck.shift()!)
+    }
+
+    const pScore = scoreBlackjackHand(playerCards)
+    const dScore = scoreBlackjackHand(dealerCards)
+    const chipsMap = { ...(prev.playerChips ?? {}) }
+    const pot = prev.potChips ?? 50
+    let banner: string
+
+    if (dScore.total > 21) {
+      chipsMap[me.displayName] = (chipsMap[me.displayName] ?? 500) + pot
+      banner = `🏆 Dealer BUSTS (${dScore.total})! ${me.displayName} (${pScore.total}) wins +$${pot}!`
+    } else if (pScore.total > dScore.total) {
+      chipsMap[me.displayName] = (chipsMap[me.displayName] ?? 500) + pot
+      banner = `🏆 ${me.displayName} (${pScore.total}) beats Dealer (${dScore.total}) for +$${pot}!`
+    } else if (pScore.total === dScore.total) {
+      chipsMap[me.displayName] = (chipsMap[me.displayName] ?? 500) + Math.floor(pot / 2)
+      banner = `🤝 Push at ${pScore.total} vs Dealer ${dScore.total}!`
+    } else {
+      banner = `Dealer wins (${dScore.total} vs ${pScore.total}). Click DEAL 21 for next hand!`
+    }
+
+    commitTabletop({
+      ...prev,
+      revision: prev.revision + 1,
+      updatedAt: Date.now(),
+      deck: freshDeck,
+      dealerCards,
+      dealerHoleRevealed: true,
+      blackjackPhase: 'settled',
+      potChips: 0,
+      playerChips: chipsMap,
+      tableBanner: banner,
+    })
+  }, [commitTabletop, localUserId])
+
+  const dealHoldemRound = useCallback(() => {
+    const me = localProfileRef.current
+    const prev = tabletopRef.current
+    const freshDeck = shuffleCards(createOrderedDeck52())
+    const h1 = freshDeck.shift()!
+    const h2 = freshDeck.shift()!
+    const d1 = freshDeck.shift()!
+    const d2 = freshDeck.shift()!
+
+    const chipsMap = { ...(prev.playerChips ?? {}) }
+    if (chipsMap[me.displayName] === undefined) chipsMap[me.displayName] = 500
+    const blind = Math.min(20, chipsMap[me.displayName] || 20)
+    chipsMap[me.displayName] = Math.max(0, (chipsMap[me.displayName] ?? 500) - blind)
+    const pot = (prev.potChips ?? 0) + blind * 2
+
+    commitTabletop({
+      ...prev,
+      revision: prev.revision + 1,
+      updatedAt: Date.now(),
+      gameMode: 'holdem',
+      deck: freshDeck,
+      dealerCards: [d1, d2],
+      dealerHoleRevealed: false,
+      holdemStreet: 'preflop',
+      potChips: pot,
+      playerChips: chipsMap,
+      tableCards: [],
+      hands: {
+        ...prev.hands,
+        [localUserId]: {
+          userId: localUserId,
+          displayName: me.displayName,
+          cards: [h1, h2],
+        },
+      },
+      tableBanner: `♠️ Hold'em Pre-Flop dealt! Pot: $${pot} — Click BET +$25 or DEAL FLOP!`,
+    })
+  }, [commitTabletop, localUserId])
+
+  const advanceHoldemStreet = useCallback(() => {
+    const me = localProfileRef.current
+    const prev = tabletopRef.current
+    const freshDeck =
+      prev.deck.length < 8 ? shuffleCards(createOrderedDeck52()) : [...prev.deck]
+    const street = prev.holdemStreet ?? 'idle'
+
+    if (street === 'idle' || street === 'showdown') {
+      dealHoldemRound()
+      return
+    }
+
+    if (street === 'preflop') {
+      const c1 = freshDeck.shift()!
+      const c2 = freshDeck.shift()!
+      const c3 = freshDeck.shift()!
+      commitTabletop({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        deck: freshDeck,
+        holdemStreet: 'flop',
+        tableCards: [c1, c2, c3].map((card, i) => ({
+          card,
+          faceUp: true,
+          localPos: [Number((-0.24 + i * 0.12).toFixed(3)), 0.0],
+          rotationY: 0,
+          playedBy: 'Dealer',
+        })),
+        tableBanner: `♠️ THE FLOP: ${c1.rank}${c1.suit[0].toUpperCase()} ${c2.rank}${c2.suit[0].toUpperCase()} ${c3.rank}${c3.suit[0].toUpperCase()} · Click BET or TURN!`,
+      })
+      return
+    }
+
+    if (street === 'flop') {
+      const c4 = freshDeck.shift()!
+      const nextComm = [
+        ...prev.tableCards,
+        {
+          card: c4,
+          faceUp: true,
+          localPos: [0.12, 0.0] as [number, number],
+          rotationY: 0,
+          playedBy: 'Dealer',
+        },
+      ]
+      commitTabletop({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        deck: freshDeck,
+        holdemStreet: 'turn',
+        tableCards: nextComm,
+        tableBanner: `♠️ THE TURN: ${c4.rank}${c4.suit[0].toUpperCase()} · Click BET or RIVER!`,
+      })
+      return
+    }
+
+    if (street === 'turn') {
+      const c5 = freshDeck.shift()!
+      const nextComm = [
+        ...prev.tableCards,
+        {
+          card: c5,
+          faceUp: true,
+          localPos: [0.24, 0.0] as [number, number],
+          rotationY: 0,
+          playedBy: 'Dealer',
+        },
+      ]
+      commitTabletop({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        deck: freshDeck,
+        holdemStreet: 'river',
+        tableCards: nextComm,
+        tableBanner: `♠️ THE RIVER: ${c5.rank}${c5.suit[0].toUpperCase()} · Click SHOWDOWN to reveal winner!`,
+      })
+      return
+    }
+
+    if (street === 'river') {
+      const comm = prev.tableCards.map((tc) => tc.card)
+      const myHole = prev.hands[localUserId]?.cards ?? []
+      const houseHole = prev.dealerCards ?? []
+      const myEval = evaluateHoldemHand([...myHole, ...comm])
+      const houseEval = evaluateHoldemHand([...houseHole, ...comm])
+      const pot = prev.potChips ?? 60
+      const chipsMap = { ...(prev.playerChips ?? {}) }
+      let banner: string
+      if (myEval.score >= houseEval.score) {
+        chipsMap[me.displayName] = (chipsMap[me.displayName] ?? 500) + pot
+        banner = `🏆 SHOWDOWN: ${me.displayName} wins +$${pot} with ${myEval.label} vs House (${houseEval.label})!`
+      } else {
+        banner = `♠️ SHOWDOWN: House wins with ${houseEval.label} vs ${me.displayName} (${myEval.label}).`
+      }
+      commitTabletop({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        dealerHoleRevealed: true,
+        holdemStreet: 'showdown',
+        potChips: 0,
+        playerChips: chipsMap,
+        tableBanner: banner,
+      })
+    }
+  }, [commitTabletop, dealHoldemRound, localUserId])
+
+  // =========================================================================
+  // GAME ROOM CENTERPIECE TABLE: RPG COMBAT, CHECKERS, CHESS & CONNECT-4
+  // =========================================================================
+
+  const setHolotableGameMode = useCallback(
+    (gameMode: HolotableGameMode) => {
+      const me = localProfileRef.current
+      const prev = holotableRef.current
+      const modeNames: Record<HolotableGameMode, string> = {
+        'adventure-rpg': '⚔️ Adventure Quest RPG Campaign',
+        checkers: '🔴 Classic Checkers (8×8)',
+        chess: '♟️ Grandmaster Chess (8×8)',
+        connect4: '🟡 Connect-4 Strategy Grid',
+      }
+      commitHolotable({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        gameMode,
+        lastActionSummary: `${me.displayName} switched Game Room Table to ${modeNames[gameMode]}!`,
+      })
+    },
+    [commitHolotable],
+  )
+
+  const rollRpgCombatAction = useCallback(
+    (actionKind: 'melee' | 'spell' | 'heal') => {
+      const me = localProfileRef.current
+      const prev = holotableRef.current
+      const d20 = Math.floor(Math.random() * 20) + 1
+      const dmg =
+        actionKind === 'melee'
+          ? Math.floor(Math.random() * 10) + 6 + (d20 === 20 ? 12 : 0)
+          : actionKind === 'spell'
+            ? Math.floor(Math.random() * 14) + 8 + (d20 === 20 ? 14 : 0)
+            : Math.floor(Math.random() * 10) + 8
+
+      const selected =
+        prev.miniatures.find((m) => m.id === prev.selectedMiniId) ?? prev.miniatures[0]
+      const actorName = selected?.label ?? me.displayName
+
+      // Find boss / monster target for attacks, or selected hero for heals
+      const monsterTarget =
+        prev.miniatures.find((m) => m.kind.startsWith('monster-')) ??
+        prev.miniatures[prev.miniatures.length - 1]
+
+      let summary: string
+      const nextMinis = prev.miniatures.map((m) => {
+        const curHp = m.hp ?? 40
+        const maxHp = m.maxHp ?? 40
+        if (actionKind === 'heal' && m.id === selected?.id) {
+          const healed = Math.min(maxHp, curHp + dmg)
+          return { ...m, hp: healed }
+        }
+        if (actionKind !== 'heal' && m.id === monsterTarget?.id && d20 >= 8) {
+          const remainingHp = Math.max(0, curHp - dmg)
+          return { ...m, hp: remainingHp }
+        }
+        return m
+      })
+
+      if (actionKind === 'heal') {
+        summary = `✨ ${actorName} cast Divine Heal (+${dmg} HP)!`
+      } else if (d20 === 20) {
+        summary = `🔥 NAT 20 CRIT! ${actorName} struck ${monsterTarget?.label ?? 'Boss'} for ${dmg} DMG!`
+      } else if (d20 >= 8) {
+        summary = `⚔️ ${actorName} rolled D20(${d20}) HIT on ${monsterTarget?.label ?? 'Boss'} for ${dmg} DMG!`
+      } else {
+        summary = `🛡️ ${actorName} rolled D20(${d20}) — attack grazed ${monsterTarget?.label ?? 'Boss'}'s armor!`
+      }
+
+      const prevLog = prev.rpgCombatLog ?? []
+      const nextTurnIdx = ((prev.rpgActiveTurnIndex ?? 0) + 1) % Math.max(1, nextMinis.length)
+      const nextRound =
+        nextTurnIdx === 0 ? (prev.rpgRound ?? 1) + 1 : (prev.rpgRound ?? 1)
+
+      commitHolotable({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        miniatures: nextMinis,
+        rpgRound: nextRound,
+        rpgActiveTurnIndex: nextTurnIdx,
+        rpgCombatLog: [summary, ...prevLog].slice(0, 6),
+        lastActionSummary: summary,
+      })
+    },
+    [commitHolotable],
+  )
+
+  const adjustHolotableMiniHp = useCallback(
+    (miniId: string, delta: number) => {
+      const prev = holotableRef.current
+      const nextMinis = prev.miniatures.map((m) => {
+        if (m.id !== miniId) return m
+        const maxHp = m.maxHp ?? 50
+        const curHp = m.hp ?? maxHp
+        return {
+          ...m,
+          hp: Math.max(0, Math.min(maxHp, curHp + delta)),
+        }
+      })
+      commitHolotable({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        miniatures: nextMinis,
+      })
+    },
+    [commitHolotable],
+  )
+
+  const clickCheckersCell = useCallback(
+    (cellIdx: number) => {
+      const me = localProfileRef.current
+      const prev = holotableRef.current
+      const board = [...(prev.checkersBoard ?? createInitialCheckersBoard())]
+      const turn = prev.checkersTurn ?? 'red'
+      const selectedIdx = prev.checkersSelectedIdx ?? null
+
+      if (prev.checkersWinner) return
+
+      const clickedPiece = board[cellIdx] ?? 0
+      const clickedIsOwn =
+        (turn === 'red' && (clickedPiece === 1 || clickedPiece === 3)) ||
+        (turn === 'black' && (clickedPiece === 2 || clickedPiece === 4))
+
+      if (clickedIsOwn) {
+        commitHolotable({
+          ...prev,
+          revision: prev.revision + 1,
+          updatedAt: Date.now(),
+          checkersSelectedIdx: cellIdx,
+          lastActionSummary: `${me.displayName} selected ${turn.toUpperCase()} checker at square #${cellIdx}.`,
+        })
+        return
+      }
+
+      if (selectedIdx !== null) {
+        const legal = getCheckersLegalMoves(board, selectedIdx, turn)
+        const move = legal.find((m) => m.toIdx === cellIdx)
+        if (move) {
+          let movingPiece = board[selectedIdx]
+          board[selectedIdx] = 0
+          if (move.jumpedIdx !== null) {
+            board[move.jumpedIdx] = 0
+          }
+          const destRow = Math.floor(cellIdx / 8)
+          if (movingPiece === 1 && destRow === 0) movingPiece = 3
+          if (movingPiece === 2 && destRow === 7) movingPiece = 4
+          board[cellIdx] = movingPiece
+
+          const redLeft = board.some((p) => p === 1 || p === 3)
+          const blackLeft = board.some((p) => p === 2 || p === 4)
+          const winner: 'red' | 'black' | null = !blackLeft
+            ? 'red'
+            : !redLeft
+              ? 'black'
+              : null
+          const nextTurn = turn === 'red' ? 'black' : 'red'
+
+          commitHolotable({
+            ...prev,
+            revision: prev.revision + 1,
+            updatedAt: Date.now(),
+            checkersBoard: board,
+            checkersTurn: nextTurn,
+            checkersSelectedIdx: null,
+            checkersWinner: winner,
+            lastActionSummary: winner
+              ? `🏆 ${winner.toUpperCase()} WINS Checkers on the Game Room Table!`
+              : `🔴 ${me.displayName} moved ${turn.toUpperCase()}${move.jumpedIdx !== null ? ' (JUMP CAPTURE!)' : ''} · ${nextTurn.toUpperCase()}'s turn.`,
+          })
+        }
+      }
+    },
+    [commitHolotable],
+  )
+
+  const resetCheckersBoard = useCallback(() => {
+    const prev = holotableRef.current
+    commitHolotable({
+      ...prev,
+      revision: prev.revision + 1,
+      updatedAt: Date.now(),
+      gameMode: 'checkers',
+      checkersBoard: createInitialCheckersBoard(),
+      checkersTurn: 'red',
+      checkersSelectedIdx: null,
+      checkersWinner: null,
+      lastActionSummary: 'Fresh Checkers match started — RED moves first!',
+    })
+  }, [commitHolotable])
+
+  const clickChessCell = useCallback(
+    (cellIdx: number) => {
+      const me = localProfileRef.current
+      const prev = holotableRef.current
+      const board = [...(prev.chessBoard ?? createInitialChessBoard())]
+      const turn = prev.chessTurn ?? 'w'
+      const selectedIdx = prev.chessSelectedIdx ?? null
+
+      if (prev.chessWinner) return
+
+      const clicked = board[cellIdx] || ''
+      if (clicked && clicked[0] === turn) {
+        commitHolotable({
+          ...prev,
+          revision: prev.revision + 1,
+          updatedAt: Date.now(),
+          chessSelectedIdx: cellIdx,
+          lastActionSummary: `${me.displayName} selected ${turn === 'w' ? 'Gold' : 'Obsidian'} ${clicked[1]} at square #${cellIdx}.`,
+        })
+        return
+      }
+
+      if (selectedIdx !== null) {
+        const legal = getChessLegalMoves(board, selectedIdx, turn)
+        if (legal.includes(cellIdx)) {
+          let moving = board[selectedIdx]
+          const captured = board[cellIdx]
+          board[selectedIdx] = ''
+          const destRow = Math.floor(cellIdx / 8)
+          if (moving === 'wP' && destRow === 0) moving = 'wQ'
+          if (moving === 'bP' && destRow === 7) moving = 'bQ'
+          board[cellIdx] = moving
+
+          const winner: 'w' | 'b' | null =
+            captured === 'bK' ? 'w' : captured === 'wK' ? 'b' : null
+          const nextTurn = turn === 'w' ? 'b' : 'w'
+
+          commitHolotable({
+            ...prev,
+            revision: prev.revision + 1,
+            updatedAt: Date.now(),
+            chessBoard: board,
+            chessTurn: nextTurn,
+            chessSelectedIdx: null,
+            chessWinner: winner,
+            lastActionSummary: winner
+              ? `🏆 CHECKMATE! ${winner === 'w' ? 'GOLD' : 'OBSIDIAN'} wins Chess!`
+              : `♟️ ${me.displayName} moved ${moving}${captured ? ` capturing ${captured}` : ''} · ${nextTurn === 'w' ? 'Gold' : 'Obsidian'}'s turn.`,
+          })
+        }
+      }
+    },
+    [commitHolotable],
+  )
+
+  const resetChessBoard = useCallback(() => {
+    const prev = holotableRef.current
+    commitHolotable({
+      ...prev,
+      revision: prev.revision + 1,
+      updatedAt: Date.now(),
+      gameMode: 'chess',
+      chessBoard: createInitialChessBoard(),
+      chessTurn: 'w',
+      chessSelectedIdx: null,
+      chessWinner: null,
+      lastActionSummary: 'Fresh Chess match started — Gold (White) moves first!',
+    })
+  }, [commitHolotable])
+
+  const dropConnect4Column = useCallback(
+    (col: number) => {
+      const me = localProfileRef.current
+      const prev = holotableRef.current
+      if (col < 0 || col >= 7 || prev.connect4Winner) return
+      const grid = [...(prev.connect4Grid ?? createInitialConnect4Grid())]
+      const turn = prev.connect4Turn ?? 1
+
+      let placedRow = -1
+      for (let r = 5; r >= 0; r--) {
+        if (grid[r * 7 + col] === 0) {
+          grid[r * 7 + col] = turn
+          placedRow = r
+          break
+        }
+      }
+      if (placedRow === -1) return
+
+      const winner = checkConnect4Winner(grid)
+      const nextTurn: 1 | 2 = turn === 1 ? 2 : 1
+
+      commitHolotable({
+        ...prev,
+        revision: prev.revision + 1,
+        updatedAt: Date.now(),
+        connect4Grid: grid,
+        connect4Turn: nextTurn,
+        connect4Winner: winner,
+        lastActionSummary: winner
+          ? `🏆 ${winner === 1 ? 'GOLD' : 'CYAN'} connects 4 in a row and wins!`
+          : `🟡 ${me.displayName} dropped ${turn === 1 ? 'GOLD' : 'CYAN'} disc in Column ${col + 1} · ${nextTurn === 1 ? 'GOLD' : 'CYAN'}'s turn.`,
+      })
+    },
+    [commitHolotable],
+  )
+
+  const resetConnect4Grid = useCallback(() => {
+    const prev = holotableRef.current
+    commitHolotable({
+      ...prev,
+      revision: prev.revision + 1,
+      updatedAt: Date.now(),
+      gameMode: 'connect4',
+      connect4Grid: createInitialConnect4Grid(),
+      connect4Turn: 1,
+      connect4Winner: null,
+      lastActionSummary: 'Fresh Connect-4 match started — GOLD drops first!',
+    })
+  }, [commitHolotable])
+
   const recordArcadeStationScore = useCallback(
     (
       game: 'arcade-hoops' | 'arcade-skeeball' | 'arcade-retro',
@@ -1678,6 +2410,13 @@ export function useBarGames({
     rollPolyhedralDice,
     rerollSingleDie,
     setTableSurface,
+    setTableGameMode,
+    betTableChips,
+    dealBlackjackRound,
+    hitBlackjack,
+    standBlackjack,
+    dealHoldemRound,
+    advanceHoldemStreet,
     shuffleDeck,
     drawCardToHand,
     playCardFromHand,
@@ -1699,7 +2438,8 @@ export function useBarGames({
     // Deck Cornhole
     recordCornholeThrow,
     resetCornhole,
-    // Game Room Tactical Holotable & Arcade
+    // Game Room Tactical Holotable, Board Games & Arcade
+    setHolotableGameMode,
     setHolotableTerrain,
     selectHolotableMini,
     spawnHolotableMini,
@@ -1710,6 +2450,14 @@ export function useBarGames({
     toggleHolotableFogCell,
     revealAllHolotableFog,
     shroudAllHolotableFog,
+    rollRpgCombatAction,
+    adjustHolotableMiniHp,
+    clickCheckersCell,
+    resetCheckersBoard,
+    clickChessCell,
+    resetChessBoard,
+    dropConnect4Column,
+    resetConnect4Grid,
     recordArcadeStationScore,
   }
 }

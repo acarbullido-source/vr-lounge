@@ -5,9 +5,11 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { PUTTING_STRIP_SPECS } from '../../constants/barGames'
 import {
+  computePuttingTrajectoryPreview,
   getPuttingSurfaceHeight,
   stepPuttingBallCCD,
   type ActivePuttSim,
+  type PuttingCourseHoleId,
 } from '../../services/barGamesPhysics'
 import { readXRSpaceWorldPose } from '../../services/xrTracking'
 import type {
@@ -210,6 +212,11 @@ export function PuttingGreen3D({
 
   const rampGeometry = useMemo(() => createRampGeometry(), [])
 
+  const [courseHole, setCourseHole] = useState<PuttingCourseHoleId>('straight')
+  const [aimAngleDeg, setAimAngleDeg] = useState<number>(0)
+  const [puttPowerPct, setPuttPowerPct] = useState<number>(58)
+  const [swingMeterActive, setSwingMeterActive] = useState<boolean>(false)
+
   const [vrPutterHolstered, setVrPutterHolstered] = useState(false)
   const [isHoldingVrPutterUi, setIsHoldingVrPutterUi] = useState(false)
   const [putterRackHovered, setPutterRackHovered] = useState(false)
@@ -233,6 +240,9 @@ export function PuttingGreen3D({
   const scratchHandQuat = useMemo(() => new THREE.Quaternion(), [])
   const scratchBladeOffset = useMemo(() => new THREE.Vector3(), [])
 
+  const effectiveRampEnabled =
+    puttingState.rampEnabled || courseHole === 'bunker-island'
+
   // Sync resting ball position whenever no shot is active
   useEffect(() => {
     if (activePuttShot) return
@@ -241,20 +251,22 @@ export function PuttingGreen3D({
     if (ballMeshRef.current) {
       ballMeshRef.current.position.set(
         puttingState.ballRestLocal[0],
-        puttingState.ballRestLocal[1],
+        puttingState.ballRestLocal[1] + 0.028,
         puttingState.ballRestLocal[2],
       )
     }
   }, [activePuttShot, puttingState.ballRestLocal])
 
-  // Initialize deterministic 10x sub-stepped CCD putt simulation on shot launch
+  // Initialize deterministic 180Hz sub-stepped CCD putt simulation on shot launch
   useEffect(() => {
     if (!activePuttShot) return
     if (activeShotIdRef.current === activePuttShot.shotId) return
     activeShotIdRef.current = activePuttShot.shotId
     const { height } = getPuttingSurfaceHeight(
       activePuttShot.localOrigin[1],
-      activePuttShot.rampEnabled,
+      activePuttShot.rampEnabled || courseHole === 'bunker-island',
+      activePuttShot.localOrigin[0],
+      courseHole,
     )
     simRef.current = {
       localPos: [
@@ -267,19 +279,34 @@ export function PuttingGreen3D({
       holed: false,
       lipOut: false,
     }
-  }, [activePuttShot])
+  }, [activePuttShot, courseHole])
 
-  // Step golf ball CCD physics + world-space VR physical putter blade collision in useFrame
-  useFrame((_, delta) => {
+  // Step golf ball CCD physics + oscillating swing meter + VR putter blade collision in useFrame
+  useFrame(({ clock }, delta) => {
+    if (swingMeterActive && !activePuttShot) {
+      const t = clock.getElapsedTime()
+      const osc = Math.round(25 + ((Math.sin(t * 3.8) + 1) * 0.5) * 75)
+      setPuttPowerPct(osc)
+    }
+
     const sim = simRef.current
     if (sim && activePuttShot && !sim.settled) {
-      stepPuttingBallCCD(sim, delta, activePuttShot.rampEnabled)
+      stepPuttingBallCCD(
+        sim,
+        delta,
+        activePuttShot.rampEnabled || courseHole === 'bunker-island',
+        courseHole,
+      )
       if (ballMeshRef.current) {
         ballMeshRef.current.position.set(
           sim.localPos[0],
-          sim.localPos[1],
+          sim.localPos[1] + 0.028,
           sim.localPos[2],
         )
+        // Realistic rolling spin on the golf ball proportional to velocity
+        const r = PUTTING_STRIP_SPECS.ballRadius
+        ballMeshRef.current.rotation.x += (sim.localVel[1] * delta) / r
+        ballMeshRef.current.rotation.z -= (sim.localVel[0] * delta) / r
       }
 
       if (sim.settled && activePuttShot.shooterId === localUserId) {
@@ -297,7 +324,7 @@ export function PuttingGreen3D({
             lipOut: sim.lipOut,
             restLocalPos: sim.localPos,
             distanceMeters: Number(dist.toFixed(2)),
-            rampEnabled: activePuttShot.rampEnabled,
+            rampEnabled: activePuttShot.rampEnabled || courseHole === 'bunker-island',
             timestamp: Date.now(),
           })
         }
@@ -431,8 +458,7 @@ export function PuttingGreen3D({
       const dx = endXZ[0] - ballXZ[0]
       const dz = endXZ[1] - ballXZ[1]
       const dist = Math.max(0.25, Math.hypot(dx, dz))
-      // Ideal entry speed v0 = sqrt(2 * a * dist + v_entry^2) where decel a = 0.76 m/s^2
-      const extraRampBoost = puttingState.rampEnabled ? 0.34 : 0
+      const extraRampBoost = effectiveRampEnabled ? 0.34 : 0
       const targetSpeed = Math.min(
         3.6,
         Math.sqrt(2 * 0.76 * dist + 0.85 * 0.85) + extraRampBoost,
@@ -458,23 +484,57 @@ export function PuttingGreen3D({
     ]
   }
 
-  const aimPreviewLine = useMemo(() => {
-    if (!isDraggingPutt || !dragAimLocal || !dragStartLocalRef.current) return null
+  const computeConfiguredStrikeVelocity = (): [number, number] => {
+    const speed = 1.15 + (puttPowerPct / 100) * 2.25
+    const rad = (aimAngleDeg * Math.PI) / 180
+    return [
+      Number((Math.sin(rad) * speed).toFixed(3)),
+      Number((-Math.cos(rad) * speed).toFixed(3)),
+    ]
+  }
+
+  const handleStrikeConfiguredPutt = () => {
+    if (activePuttShot) return
+    setSwingMeterActive(false)
     const ballXZ: [number, number] = [
       puttingState.ballRestLocal[0],
       puttingState.ballRestLocal[2],
     ]
-    const vel = computePuttVelocityFromInput(ballXZ, dragStartLocalRef.current, dragAimLocal)
-    return [
-      [ballXZ[0], 0.04, ballXZ[1]] as [number, number, number],
-      [
-        ballXZ[0] + vel[0] * 0.45,
-        0.04,
-        ballXZ[1] + vel[1] * 0.45,
-      ] as [number, number, number],
+    const vel = computeConfiguredStrikeVelocity()
+    onLaunchPuttShot(ballXZ, vel)
+  }
+
+  // Live Physics-Simulated 3D Trajectory Preview Curve (shows lateral break, ramp climb, and roll distance!)
+  const trajectoryPreviewPoints = useMemo(() => {
+    if (activePuttShot) return null
+    const ballXZ: [number, number] = [
+      puttingState.ballRestLocal[0],
+      puttingState.ballRestLocal[2],
     ]
+    let vel: [number, number]
+    if (isDraggingPutt && dragAimLocal && dragStartLocalRef.current) {
+      vel = computePuttVelocityFromInput(ballXZ, dragStartLocalRef.current, dragAimLocal)
+    } else {
+      vel = computeConfiguredStrikeVelocity()
+    }
+    return computePuttingTrajectoryPreview(
+      ballXZ,
+      vel,
+      effectiveRampEnabled,
+      courseHole,
+      46,
+    )
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dragAimLocal, isDraggingPutt, puttingState.ballRestLocal, puttingState.rampEnabled])
+  }, [
+    activePuttShot,
+    aimAngleDeg,
+    courseHole,
+    dragAimLocal,
+    effectiveRampEnabled,
+    isDraggingPutt,
+    puttPowerPct,
+    puttingState.ballRestLocal,
+  ])
 
   const atTee = localSeatId === 'station:putting-tee'
 
@@ -576,8 +636,49 @@ export function PuttingGreen3D({
           </group>
         ))}
 
+        {/* Course Hole 2: Augusta Right-to-Left Break Contour Chevrons */}
+        {courseHole === 'breaking-ridge' && (
+          <group position={[0, 0.031, 0]}>
+            {[-0.65, -0.05, 0.55].map((cz) => (
+              <Suspense key={cz} fallback={null}>
+                <Text
+                  position={[0.14, 0, cz]}
+                  rotation={[-Math.PI / 2, 0, 0]}
+                  fontSize={0.052}
+                  color="#FDE68A"
+                  anchorX="center"
+                  anchorY="middle"
+                >
+                  ◀◀ BREAKS LEFT ◀◀
+                </Text>
+              </Suspense>
+            ))}
+          </group>
+        )}
+
+        {/* Course Hole 3: Twin Golden Sand Bunkers */}
+        {courseHole === 'bunker-island' && (
+          <group position={[0, 0.03, 0]}>
+            {[
+              [-0.25, -0.68],
+              [0.25, -0.42],
+            ].map(([bx, bz], bIdx) => (
+              <group key={bIdx} position={[bx, 0, bz]}>
+                <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+                  <circleGeometry args={[0.165, 24]} />
+                  <meshStandardMaterial color="#EAB308" roughness={0.95} />
+                </mesh>
+                <mesh position={[0, 0.001, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
+                  <ringGeometry args={[0.15, 0.172, 24]} />
+                  <meshBasicMaterial color="#CA8A04" />
+                </mesh>
+              </group>
+            ))}
+          </group>
+        )}
+
         {/* Toggleable Curved Bridge Obstacle Ramp */}
-        {puttingState.rampEnabled && (
+        {effectiveRampEnabled && (
           <group position={[0, 0.029, PUTTING_STRIP_SPECS.rampCenterZ]}>
             <mesh geometry={rampGeometry} pointerEventsType={{ deny: 'all' }}>
               <meshStandardMaterial color="#15803D" roughness={0.78} />
@@ -624,11 +725,11 @@ export function PuttingGreen3D({
           </mesh>
         </group>
 
-        {/* Live Aim Vector Preview Line */}
-        {aimPreviewLine && (
+        {/* Live Physics Trajectory Preview Curve on the Green */}
+        {trajectoryPreviewPoints && trajectoryPreviewPoints.length >= 2 && (
           <Line
-            points={aimPreviewLine}
-            color="#22D3EE"
+            points={trajectoryPreviewPoints}
+            color={isDraggingPutt ? '#22D3EE' : '#34D399'}
             lineWidth={2.5}
           />
         )}
@@ -667,7 +768,6 @@ export function PuttingGreen3D({
             }
           }}
         >
-          {/* Stand base post so rack remains clickable when putter is in hand */}
           <mesh position={[0, -0.22, 0]}>
             <cylinderGeometry args={[0.045, 0.055, 0.22, 12]} />
             <meshStandardMaterial color="#1E293B" roughness={0.55} metalness={0.35} />
@@ -690,6 +790,110 @@ export function PuttingGreen3D({
                   : '⛳ STEP TO TEE'}
             </Text>
           </Suspense>
+        </group>
+
+        {/* Interactive 3D Tee Aim, Power & Strike Console right beside the Tee */}
+        <group
+          name="putting-tee-aim-console"
+          position={[-PUTTING_STRIP_SPECS.width / 2 - 0.36, 0.54, 1.32]}
+          rotation={[-0.38, 0.28, 0]}
+        >
+          <RoundedBox args={[0.64, 0.44, 0.025]} radius={0.018} smoothness={2}>
+            <meshStandardMaterial color="#09131E" roughness={0.4} metalness={0.35} />
+          </RoundedBox>
+          <Suspense fallback={null}>
+            <Text
+              position={[0, 0.17, 0.016]}
+              fontSize={0.024}
+              color="#34D399"
+              anchorX="center"
+              anchorY="middle"
+            >
+              {`⛳ PUTT AIM: ${aimAngleDeg > 0 ? `+${aimAngleDeg}° R` : `${aimAngleDeg}°`} · POWER: ${puttPowerPct}%`}
+            </Text>
+          </Suspense>
+          {/* Course Hole Presets */}
+          <MiniSignButton
+            label="H1: Flat"
+            position={[-0.2, 0.09, 0.016]}
+            width={0.18}
+            active={courseHole === 'straight'}
+            onClick={() => {
+              setCourseHole('straight')
+              setAimAngleDeg(0)
+            }}
+          />
+          <MiniSignButton
+            label="H2: Break"
+            position={[0, 0.09, 0.016]}
+            width={0.18}
+            active={courseHole === 'breaking-ridge'}
+            accentColor="#E5A93C"
+            onClick={() => {
+              setCourseHole('breaking-ridge')
+              setAimAngleDeg(6.5)
+            }}
+          />
+          <MiniSignButton
+            label="H3: Hazard"
+            position={[0.2, 0.09, 0.016]}
+            width={0.18}
+            active={courseHole === 'bunker-island'}
+            accentColor="#38BDF8"
+            onClick={() => {
+              setCourseHole('bunker-island')
+              setAimAngleDeg(0)
+              setPuttPowerPct(68)
+            }}
+          />
+          {/* Aim & Power Adjusters */}
+          <MiniSignButton
+            label="◀ Aim L"
+            position={[-0.21, 0.0, 0.016]}
+            width={0.14}
+            onClick={() => setAimAngleDeg((a) => Math.max(-18, Number((a - 1.5).toFixed(1))))}
+          />
+          <MiniSignButton
+            label="Aim R ▶"
+            position={[-0.06, 0.0, 0.016]}
+            width={0.14}
+            onClick={() => setAimAngleDeg((a) => Math.min(18, Number((a + 1.5).toFixed(1))))}
+          />
+          <MiniSignButton
+            label="- Pwr"
+            position={[0.09, 0.0, 0.016]}
+            width={0.12}
+            onClick={() => {
+              setSwingMeterActive(false)
+              setPuttPowerPct((p) => Math.max(20, p - 6))
+            }}
+          />
+          <MiniSignButton
+            label="+ Pwr"
+            position={[0.22, 0.0, 0.016]}
+            width={0.12}
+            onClick={() => {
+              setSwingMeterActive(false)
+              setPuttPowerPct((p) => Math.min(100, p + 6))
+            }}
+          />
+          {/* Swing Meter + Strike Button */}
+          <MiniSignButton
+            label={swingMeterActive ? '⏸ Lock Meter' : '⚡ Swing Meter'}
+            position={[-0.14, -0.11, 0.016]}
+            width={0.26}
+            active={swingMeterActive}
+            accentColor="#F59E0B"
+            onClick={() => setSwingMeterActive((v) => !v)}
+          />
+          <MiniSignButton
+            label="⛳ STRIKE PUTT"
+            position={[0.15, -0.11, 0.016]}
+            width={0.28}
+            active={true}
+            accentColor="#10B981"
+            onClick={handleStrikeConfiguredPutt}
+          />
         </group>
 
         {/* 3D Putting Green Score & Controls Pedestal Sign */}
@@ -769,7 +973,7 @@ export function PuttingGreen3D({
                 anchorX="center"
                 anchorY="middle"
               >
-                Click the cup or drag from the golf ball to sink putts & build your streak!
+                Use the Tee Aim Console, click the cup, or drag the ball to sink putts!
               </Text>
             ) : (
               puttingState.players.slice(0, 3).map((p, idx) => (
@@ -848,3 +1052,4 @@ export function PuttingGreen3D({
     </group>
   )
 }
+
