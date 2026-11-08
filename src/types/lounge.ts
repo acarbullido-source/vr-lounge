@@ -251,6 +251,7 @@ export type LoungeWingId =
   | 'library'
   | 'command-center'
   | 'game-room'
+  | 'shooting-range'
   | 'outdoor-deck'
 
 export type OutdoorSkyPresetId =

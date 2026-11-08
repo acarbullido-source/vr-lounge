@@ -363,6 +363,7 @@ export function MobileCompanionDashboard({
                     { id: 'main-lounge', label: '🎬 Main Lounge' },
                     { id: 'library', label: '🔥 Quiet Library (Auto-Mute TV)' },
                     { id: 'game-room', label: '🕹 Game Room' },
+                    { id: 'shooting-range', label: '🎯 Shooting Range' },
                     { id: 'outdoor-deck', label: '🏔 Lake Deck' },
                   ] as const
                 ).map((z) => (

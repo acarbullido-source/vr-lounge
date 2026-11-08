@@ -35,6 +35,7 @@ const WING_LABELS: Record<LoungeWingId, { short: string; emoji: string }> = {
   library: { short: 'Quiet Library', emoji: '🔥' },
   'command-center': { short: 'Control Room', emoji: '🛰' },
   'game-room': { short: 'The Game Room', emoji: '🕹' },
+  'shooting-range': { short: 'Shooting Range', emoji: '🎯' },
   'outdoor-deck': { short: 'Lake Deck', emoji: '🏔' },
 }
 
@@ -42,13 +43,15 @@ const TELEPORT_BUTTONS: ReadonlyArray<{
   wing: LoungeWingId
   label: string
   pos: [number, number, number]
+  width?: number
 }> = [
-  { wing: 'main-lounge', label: '🎬 Theater', pos: [-0.072, 0.036, 0.008] },
-  { wing: 'library', label: '🔥 Library', pos: [0, 0.036, 0.008] },
-  { wing: 'outdoor-deck', label: '🏔 Deck', pos: [0.072, 0.036, 0.008] },
-  { wing: 'command-center', label: '🛰 Control', pos: [-0.072, 0.002, 0.008] },
-  { wing: 'game-room', label: '🕹 Game Rm', pos: [0, 0.002, 0.008] },
-  { wing: 'boardroom', label: '💼 Board', pos: [0.072, 0.002, 0.008] },
+  { wing: 'main-lounge', label: '🎬 Theater', pos: [-0.072, 0.036, 0.008], width: 0.068 },
+  { wing: 'library', label: '🔥 Library', pos: [0, 0.036, 0.008], width: 0.068 },
+  { wing: 'outdoor-deck', label: '🏔 Deck', pos: [0.072, 0.036, 0.008], width: 0.068 },
+  { wing: 'command-center', label: '🛰 Ops', pos: [-0.081, 0.002, 0.008], width: 0.051 },
+  { wing: 'game-room', label: '🕹 Game', pos: [-0.027, 0.002, 0.008], width: 0.051 },
+  { wing: 'shooting-range', label: '🎯 Range', pos: [0.027, 0.002, 0.008], width: 0.051 },
+  { wing: 'boardroom', label: '💼 Board', pos: [0.081, 0.002, 0.008], width: 0.051 },
 ]
 
 interface WatchChipButtonProps {
@@ -403,7 +406,7 @@ export function WristWatchHUD3D({
             key={btn.wing}
             label={btn.label}
             position={btn.pos}
-            width={0.068}
+            width={btn.width ?? 0.068}
             height={0.028}
             active={activeLoungeWing === btn.wing}
             onClick={() => onJumpToWing(btn.wing)}

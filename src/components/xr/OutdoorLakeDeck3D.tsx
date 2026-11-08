@@ -363,7 +363,7 @@ export function OutdoorLakeDeck3D({
   onTeleportToFloor,
   onUpdateWingState,
 }: OutdoorLakeDeck3DProps) {
-  const z0 = wingLayout.hallStartZ
+  const z0 = Number((wingLayout.hallEndZ - 20.4).toFixed(2))
   const sky =
     OUTDOOR_SKY_PRESETS[wingState.outdoorSkyPreset] ??
     OUTDOOR_SKY_PRESETS['golden-sunset']

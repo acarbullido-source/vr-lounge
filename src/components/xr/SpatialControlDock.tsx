@@ -816,48 +816,56 @@ export function SpatialControlDock({
           </RoundedBox>
           <DockButton
             label="💼 Board"
-            position={[-0.495, -0.096, 0.008]}
-            width={0.185}
+            position={[-0.51, -0.096, 0.008]}
+            width={0.158}
             height={0.064}
             variant={localSeatId?.startsWith('wing:boardroom') ? 'primary' : 'default'}
             onClick={() => onSelectSeat('wing:boardroom-head')}
           />
           <DockButton
             label="🔥 Library"
-            position={[-0.297, -0.096, 0.008]}
-            width={0.185}
+            position={[-0.34, -0.096, 0.008]}
+            width={0.158}
             height={0.064}
             variant={localSeatId?.startsWith('wing:library') ? 'primary' : 'default'}
             onClick={() => onSelectSeat('wing:library-chair-1')}
           />
           <DockButton
             label="🕹 Game Rm"
-            position={[-0.099, -0.096, 0.008]}
-            width={0.185}
+            position={[-0.17, -0.096, 0.008]}
+            width={0.158}
             height={0.064}
-            variant={localSeatId?.startsWith('wing:game-room') ? 'primary' : 'default'}
-            onClick={() => onSelectSeat('wing:game-room-seat-1')}
+            variant={localSeatId?.startsWith('wing:gameroom') ? 'primary' : 'default'}
+            onClick={() => onSelectSeat('wing:gameroom-holo-1')}
+          />
+          <DockButton
+            label="🎯 Range"
+            position={[0, -0.096, 0.008]}
+            width={0.158}
+            height={0.064}
+            variant={localSeatId?.startsWith('wing:shooting') ? 'primary' : 'default'}
+            onClick={() => onSelectSeat('wing:shooting-booth-2')}
           />
           <DockButton
             label="🛰 Command"
-            position={[0.099, -0.096, 0.008]}
-            width={0.185}
+            position={[0.17, -0.096, 0.008]}
+            width={0.158}
             height={0.064}
             variant={localSeatId?.startsWith('wing:command') ? 'primary' : 'default'}
             onClick={() => onSelectSeat('wing:command-seat-1')}
           />
           <DockButton
             label="🏔 Deck"
-            position={[0.297, -0.096, 0.008]}
-            width={0.185}
+            position={[0.34, -0.096, 0.008]}
+            width={0.158}
             height={0.064}
             variant={localSeatId?.startsWith('wing:deck') ? 'primary' : 'default'}
             onClick={() => onSelectSeat('wing:deck-chair-1')}
           />
           <DockButton
             label={nesLibraryOpen ? '🕹 Hide NES' : '🕹 NES ROMs'}
-            position={[0.495, -0.096, 0.008]}
-            width={0.185}
+            position={[0.51, -0.096, 0.008]}
+            width={0.158}
             height={0.064}
             variant={
               nesLibraryOpen || isNesMediaUrl(presenterState.mediaUrl)

@@ -48,6 +48,9 @@ const CommandCenterRoom3D = lazy(() =>
 const GameRoom3D = lazy(() =>
   import('./GameRoom3D').then((m) => ({ default: m.GameRoom3D })),
 )
+const ShootingRangeRoom3D = lazy(() =>
+  import('./ShootingRangeRoom3D').then((m) => ({ default: m.ShootingRangeRoom3D })),
+)
 const OutdoorLakeDeck3D = lazy(() =>
   import('./OutdoorLakeDeck3D').then((m) => ({ default: m.OutdoorLakeDeck3D })),
 )
@@ -1985,6 +1988,24 @@ export function ExpansionWing3D({
                 onToggleHolotableFogCell={onToggleHolotableFogCell}
                 onRevealAllHolotableFog={onRevealAllHolotableFog}
                 onShroudAllHolotableFog={onShroudAllHolotableFog}
+                onRecordArcadeScore={onRecordArcadeScore}
+              />
+            </Suspense>
+          </WingRoomErrorBoundary>
+
+          <WingRoomErrorBoundary roomName="Tactical Shooting Range">
+            <Suspense fallback={null}>
+              <ShootingRangeRoom3D
+                wingLayout={wingLayout}
+                lighting={lighting}
+                computedSeats={computedSeats}
+                localSeatId={localSeatId}
+                localDisplayName={localDisplayName}
+                participants={participants}
+                visible={isRearRoomsVisible}
+                isActiveRoom={activeLoungeWing === 'shooting-range'}
+                onSelectSeat={onSelectSeat}
+                onTeleportToFloor={onTeleportToFloor}
                 onRecordArcadeScore={onRecordArcadeScore}
               />
             </Suspense>

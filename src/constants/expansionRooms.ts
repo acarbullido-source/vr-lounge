@@ -324,6 +324,7 @@ export interface ExpansionWingLayout {
   libraryCenter: [number, number, number]
   commandCenter: [number, number, number]
   gameRoomCenter: [number, number, number]
+  shootingRangeCenter: [number, number, number]
   outdoorDeckCenter: [number, number, number]
   destinations: ExpansionRoomDestination[]
   wingSeats: Array<Omit<ComputedSeat, 'index'>>
@@ -332,12 +333,14 @@ export interface ExpansionWingLayout {
 export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
   const z0 = Number(backZ.toFixed(2))
   const hallEndZ = Number((z0 + HALLWAY_LENGTH).toFixed(2))
+  const deckZ0 = Number((z0 + (HALLWAY_LENGTH - 20.4)).toFixed(2))
 
   const boardZ = Number((z0 + 5.4).toFixed(2))
   const libZ = Number((z0 + 5.4).toFixed(2))
   const cmdZ = Number((z0 + 15.1).toFixed(2))
   const gameRoomZ = Number((z0 + 15.1).toFixed(2))
-  const deckZ = Number((z0 + 25.0).toFixed(2))
+  const rangeZ = Number((z0 + 24.6).toFixed(2))
+  const deckZ = Number((deckZ0 + 25.0).toFixed(2))
 
   const destinations: ExpansionRoomDestination[] = [
     {
@@ -356,7 +359,7 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
       emoji: '🏛',
       shortLabel: 'Hallway',
       title: 'Grand Clubhouse Gallery Hallway',
-      subtitle: 'Central corridor connecting all private rooms, Game Room & deck',
+      subtitle: 'Central corridor connecting all private rooms, Range, Game Room & deck',
       accentColor: '#94A3B8',
       spawnPosition: [0, 0, Number((z0 + 2.4).toFixed(2))],
       spawnYaw: Math.PI,
@@ -407,13 +410,24 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
       defaultSeatId: 'wing:gameroom-holo-1',
     },
     {
+      id: 'shooting-range',
+      emoji: '🎯',
+      shortLabel: 'Shooting Range',
+      title: 'Tactical Ballistics & Shooting Range',
+      subtitle: '1-Hand Pistols · 2-Hand Rifles · 35m Live Target Lanes',
+      accentColor: '#EF4444',
+      spawnPosition: [-4.45, 0, rangeZ],
+      spawnYaw: Math.PI / 2,
+      defaultSeatId: 'wing:shooting-booth-2',
+    },
+    {
       id: 'outdoor-deck',
       emoji: '🏔',
       shortLabel: 'Lake Deck',
       title: 'Outdoor Lake & Mountain Observation Deck',
       subtitle: 'Panoramic Alpine Lake · Deck Cornhole · Firepit & Aurora Sky',
       accentColor: '#34D399',
-      spawnPosition: [0, 0, Number((z0 + 22.4).toFixed(2))],
+      spawnPosition: [0, 0, Number((deckZ0 + 22.4).toFixed(2))],
       spawnYaw: Math.PI,
       defaultSeatId: 'wing:deck-chair-1',
     },
@@ -595,10 +609,31 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
   })
 
   // -------------------------------------------------------------------------
-  // 5. OUTDOOR LAKE & MOUNTAIN DECK SEATS (6 Adirondack & Firepit Lounge Chairs + Deck Cornhole)
-  //    Lake & Mountains lie in +Z (dz > 29.8). Facing +Z corresponds to rotationY = PI.
+  // 5. THE SHOOTING RANGE: 4 TACTICAL FIRING LINE BOOTHS (Facing West -X downrange)
   // -------------------------------------------------------------------------
-  const lakeVistaLook: [number, number, number] = [0, 2.6, Number((z0 + 58).toFixed(2))]
+  const boothOffsets = [-2.7, -0.9, 0.9, 2.7]
+  boothOffsets.forEach((dzOff, idx) => {
+    const bz = Number((rangeZ + dzOff).toFixed(2))
+    wingSeats.push({
+      id: `wing:shooting-booth-${idx + 1}`,
+      furnitureId: 'wing-shooting-range',
+      furnitureType: 'wing-seat',
+      label: `🎯 Shooting Range · Lane ${idx + 1}`,
+      position: [-5.65, 0, bz],
+      localCushionOffset: [0, 0, 0],
+      seatHeightOffset: 0.48,
+      rotationY: Number((Math.PI / 2).toFixed(4)),
+      lookAtTarget: [-19.5, 1.48, bz],
+      stationKind: 'seat',
+      roomWing: 'shooting-range',
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // 6. OUTDOOR LAKE & MOUNTAIN DECK SEATS (6 Adirondack & Firepit Lounge Chairs + Deck Cornhole)
+  //    Lake & Mountains lie in +Z (dz > 39.4). Facing +Z corresponds to rotationY = PI.
+  // -------------------------------------------------------------------------
+  const lakeVistaLook: [number, number, number] = [0, 2.6, Number((deckZ0 + 58).toFixed(2))]
   const deckChairSpecs: Array<{
     id: string
     label: string
@@ -609,44 +644,44 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
     {
       id: 'wing:deck-chair-1',
       label: '🏔 Lake Deck · Vista Left',
-      pos: [2.45, 0, Number((z0 + 26.8).toFixed(2))],
+      pos: [2.45, 0, Number((deckZ0 + 26.8).toFixed(2))],
       rotY: Math.PI * 0.94,
       look: lakeVistaLook,
     },
     {
       id: 'wing:deck-chair-2',
       label: '🏔 Lake Deck · Vista Center',
-      pos: [4.15, 0, Number((z0 + 26.9).toFixed(2))],
+      pos: [4.15, 0, Number((deckZ0 + 26.9).toFixed(2))],
       rotY: Math.PI,
       look: lakeVistaLook,
     },
     {
       id: 'wing:deck-chair-3',
       label: '🏔 Lake Deck · Vista Right',
-      pos: [5.85, 0, Number((z0 + 26.6).toFixed(2))],
+      pos: [5.85, 0, Number((deckZ0 + 26.6).toFixed(2))],
       rotY: -Math.PI * 0.92,
       look: lakeVistaLook,
     },
     {
       id: 'wing:deck-firepit-1',
       label: '🏔 Lake Deck · Firepit North',
-      pos: [-3.8, 0, Number((z0 + 23.1).toFixed(2))],
+      pos: [-3.8, 0, Number((deckZ0 + 23.1).toFixed(2))],
       rotY: Math.PI,
-      look: [-3.2, 1.4, Number((z0 + 48).toFixed(2))],
+      look: [-3.2, 1.4, Number((deckZ0 + 48).toFixed(2))],
     },
     {
       id: 'wing:deck-firepit-2',
       label: '🏔 Lake Deck · Firepit West',
-      pos: [-5.65, 0, Number((z0 + 24.9).toFixed(2))],
+      pos: [-5.65, 0, Number((deckZ0 + 24.9).toFixed(2))],
       rotY: -Math.PI * 0.72,
-      look: [-2.0, 1.4, Number((z0 + 48).toFixed(2))],
+      look: [-2.0, 1.4, Number((deckZ0 + 48).toFixed(2))],
     },
     {
       id: 'wing:deck-firepit-3',
       label: '🏔 Lake Deck · Firepit East',
-      pos: [-1.95, 0, Number((z0 + 24.9).toFixed(2))],
+      pos: [-1.95, 0, Number((deckZ0 + 24.9).toFixed(2))],
       rotY: Math.PI * 0.76,
-      look: [-4.5, 1.4, Number((z0 + 48).toFixed(2))],
+      look: [-4.5, 1.4, Number((deckZ0 + 48).toFixed(2))],
     },
   ]
 
@@ -672,11 +707,11 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
     furnitureId: 'wing-deck-cornhole',
     furnitureType: 'game-station',
     label: '🌽 Lake Deck · Cornhole Pitch',
-    position: [6.55, 0, Number((z0 + 22.15).toFixed(2))],
+    position: [6.55, 0, Number((deckZ0 + 22.15).toFixed(2))],
     localCushionOffset: [0, 0, 0],
     seatHeightOffset: 0.48,
     rotationY: Math.PI,
-    lookAtTarget: [6.55, 0.35, Number((z0 + 27.6).toFixed(2))],
+    lookAtTarget: [6.55, 0.35, Number((deckZ0 + 27.6).toFixed(2))],
     stationKind: 'cornhole',
     roomWing: 'outdoor-deck',
   })
@@ -690,6 +725,7 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
     libraryCenter: [6.42, 0, libZ],
     commandCenter: [-6.92, 0, cmdZ],
     gameRoomCenter: [9.25, 0, gameRoomZ],
+    shootingRangeCenter: [-5.65, 0, rangeZ],
     outdoorDeckCenter: [0, 0, deckZ],
     destinations,
     wingSeats,
@@ -703,9 +739,11 @@ export function detectActiveLoungeWing(
 ): LoungeWingId {
   const dz = z - backZ
   if (dz < -0.15) return 'main-lounge'
-  if (dz >= 20.85) return 'outdoor-deck'
+  if (dz >= 30.25) return 'outdoor-deck'
   if (x < -1.75) {
-    return dz < 9.5 ? 'boardroom' : 'command-center'
+    if (dz < 9.5) return 'boardroom'
+    if (dz < 20.0) return 'command-center'
+    return 'shooting-range'
   }
   if (x > 1.75) {
     return dz < 9.5 ? 'library' : 'game-room'
@@ -723,22 +761,25 @@ interface WalkRect {
 
 const EXPANSION_WALK_RECTS: readonly WalkRect[] = [
   // 1. Grand Hallway Corridor (bridges cleanly from Main Lounge through backZ archway to Outdoor Deck)
-  { minX: -1.2, maxX: 1.2, minDz: -0.65, maxDz: 21.1, floorY: 0 },
+  { minX: -1.2, maxX: 1.2, minDz: -0.65, maxDz: 30.7, floorY: 0 },
   // 2. Executive Board Room Doorway + Interior (West Front)
   { minX: -2.35, maxX: -0.95, minDz: 4.55, maxDz: 6.25, floorY: 0 },
   { minX: -10.5, maxX: -2.15, minDz: 1.55, maxDz: 9.25, floorY: 0 },
   // 3. Cozy Library Doorway + Interior (East Front)
   { minX: 0.95, maxX: 2.35, minDz: 4.55, maxDz: 6.25, floorY: 0 },
   { minX: 2.15, maxX: 10.15, minDz: 1.75, maxDz: 9.05, floorY: 0 },
-  // 4. Command & Control Center Doorway + Interior (West Rear)
+  // 4. Command & Control Center Doorway + Interior (West Middle)
   { minX: -2.35, maxX: -0.95, minDz: 14.25, maxDz: 15.95, floorY: 0 },
   { minX: -11.25, maxX: -2.15, minDz: 11.2, maxDz: 19.0, floorY: 0 },
   // 5. The Game Room Doorway + Enlarged Interior (East Rear: 15.2m W x 11.2m D)
   { minX: 0.95, maxX: 2.35, minDz: 14.25, maxDz: 15.95, floorY: 0 },
   { minX: 2.15, maxX: 16.35, minDz: 9.85, maxDz: 20.35, floorY: 0 },
-  // 6. Outdoor Lake & Mountain Observation Deck + Central Lakeshore Pier
-  { minX: -8.05, maxX: 8.05, minDz: 20.85, maxDz: 29.15, floorY: 0 },
-  { minX: -1.15, maxX: 1.15, minDz: 28.9, maxDz: 33.15, floorY: 0.02 },
+  // 6. The Shooting Range Doorway + Ready Room & Firing Line Booths (West Rear)
+  { minX: -2.35, maxX: -0.95, minDz: 23.65, maxDz: 25.55, floorY: 0 },
+  { minX: -6.15, maxX: -2.15, minDz: 20.65, maxDz: 28.55, floorY: 0 },
+  // 7. Outdoor Lake & Mountain Observation Deck + Central Lakeshore Pier
+  { minX: -8.05, maxX: 8.05, minDz: 30.45, maxDz: 38.75, floorY: 0 },
+  { minX: -1.15, maxX: 1.15, minDz: 38.5, maxDz: 42.75, floorY: 0.02 },
 ]
 
 function pushOutOfBox(
@@ -790,6 +831,8 @@ export function resolveExpansionWingWalkablePosition(
   backZ: number,
 ): [number, number, number] {
   const dz = rawZ - backZ
+  const effectiveX =
+    dz >= 20.0 && dz <= 29.8 && rawX < -6.15 ? -6.15 : rawX
   let bestX = 0
   let bestDz = 0
   let bestFloorY = 0
@@ -797,9 +840,9 @@ export function resolveExpansionWingWalkablePosition(
 
   for (let i = 0; i < EXPANSION_WALK_RECTS.length; i++) {
     const r = EXPANSION_WALK_RECTS[i]
-    const cx = Math.max(r.minX, Math.min(r.maxX, rawX))
+    const cx = Math.max(r.minX, Math.min(r.maxX, effectiveX))
     const cdz = Math.max(r.minDz, Math.min(r.maxDz, dz))
-    const dx = rawX - cx
+    const dx = effectiveX - cx
     const ddz = dz - cdz
     const dSq = dx * dx + ddz * ddz
     if (dSq < bestDistSq) {
@@ -821,8 +864,8 @@ export function resolveExpansionWingWalkablePosition(
   ;[bestX, bestDz] = pushOutOfCircle(bestX, bestDz, -5.85, 15.1, 1.08)
   // 4) The Game Room central Tactical Holotable Sanctum (Enlarged at x = 9.25)
   ;[bestX, bestDz] = pushOutOfCircle(bestX, bestDz, 9.25, 15.1, 1.48)
-  // 5) Outdoor Lake Deck circular stone firepit
-  ;[bestX, bestDz] = pushOutOfCircle(bestX, bestDz, -3.8, 25.0, 1.05)
+  // 5) Outdoor Lake Deck circular stone firepit (shifted +9.6m with extended hallway)
+  ;[bestX, bestDz] = pushOutOfCircle(bestX, bestDz, -3.8, 34.6, 1.05)
 
   return [
     Number(bestX.toFixed(3)),

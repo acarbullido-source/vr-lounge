@@ -491,6 +491,20 @@ export function ClubhouseRoomsAndOpsDrawer({
                     </div>
                   )}
 
+                  {dest.id === 'shooting-range' && (
+                    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                      <span className="rounded-lg border border-sky-400/35 bg-sky-500/15 px-2 py-0.5 text-[10px] font-medium text-sky-200">
+                        🔫 1-Controller Pistols
+                      </span>
+                      <span className="rounded-lg border border-emerald-400/35 bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-200">
+                        🪖 2-Controller Rifles
+                      </span>
+                      <span className="rounded-lg border border-rose-400/35 bg-rose-500/15 px-2 py-0.5 text-[10px] font-medium text-rose-200">
+                        🎯 35m Live Lanes
+                      </span>
+                    </div>
+                  )}
+
                   {dest.id === 'outdoor-deck' && (
                     <div className="mt-2.5 flex flex-wrap gap-1">
                       {(

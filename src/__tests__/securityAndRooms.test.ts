@@ -400,5 +400,40 @@ describe('VR Lounge Security, E2EE, Anti-Impersonation & Physics Regression Suit
       'library',
       'Must detect when player is inside the Quiet Library for automatic stream audio isolation',
     )
+
+    // Verify Tactical Shooting Range wing detection, destination, and firing line barrier
+    assert.equal(
+      detectActiveLoungeWing(
+        wingLayout.shootingRangeCenter[0],
+        wingLayout.shootingRangeCenter[2],
+        5.8,
+      ),
+      'shooting-range',
+      'Must detect when player is inside the Tactical Shooting Range',
+    )
+    const rangeDest = wingLayout.destinations.find(
+      (d) => d.id === 'shooting-range',
+    )
+    assert.ok(rangeDest, 'Shooting Range destination must be registered in hallway layout')
+    const boothSeats = wingLayout.wingSeats.filter(
+      (s) => s.roomWing === 'shooting-range',
+    )
+    assert.equal(
+      boothSeats.length,
+      4,
+      'Shooting Range must provide 4 tactical firing line booths',
+    )
+
+    // Attempting to walk downrange past the firing line (-6.15) clamps safely to the firing line
+    const clampedAtFiringLine = resolveWalkablePosition(
+      -20.0,
+      7.2 + 24.6,
+      roomCustomization.architecture,
+    )
+    assert.equal(
+      clampedAtFiringLine[0],
+      -6.15,
+      'Walking mode must stop players safely behind the firing line barrier (-6.15)',
+    )
   })
 })

@@ -25,6 +25,7 @@ export interface MobileTouchControlsOverlayProps {
 const ROOM_PILLS: ReadonlyArray<{ id: LoungeWingId; label: string }> = [
   { id: 'main-lounge', label: '🎬 Theater' },
   { id: 'library', label: '🔥 Library' },
+  { id: 'shooting-range', label: '🎯 Range' },
   { id: 'outdoor-deck', label: '🏔 Deck' },
   { id: 'command-center', label: '🛰 Control' },
   { id: 'game-room', label: '🕹 Game Rm' },
