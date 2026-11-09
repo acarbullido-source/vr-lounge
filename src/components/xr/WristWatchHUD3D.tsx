@@ -11,6 +11,7 @@ import type { LoungeWingId, PresenterState } from '../../types/lounge'
 
 export interface WristWatchHUD3DProps {
   visible: boolean
+  hudHidden?: boolean
   xrOriginRef: React.RefObject<THREE.Group | null>
   activeLoungeWing: LoungeWingId
   flyMode: boolean
@@ -19,6 +20,7 @@ export interface WristWatchHUD3DProps {
   effectiveCinemaVolume: number
   presenterState: PresenterState
   liveAlertText?: string
+  onToggleHudHidden?: () => void
   onJumpToWing: (wingId: LoungeWingId) => void
   onToggleFlyMode: () => void
   onDropToFloor: () => void
@@ -139,10 +141,12 @@ function WatchChipButton({
  * - Attaches to the local player's left VR controller (`gripSpace`) or tracked left hand (`wrist`).
  * - Glance-to-Open: Automatically expands into a holographic command deck when the user turns
  *   their left wrist toward their headset, and collapses into a compact wristband when lowered.
- * - Also supports manual pinning via watch-face tap or Left Thumbstick click (`thumbstick`).
+ * - Easy Hide / Unhide: Users can collapse the holographic deck or completely hide/unhide the
+ *   Wrist HUD via the watch buttons, Left Thumbstick click (`L3`), 3D Spatial Dock, or `H` key.
  */
 export function WristWatchHUD3D({
   visible,
+  hudHidden = false,
   xrOriginRef,
   activeLoungeWing,
   flyMode,
@@ -151,6 +155,7 @@ export function WristWatchHUD3D({
   effectiveCinemaVolume,
   presenterState,
   liveAlertText,
+  onToggleHudHidden,
   onJumpToWing,
   onToggleFlyMode,
   onDropToFloor,
@@ -169,7 +174,9 @@ export function WristWatchHUD3D({
 
   const [glancedOpen, setGlancedOpen] = useState(false)
   const [pinnedOpen, setPinnedOpen] = useState(false)
+  const [glanceDismissed, setGlanceDismissed] = useState(false)
   const glancedOpenRef = useRef(false)
+  const glanceDismissedRef = useRef(false)
   const prevStickClickRef = useRef(false)
   const scaleAnimRef = useRef(0)
 
@@ -186,21 +193,40 @@ export function WristWatchHUD3D({
     [],
   )
 
-  const isExpanded = pinnedOpen || glancedOpen
+  const isExpanded = !hudHidden && (pinnedOpen || (glancedOpen && !glanceDismissed))
+
+  const handleToggleDeckExpand = () => {
+    if (isExpanded) {
+      setPinnedOpen(false)
+      glanceDismissedRef.current = true
+      setGlanceDismissed(true)
+    } else {
+      setPinnedOpen(true)
+      glanceDismissedRef.current = false
+      setGlanceDismissed(false)
+    }
+  }
 
   useFrame((_, delta) => {
     if (!visible || !wristRootRef.current) return
     const dt = Math.min(delta, 0.1)
     const alpha = 1 - Math.exp(-18 * dt)
 
-    // 1. Left Controller Thumbstick Click (or X button when pinned) toggles manual pin
+    // 1. Left Controller Thumbstick Click (`L3`) unhides HUD if hidden, or toggles deck open/close
     const stickClicked = isControllerButtonPressed(
       leftController,
       ['xr-standard-thumbstick', 'thumbstick'],
       3,
     )
     if (stickClicked && !prevStickClickRef.current) {
-      setPinnedOpen((v) => !v)
+      if (hudHidden) {
+        onToggleHudHidden?.()
+        setPinnedOpen(true)
+        glanceDismissedRef.current = false
+        setGlanceDismissed(false)
+      } else {
+        handleToggleDeckExpand()
+      }
     }
     prevStickClickRef.current = stickClicked
 
@@ -232,6 +258,7 @@ export function WristWatchHUD3D({
     camera.getWorldQuaternion(scratchHeadQuat)
 
     if (hasTrackedWrist) {
+      wristRootRef.current.visible = true
       // Shift watch slightly onto the inner-top left wrist and orient watch face upward/inward
       scratchLocalOffset
         .set(0.018, 0.028, 0.048)
@@ -254,23 +281,31 @@ export function WristWatchHUD3D({
         ? dot > 0.28 && dist < 0.88
         : dot > 0.45 && dist < 0.76
 
+      if (!shouldGlanceOpen && glanceDismissedRef.current) {
+        glanceDismissedRef.current = false
+        setGlanceDismissed(false)
+      }
+
       if (shouldGlanceOpen !== glancedOpenRef.current) {
         glancedOpenRef.current = shouldGlanceOpen
         setGlancedOpen(shouldGlanceOpen)
       }
     } else {
-      // Simulator / 1-controller fallback: float a compact virtual left-wrist watch in lower-left FOV
-      scratchLocalOffset.set(-0.23, -0.24, -0.42).applyQuaternion(scratchHeadQuat)
-      scratchWristPos.copy(scratchHeadPos).add(scratchLocalOffset)
-      wristRootRef.current.position.lerp(scratchWristPos, alpha)
-      wristRootRef.current.lookAt(scratchHeadPos)
+      // Simulator / Desktop fallback: completely hide 3D mesh when hudHidden is true
+      wristRootRef.current.visible = !hudHidden
+      if (!hudHidden) {
+        scratchLocalOffset.set(-0.23, -0.24, -0.42).applyQuaternion(scratchHeadQuat)
+        scratchWristPos.copy(scratchHeadPos).add(scratchLocalOffset)
+        wristRootRef.current.position.lerp(scratchWristPos, alpha)
+        wristRootRef.current.lookAt(scratchHeadPos)
+      }
     }
 
     // Smooth scale animation for holographic popup deck
     const targetScale = isExpanded ? 1 : 0.001
     scaleAnimRef.current = THREE.MathUtils.lerp(scaleAnimRef.current, targetScale, alpha)
     if (holoDeckRef.current) {
-      holoDeckRef.current.visible = scaleAnimRef.current > 0.02
+      holoDeckRef.current.visible = !hudHidden && scaleAnimRef.current > 0.02
       holoDeckRef.current.scale.setScalar(Math.max(0.001, scaleAnimRef.current))
     }
   })
@@ -282,195 +317,268 @@ export function WristWatchHUD3D({
   const presenterSummary =
     liveAlertText ||
     (presenterState.screenMode !== 'idle'
-      ? `📺 ${presenterState.mediaTitle.slice(0, 24)}`
+      ? `📺 ${presenterState.mediaTitle.slice(0, 20)}`
       : `${wingMeta.emoji} ${wingMeta.short}`)
 
   return (
     <group ref={wristRootRef} name="left-wrist-smartwatch-hud">
-      {/* =====================================================================
-          SLEEK TITANIUM WRISTBAND & ALWAYS-ON SMARTWATCH BEZEL (Tap to Pin/Open)
-         ===================================================================== */}
-      <group
-        pointerEventsType={{ deny: 'grab' }}
-        onClick={(e) => {
-          e.stopPropagation()
-          setPinnedOpen((v) => !v)
-        }}
-      >
-        {/* Curved wrist strap */}
-        <mesh position={[0, 0, -0.016]} rotation={[0, Math.PI / 2, 0]} raycast={() => null}>
-          <torusGeometry args={[0.032, 0.0055, 8, 20]} />
-          <meshStandardMaterial color="#1E293B" roughness={0.45} metalness={0.55} />
-        </mesh>
-
-        {/* Smartwatch titanium casing */}
-        <RoundedBox args={[0.058, 0.04, 0.009]} radius={0.007} smoothness={3}>
-          <meshStandardMaterial color="#0F172A" roughness={0.28} metalness={0.72} />
-        </RoundedBox>
-
-        {/* Glowing accent bezel */}
-        <RoundedBox
-          args={[0.054, 0.036, 0.0095]}
-          radius={0.006}
-          smoothness={2}
-          position={[0, 0, 0.0005]}
-        >
-          <meshBasicMaterial color={flyMode ? '#38BDF8' : isExpanded ? '#E5A93C' : '#334155'} />
-        </RoundedBox>
-
-        {/* Watch OLED face */}
-        <RoundedBox
-          args={[0.05, 0.032, 0.01]}
-          radius={0.005}
-          smoothness={2}
-          position={[0, 0, 0.001]}
-        >
-          <meshBasicMaterial color="#070A10" />
-        </RoundedBox>
-
-        <Text
-          position={[0, 0.006, 0.0068]}
-          fontSize={0.0068}
-          color="#F4F1EA"
-          anchorX="center"
-          anchorY="middle"
-        >
-          {`${wingMeta.emoji} ${wingMeta.short.slice(0, 10)}`}
-        </Text>
-        <Text
-          position={[0, -0.006, 0.0068]}
-          fontSize={0.0056}
-          color={flyMode ? '#38BDF8' : isMuted ? '#F87171' : '#34D399'}
-          anchorX="center"
-          anchorY="middle"
-        >
-          {flyMode
-            ? '🚀 FLY ON · TAP'
-            : `${isMuted ? '🔇 MUTED' : '🎙 LIVE'} · ${isExpanded ? '▼ CLOSE' : '▲ OPEN'}`}
-        </Text>
-      </group>
-
-      {/* =====================================================================
-          EXPANDED HOLOGRAPHIC WRIST COMMAND DECK (Floating 9cm above watch face)
-         ===================================================================== */}
-      <group ref={holoDeckRef} position={[0, 0.102, 0.018]}>
-        {/* Frosted obsidian holographic backplate */}
-        <RoundedBox args={[0.232, 0.168, 0.006]} radius={0.012} smoothness={3}>
-          <meshBasicMaterial color="#090D15" transparent opacity={0.94} />
-        </RoundedBox>
-
-        {/* Outer neon border frame */}
-        <RoundedBox
-          args={[0.236, 0.172, 0.004]}
-          radius={0.013}
-          smoothness={2}
-          position={[0, 0, -0.0015]}
-        >
-          <meshBasicMaterial
-            color={flyMode ? '#38BDF8' : '#E5A93C'}
-            transparent
-            opacity={0.45}
-          />
-        </RoundedBox>
-
-        {/* Top Status Readout Bar */}
-        <RoundedBox
-          args={[0.216, 0.024, 0.005]}
-          radius={0.005}
-          smoothness={2}
-          position={[0, 0.066, 0.003]}
-        >
-          <meshBasicMaterial color="#111827" />
-        </RoundedBox>
-        <Text
-          position={[-0.098, 0.066, 0.0065]}
-          fontSize={0.0072}
-          color="#E5A93C"
-          anchorX="left"
-          anchorY="middle"
-        >
-          {presenterSummary}
-        </Text>
-        <WatchChipButton
-          label={pinnedOpen ? '📌 PINNED' : '📌 PIN'}
-          position={[0.08, 0.066, 0.004]}
-          width={0.048}
-          height={0.019}
-          active={pinnedOpen}
-          onClick={() => setPinnedOpen((v) => !v)}
-        />
-
-        {/* Row 1 & 2: One-Tap Room Teleport Grid */}
-        {TELEPORT_BUTTONS.map((btn) => (
+      {hudHidden ? (
+        /* ===================================================================
+           HIDDEN MODE: ULTRA-COMPACT WRIST CUFF PILL (Tap or Press L3 to Show)
+           =================================================================== */
+        <group position={[0, 0, 0]}>
+          <mesh position={[0, 0, -0.016]} rotation={[0, Math.PI / 2, 0]} raycast={() => null}>
+            <torusGeometry args={[0.032, 0.004, 8, 20]} />
+            <meshStandardMaterial color="#0F172A" roughness={0.6} metalness={0.4} />
+          </mesh>
           <WatchChipButton
-            key={btn.wing}
-            label={btn.label}
-            position={btn.pos}
-            width={btn.width ?? 0.068}
-            height={0.028}
-            active={activeLoungeWing === btn.wing}
-            onClick={() => onJumpToWing(btn.wing)}
+            label="⌚ Show HUD"
+            position={[0, 0, 0.003]}
+            width={0.056}
+            height={0.02}
+            onClick={() => {
+              onToggleHudHidden?.()
+              setPinnedOpen(false)
+              glanceDismissedRef.current = false
+              setGlanceDismissed(false)
+            }}
           />
-        ))}
+        </group>
+      ) : (
+        <>
+          {/* =====================================================================
+              SLEEK TITANIUM WRISTBAND & ALWAYS-ON SMARTWATCH BEZEL (Tap to Open/Close)
+             ===================================================================== */}
+          <group
+            pointerEventsType={{ deny: 'grab' }}
+            onClick={(e) => {
+              e.stopPropagation()
+              handleToggleDeckExpand()
+            }}
+          >
+            {/* Curved wrist strap */}
+            <mesh position={[0, 0, -0.016]} rotation={[0, Math.PI / 2, 0]} raycast={() => null}>
+              <torusGeometry args={[0.032, 0.0055, 8, 20]} />
+              <meshStandardMaterial color="#1E293B" roughness={0.45} metalness={0.55} />
+            </mesh>
 
-        {/* Row 3: Movement & Comfort (Fly Mode, Drop to Floor, Recenter View) */}
-        <WatchChipButton
-          label={flyMode ? '🚀 Fly: ON' : '🚀 Fly: OFF'}
-          sublabel={flyMode ? 'R-Stick ▲▼' : 'Free 3D'}
-          position={[-0.072, -0.033, 0.008]}
-          width={0.068}
-          height={0.03}
-          active={flyMode}
-          accentColor="#38BDF8"
-          onClick={onToggleFlyMode}
-        />
-        <WatchChipButton
-          label="⬇ Floor"
-          sublabel="Drop Y=0"
-          position={[0, -0.033, 0.008]}
-          width={0.068}
-          height={0.03}
-          onClick={onDropToFloor}
-        />
-        <WatchChipButton
-          label="🎯 Recenter"
-          sublabel="Align View"
-          position={[0.072, -0.033, 0.008]}
-          width={0.068}
-          height={0.03}
-          onClick={onRecenterView}
-        />
+            {/* Smartwatch titanium casing */}
+            <RoundedBox args={[0.058, 0.04, 0.009]} radius={0.007} smoothness={3}>
+              <meshStandardMaterial color="#0F172A" roughness={0.28} metalness={0.72} />
+            </RoundedBox>
 
-        {/* Row 4: Audio & Media (Mic Mute, Stream Volume/Mute, Main Dock) */}
-        <WatchChipButton
-          label={isMuted ? '🔇 Mic Off' : '🎙 Mic On'}
-          sublabel={isMuted ? 'Tap Unmute' : 'Voice Live'}
-          position={[-0.072, -0.067, 0.008]}
-          width={0.068}
-          height={0.028}
-          danger={isMuted}
-          active={!isMuted}
-          accentColor="#10B981"
-          onClick={onToggleMute}
-        />
-        <WatchChipButton
-          label={streamPct === 0 ? '🔇 TV 0%' : `🔊 TV ${streamPct}%`}
-          sublabel={`Saved ${Math.round(cinemaVolume * 100)}%`}
-          position={[0, -0.067, 0.008]}
-          width={0.068}
-          height={0.028}
-          active={streamPct > 0}
-          onClick={onCycleStreamVolume}
-        />
-        <WatchChipButton
-          label="🎛 Main Dock"
-          sublabel="Toggle UI"
-          position={[0.072, -0.067, 0.008]}
-          width={0.068}
-          height={0.028}
-          onClick={onSummonMainDock}
-        />
-      </group>
+            {/* Glowing accent bezel */}
+            <RoundedBox
+              args={[0.054, 0.036, 0.0095]}
+              radius={0.006}
+              smoothness={2}
+              position={[0, 0, 0.0005]}
+            >
+              <meshBasicMaterial
+                color={flyMode ? '#38BDF8' : isExpanded ? '#E5A93C' : '#334155'}
+              />
+            </RoundedBox>
+
+            {/* Watch OLED face */}
+            <RoundedBox
+              args={[0.05, 0.032, 0.01]}
+              radius={0.005}
+              smoothness={2}
+              position={[0, 0, 0.001]}
+            >
+              <meshBasicMaterial color="#070A10" />
+            </RoundedBox>
+
+            <Text
+              position={[0, 0.006, 0.0068]}
+              fontSize={0.0068}
+              color="#F4F1EA"
+              anchorX="center"
+              anchorY="middle"
+            >
+              {`${wingMeta.emoji} ${wingMeta.short.slice(0, 10)}`}
+            </Text>
+            <Text
+              position={[0, -0.006, 0.0068]}
+              fontSize={0.0056}
+              color={flyMode ? '#38BDF8' : isMuted ? '#F87171' : '#34D399'}
+              anchorX="center"
+              anchorY="middle"
+            >
+              {flyMode
+                ? '🚀 FLY ON · TAP'
+                : `${isMuted ? '🔇 MUTED' : '🎙 LIVE'} · ${isExpanded ? '▼ CLOSE' : '▲ OPEN'}`}
+            </Text>
+          </group>
+
+          {/* Quick Side Crown Button on Watch Bezel to Hide Watch Completely */}
+          {onToggleHudHidden && (
+            <WatchChipButton
+              label="✕ Hide"
+              position={[0.048, 0, 0.003]}
+              width={0.032}
+              height={0.02}
+              onClick={() => {
+                setPinnedOpen(false)
+                onToggleHudHidden()
+              }}
+            />
+          )}
+
+          {/* =====================================================================
+              EXPANDED HOLOGRAPHIC WRIST COMMAND DECK (Floating 9cm above watch face)
+             ===================================================================== */}
+          <group ref={holoDeckRef} position={[0, 0.102, 0.018]}>
+            {/* Frosted obsidian holographic backplate */}
+            <RoundedBox args={[0.232, 0.168, 0.006]} radius={0.012} smoothness={3}>
+              <meshBasicMaterial color="#090D15" transparent opacity={0.94} />
+            </RoundedBox>
+
+            {/* Outer neon border frame */}
+            <RoundedBox
+              args={[0.236, 0.172, 0.004]}
+              radius={0.013}
+              smoothness={2}
+              position={[0, 0, -0.0015]}
+            >
+              <meshBasicMaterial
+                color={flyMode ? '#38BDF8' : '#E5A93C'}
+                transparent
+                opacity={0.45}
+              />
+            </RoundedBox>
+
+            {/* Top Status Readout Bar + Pin, Collapse & Hide HUD Buttons */}
+            <RoundedBox
+              args={[0.216, 0.024, 0.005]}
+              radius={0.005}
+              smoothness={2}
+              position={[0, 0.066, 0.003]}
+            >
+              <meshBasicMaterial color="#111827" />
+            </RoundedBox>
+            <Text
+              position={[-0.102, 0.066, 0.0065]}
+              fontSize={0.0068}
+              color="#E5A93C"
+              anchorX="left"
+              anchorY="middle"
+            >
+              {presenterSummary}
+            </Text>
+            <WatchChipButton
+              label={pinnedOpen ? '📌 Pin' : '📌 Pin'}
+              position={[0.018, 0.066, 0.004]}
+              width={0.034}
+              height={0.019}
+              active={pinnedOpen}
+              onClick={() => {
+                const next = !pinnedOpen
+                setPinnedOpen(next)
+                if (!next) {
+                  glanceDismissedRef.current = true
+                  setGlanceDismissed(true)
+                }
+              }}
+            />
+            <WatchChipButton
+              label="▼ Min"
+              position={[0.054, 0.066, 0.004]}
+              width={0.034}
+              height={0.019}
+              onClick={() => {
+                setPinnedOpen(false)
+                glanceDismissedRef.current = true
+                setGlanceDismissed(true)
+              }}
+            />
+            {onToggleHudHidden && (
+              <WatchChipButton
+                label="✕ Hide"
+                position={[0.09, 0.066, 0.004]}
+                width={0.034}
+                height={0.019}
+                danger={true}
+                onClick={() => {
+                  setPinnedOpen(false)
+                  onToggleHudHidden()
+                }}
+              />
+            )}
+
+            {/* Row 1 & 2: One-Tap Room Teleport Grid */}
+            {TELEPORT_BUTTONS.map((btn) => (
+              <WatchChipButton
+                key={btn.wing}
+                label={btn.label}
+                position={btn.pos}
+                width={btn.width ?? 0.068}
+                height={0.028}
+                active={activeLoungeWing === btn.wing}
+                onClick={() => onJumpToWing(btn.wing)}
+              />
+            ))}
+
+            {/* Row 3: Movement & Comfort (Fly Mode, Drop to Floor, Recenter View) */}
+            <WatchChipButton
+              label={flyMode ? '🚀 Fly: ON' : '🚀 Fly: OFF'}
+              sublabel={flyMode ? 'R-Stick ▲▼' : 'Free 3D'}
+              position={[-0.072, -0.033, 0.008]}
+              width={0.068}
+              height={0.03}
+              active={flyMode}
+              accentColor="#38BDF8"
+              onClick={onToggleFlyMode}
+            />
+            <WatchChipButton
+              label="⬇ Floor"
+              sublabel="Drop Y=0"
+              position={[0, -0.033, 0.008]}
+              width={0.068}
+              height={0.03}
+              onClick={onDropToFloor}
+            />
+            <WatchChipButton
+              label="🎯 Recenter"
+              sublabel="Align View"
+              position={[0.072, -0.033, 0.008]}
+              width={0.068}
+              height={0.03}
+              onClick={onRecenterView}
+            />
+
+            {/* Row 4: Audio & Media (Mic Mute, Stream Volume/Mute, Main Dock) */}
+            <WatchChipButton
+              label={isMuted ? '🔇 Mic Off' : '🎙 Mic On'}
+              sublabel={isMuted ? 'Tap Unmute' : 'Voice Live'}
+              position={[-0.072, -0.067, 0.008]}
+              width={0.068}
+              height={0.028}
+              danger={isMuted}
+              active={!isMuted}
+              accentColor="#10B981"
+              onClick={onToggleMute}
+            />
+            <WatchChipButton
+              label={streamPct === 0 ? '🔇 TV 0%' : `🔊 TV ${streamPct}%`}
+              sublabel={`Saved ${Math.round(cinemaVolume * 100)}%`}
+              position={[0, -0.067, 0.008]}
+              width={0.068}
+              height={0.028}
+              active={streamPct > 0}
+              onClick={onCycleStreamVolume}
+            />
+            <WatchChipButton
+              label="🎛 Main Dock"
+              sublabel="Toggle UI"
+              position={[0.072, -0.067, 0.008]}
+              width={0.068}
+              height={0.028}
+              onClick={onSummonMainDock}
+            />
+          </group>
+        </>
+      )}
     </group>
   )
 }

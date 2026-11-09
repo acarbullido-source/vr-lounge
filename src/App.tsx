@@ -200,6 +200,8 @@ interface SeatRigProps {
   onEnterFreeRoam: () => void
   onToggleFlyMode: () => void
   onDropToFloor: () => void
+  wristHudHidden?: boolean
+  onToggleWristHud?: () => void
   onJumpToWing: (wingId: LoungeWingId) => void
   onRecenterView: () => void
   onToggleMute: () => void
@@ -249,6 +251,8 @@ function SeatCameraAndOriginRig({
   onEnterFreeRoam,
   onToggleFlyMode,
   onDropToFloor,
+  wristHudHidden = false,
+  onToggleWristHud,
   onJumpToWing,
   onRecenterView,
   onToggleMute,
@@ -331,6 +335,8 @@ function SeatCameraAndOriginRig({
   onEnterFreeRoamRef.current = onEnterFreeRoam
   const onToggleFlyModeRef = useRef(onToggleFlyMode)
   onToggleFlyModeRef.current = onToggleFlyMode
+  const onToggleWristHudRef = useRef(onToggleWristHud)
+  onToggleWristHudRef.current = onToggleWristHud
   const onSummonDockToggleRef = useRef(onSummonDockToggle)
   onSummonDockToggleRef.current = onSummonDockToggle
   const onRoamWingChangeRef = useRef(onRoamWingChange)
@@ -418,6 +424,11 @@ function SeatCameraAndOriginRig({
       if (e.code === 'KeyF' && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault()
         onToggleFlyModeRef.current()
+        return
+      }
+      if (e.code === 'KeyH' && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault()
+        onToggleWristHudRef.current?.()
         return
       }
       if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
@@ -1216,6 +1227,8 @@ function SeatCameraAndOriginRig({
       <SceneSectionBoundary>
         <WristWatchHUD3D
           visible={joined}
+          hudHidden={wristHudHidden}
+          onToggleHudHidden={onToggleWristHud}
           xrOriginRef={originRef}
           activeLoungeWing={activeLoungeWing}
           flyMode={flyMode}
@@ -1280,6 +1293,24 @@ export function App() {
   const [voiceVolume, setVoiceVolume] = useState(0.9)
   const [freeRoamWing, setFreeRoamWing] = useState<LoungeWingId>('main-lounge')
   const [flyMode, setFlyMode] = useState(false)
+  const [wristHudHidden, setWristHudHidden] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem('vr-lounge:wrist-hud-hidden') === '1'
+    } catch {
+      return false
+    }
+  })
+  const handleToggleWristHud = useCallback(() => {
+    setWristHudHidden((prev) => {
+      const next = !prev
+      try {
+        window.localStorage.setItem('vr-lounge:wrist-hud-hidden', next ? '1' : '0')
+      } catch {
+        // Ignore storage write errors
+      }
+      return next
+    })
+  }, [])
   const [mobileViewMode, setMobileViewMode] = useState<MobileViewMode>(() =>
     detectInitialMobileViewMode(),
   )
@@ -2171,6 +2202,8 @@ export function App() {
               onEnterFreeRoam={handleEnterFreeRoam}
               onToggleFlyMode={handleToggleFlyMode}
               onDropToFloor={handleDropToFloor}
+              wristHudHidden={wristHudHidden}
+              onToggleWristHud={handleToggleWristHud}
               onJumpToWing={handleJumpToWing}
               onRecenterView={() => setRecenterVersion((v) => v + 1)}
               onToggleMute={handleToggleMute}
@@ -2306,6 +2339,8 @@ export function App() {
                         flyMode={flyMode}
                         onToggleFlyMode={handleToggleFlyMode}
                         onDropToFloor={handleDropToFloor}
+                        wristHudHidden={wristHudHidden}
+                        onToggleWristHud={handleToggleWristHud}
                         dockSummonToggleVersion={dockSummonToggleVersion}
                         localUserId={room.localUserId}
                         participants={room.participants}
@@ -2568,6 +2603,8 @@ export function App() {
           flyMode={flyMode}
           onToggleFlyMode={handleToggleFlyMode}
           onDropToFloor={handleDropToFloor}
+          wristHudHidden={wristHudHidden}
+          onToggleWristHud={handleToggleWristHud}
           onOpenMobileMode={(mode) => setMobileViewMode(mode)}
           onToggleBuildMode={handleToggleBuildMode}
           onSelectFurniture={setSelectedFurnitureId}

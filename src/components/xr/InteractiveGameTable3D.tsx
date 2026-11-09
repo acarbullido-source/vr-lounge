@@ -4,6 +4,8 @@ import { Suspense, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { SUIT_SYMBOLS, TOKEN_PALETTE, scoreBlackjackHand } from '../../constants/barGames'
 import type {
+  CardRank,
+  CardSuit,
   DieKind,
   RolledDie,
   TableGameMode,
@@ -42,6 +44,301 @@ export interface InteractiveGameTable3DProps {
 }
 
 const SURFACE_TEX_CACHE = new Map<TableSurfaceStyle, THREE.CanvasTexture>()
+const CARD_TEX_CACHE = new Map<string, THREE.CanvasTexture>()
+
+function drawCardSuitVector(
+  ctx: CanvasRenderingContext2D,
+  suit: CardSuit,
+  cx: number,
+  cy: number,
+  size: number,
+  color: string,
+) {
+  ctx.save()
+  ctx.translate(cx, cy)
+  ctx.fillStyle = color
+  ctx.strokeStyle = color
+
+  if (suit === 'diamonds') {
+    ctx.beginPath()
+    ctx.moveTo(0, -size)
+    ctx.lineTo(size * 0.78, 0)
+    ctx.lineTo(0, size)
+    ctx.lineTo(-size * 0.78, 0)
+    ctx.closePath()
+    ctx.fill()
+  } else if (suit === 'hearts') {
+    const topY = -size * 0.32
+    ctx.beginPath()
+    ctx.moveTo(0, size * 0.95)
+    ctx.bezierCurveTo(-size * 1.05, size * 0.2, -size * 0.98, -size * 0.9, -size * 0.46, -size * 0.9)
+    ctx.bezierCurveTo(-size * 0.14, -size * 0.9, 0, -size * 0.58, 0, topY)
+    ctx.bezierCurveTo(0, -size * 0.58, size * 0.14, -size * 0.9, size * 0.46, -size * 0.9)
+    ctx.bezierCurveTo(size * 0.98, -size * 0.9, size * 1.05, size * 0.2, 0, size * 0.95)
+    ctx.closePath()
+    ctx.fill()
+  } else if (suit === 'spades') {
+    ctx.beginPath()
+    ctx.moveTo(0, -size * 0.98)
+    ctx.bezierCurveTo(size * 0.98, -size * 0.15, size * 0.98, size * 0.65, size * 0.42, size * 0.65)
+    ctx.bezierCurveTo(size * 0.18, size * 0.65, size * 0.06, size * 0.46, 0, size * 0.28)
+    ctx.bezierCurveTo(-size * 0.06, size * 0.46, -size * 0.18, size * 0.65, -size * 0.42, size * 0.65)
+    ctx.bezierCurveTo(-size * 0.98, size * 0.65, -size * 0.98, -size * 0.15, 0, -size * 0.98)
+    ctx.closePath()
+    ctx.fill()
+
+    // Spade stem
+    ctx.beginPath()
+    ctx.moveTo(0, size * 0.22)
+    ctx.lineTo(size * 0.28, size * 0.95)
+    ctx.lineTo(-size * 0.28, size * 0.95)
+    ctx.closePath()
+    ctx.fill()
+  } else {
+    // clubs
+    const r = size * 0.42
+    ctx.beginPath()
+    ctx.arc(0, -size * 0.42, r, 0, Math.PI * 2)
+    ctx.arc(-size * 0.44, size * 0.12, r, 0, Math.PI * 2)
+    ctx.arc(size * 0.44, size * 0.12, r, 0, Math.PI * 2)
+    ctx.fill()
+
+    // Club center & stem
+    ctx.beginPath()
+    ctx.arc(0, -size * 0.02, r * 0.65, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.beginPath()
+    ctx.moveTo(0, size * 0.1)
+    ctx.lineTo(size * 0.28, size * 0.95)
+    ctx.lineTo(-size * 0.28, size * 0.95)
+    ctx.closePath()
+    ctx.fill()
+  }
+
+  ctx.restore()
+}
+
+function getPlayingCardTexture(
+  rank: CardRank,
+  suit: CardSuit,
+  faceUp: boolean,
+  footerLabel?: string,
+): THREE.CanvasTexture | null {
+  if (typeof document === 'undefined') return null
+  const cacheKey = faceUp
+    ? `up:${rank}:${suit}:${footerLabel ?? ''}`
+    : 'back:royal-casino'
+  const cached = CARD_TEX_CACHE.get(cacheKey)
+  if (cached) return cached
+
+  const w = 256
+  const h = 356
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')!
+
+  if (!faceUp) {
+    // Ornate Royal Crimson & Gold Casino Card Back
+    ctx.fillStyle = '#F8FAFC'
+    ctx.fillRect(0, 0, w, h)
+
+    ctx.fillStyle = '#7F1D1D'
+    ctx.fillRect(10, 10, w - 20, h - 20)
+
+    ctx.strokeStyle = '#F59E0B'
+    ctx.lineWidth = 5
+    ctx.strokeRect(16, 16, w - 32, h - 32)
+
+    ctx.strokeStyle = 'rgba(253, 230, 138, 0.35)'
+    ctx.lineWidth = 2
+    const step = 24
+    for (let x = 22; x < w - 22; x += step) {
+      for (let y = 22; y < h - 22; y += step) {
+        ctx.beginPath()
+        ctx.moveTo(x + step / 2, y)
+        ctx.lineTo(x + step, y + step / 2)
+        ctx.lineTo(x + step / 2, y + step)
+        ctx.lineTo(x, y + step / 2)
+        ctx.closePath()
+        ctx.stroke()
+      }
+    }
+
+    // Center gold medallion
+    ctx.fillStyle = '#450A0A'
+    ctx.beginPath()
+    ctx.arc(w / 2, h / 2, 44, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = '#FDE68A'
+    ctx.lineWidth = 4
+    ctx.stroke()
+    drawCardSuitVector(ctx, 'diamonds', w / 2, h / 2, 24, '#FDE68A')
+  } else {
+    const isRed = suit === 'hearts' || suit === 'diamonds'
+    const fg = isRed ? '#DC2626' : '#0F172A'
+    const accentTrim = isRed ? 'rgba(220, 38, 38, 0.28)' : 'rgba(15, 23, 42, 0.22)'
+
+    // Crisp White Card Stock + High-Contrast Outer & Inner Borders
+    ctx.fillStyle = '#FFFFFF'
+    ctx.fillRect(0, 0, w, h)
+
+    ctx.strokeStyle = '#0F172A'
+    ctx.lineWidth = 8
+    ctx.strokeRect(4, 4, w - 8, h - 8)
+
+    ctx.strokeStyle = accentTrim
+    ctx.lineWidth = 3
+    ctx.strokeRect(16, 16, w - 32, h - 32)
+
+    // Top-Left Corner Index (Rank + Vector Suit)
+    ctx.fillStyle = fg
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'top'
+    ctx.font = '900 54px system-ui, -apple-system, sans-serif'
+    ctx.fillText(rank, 50, 22)
+    drawCardSuitVector(ctx, suit, 50, 96, 20, fg)
+
+    // Bottom-Right Inverted Corner Index
+    ctx.save()
+    ctx.translate(w, h)
+    ctx.rotate(Math.PI)
+    ctx.fillStyle = fg
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'top'
+    ctx.font = '900 54px system-ui, -apple-system, sans-serif'
+    ctx.fillText(rank, 50, 22)
+    drawCardSuitVector(ctx, suit, 50, 96, 20, fg)
+    ctx.restore()
+
+    // Large Central Suit & Rank Emblem for Instant Readability in VR & Desktop
+    const isCourtOrAce = rank === 'A' || rank === 'K' || rank === 'Q' || rank === 'J'
+    if (isCourtOrAce) {
+      ctx.strokeStyle = '#D97706'
+      ctx.lineWidth = 4
+      ctx.strokeRect(58, 86, w - 116, h - 172)
+    }
+
+    drawCardSuitVector(ctx, suit, w / 2, h / 2 - 14, 52, fg)
+
+    ctx.fillStyle = fg
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.font = '900 52px system-ui, -apple-system, sans-serif'
+    ctx.fillText(rank, w / 2, h / 2 + 64)
+
+    if (footerLabel) {
+      ctx.fillStyle = '#0F172A'
+      ctx.fillRect(36, h - 46, w - 72, 30)
+      ctx.fillStyle = '#FDE68A'
+      ctx.font = '800 20px system-ui, -apple-system, sans-serif'
+      ctx.fillText(footerLabel, w / 2, h - 31)
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.anisotropy = 4
+  tex.needsUpdate = true
+  CARD_TEX_CACHE.set(cacheKey, tex)
+  return tex
+}
+
+function PlayingCard3D({
+  rank,
+  suit,
+  faceUp,
+  orientation = 'flat',
+  width = 0.082,
+  height = 0.116,
+  thickness = 0.003,
+  footerLabel,
+}: {
+  rank: CardRank
+  suit: CardSuit
+  faceUp: boolean
+  orientation?: 'flat' | 'upright'
+  width?: number
+  height?: number
+  thickness?: number
+  footerLabel?: string
+}) {
+  const cardTex = useMemo(
+    () => getPlayingCardTexture(rank, suit, faceUp, footerLabel),
+    [faceUp, footerLabel, rank, suit],
+  )
+  const suitMeta = SUIT_SYMBOLS[suit]
+
+  if (orientation === 'upright') {
+    return (
+      <group>
+        {/* Solid Card Core */}
+        <mesh>
+          <boxGeometry args={[width, height, thickness]} />
+          <meshBasicMaterial color={faceUp ? '#F8FAFC' : '#7F1D1D'} />
+        </mesh>
+        {/* Front Face Plane cleanly in front of card core */}
+        <mesh position={[0, 0, thickness / 2 + 0.0008]}>
+          <planeGeometry args={[width * 0.98, height * 0.98]} />
+          <meshBasicMaterial
+            map={cardTex ?? undefined}
+            color="#FFFFFF"
+            toneMapped={false}
+          />
+        </mesh>
+        {!cardTex && (
+          <Suspense fallback={null}>
+            <Text
+              position={[0, 0, thickness / 2 + 0.002]}
+              fontSize={0.025}
+              color={faceUp ? suitMeta.color : '#FDE68A'}
+              anchorX="center"
+              anchorY="middle"
+            >
+              {faceUp ? `${rank}${suitMeta.glyph}` : 'CARD'}
+            </Text>
+          </Suspense>
+        )}
+      </group>
+    )
+  }
+
+  return (
+    <group>
+      {/* Solid Card Core Lying Flat on Tabletop */}
+      <mesh>
+        <boxGeometry args={[width, thickness, height]} />
+        <meshBasicMaterial color={faceUp ? '#E2E8F0' : '#7F1D1D'} />
+      </mesh>
+      {/* Top Face Plane cleanly above card core so it NEVER z-fights or gets swallowed */}
+      <mesh
+        position={[0, thickness / 2 + 0.0008, 0]}
+        rotation={[-Math.PI / 2, 0, 0]}
+      >
+        <planeGeometry args={[width * 0.98, height * 0.98]} />
+        <meshBasicMaterial
+          map={cardTex ?? undefined}
+          color="#FFFFFF"
+          toneMapped={false}
+        />
+      </mesh>
+      {!cardTex && (
+        <Suspense fallback={null}>
+          <Text
+            position={[0, thickness / 2 + 0.002, 0]}
+            rotation={[-Math.PI / 2, 0, 0]}
+            fontSize={0.025}
+            color={faceUp ? suitMeta.color : '#FDE68A'}
+            anchorX="center"
+            anchorY="middle"
+          >
+            {faceUp ? `${rank}${suitMeta.glyph}` : 'CARD'}
+          </Text>
+        </Suspense>
+      )}
+    </group>
+  )
+}
 
 function getTableSurfaceTexture(style: TableSurfaceStyle): THREE.CanvasTexture {
   const cached = SURFACE_TEX_CACHE.get(style)
@@ -638,30 +935,19 @@ export function InteractiveGameTable3D({
             </Suspense>
             {dealerCards.map((dc, idx) => {
               const showFace = idx === 0 || dealerRevealed
-              const suitMeta = SUIT_SYMBOLS[dc.suit]
               return (
                 <group
                   key={`dealer-${dc.id}-${idx}`}
-                  position={[idx * 0.095, idx * 0.001, 0]}
+                  position={[idx * 0.095, idx * 0.0012, 0]}
                 >
-                  <RoundedBox args={[0.076, 0.004, 0.11]} radius={0.004} smoothness={1}>
-                    <meshStandardMaterial
-                      color={showFace ? '#F8FAFC' : '#7F1D1D'}
-                      roughness={0.4}
-                    />
-                  </RoundedBox>
-                  <Suspense fallback={null}>
-                    <Text
-                      position={[0, 0.004, 0]}
-                      rotation={[-Math.PI / 2, 0, 0]}
-                      fontSize={0.025}
-                      color={showFace ? suitMeta.color : '#FDE68A'}
-                      anchorX="center"
-                      anchorY="middle"
-                    >
-                      {showFace ? `${dc.rank}${suitMeta.glyph}` : '❖'}
-                    </Text>
-                  </Suspense>
+                  <PlayingCard3D
+                    rank={dc.rank}
+                    suit={dc.suit}
+                    faceUp={showFace}
+                    orientation="flat"
+                    width={0.08}
+                    height={0.114}
+                  />
                 </group>
               )
             })}
@@ -808,82 +1094,74 @@ export function InteractiveGameTable3D({
           />
         </group>
 
-        {/* Shared Cards Dealt / Played to Table (Click to Flip!) */}
-        {tabletopState.tableCards.map((tc, idx) => {
-          const suitMeta = SUIT_SYMBOLS[tc.card.suit]
-          return (
-            <group
-              key={`${tc.card.id}-${idx}`}
-              position={[tc.localPos[0], 0.004 + idx * 0.0012, tc.localPos[1]]}
-              rotation={[0, tc.rotationY, 0]}
-              pointerEventsType={{ deny: 'grab' }}
-              onClick={(e) => {
-                e.stopPropagation()
-                onFlipTableCard(tc.card.id)
-              }}
+        {/* Player Felt Zone Label when cards are dealt on the table */}
+        {tabletopState.tableCards.length > 0 && (
+          <Suspense fallback={null}>
+            <Text
+              position={[-0.02, 0.008, 0.15]}
+              rotation={[-Math.PI / 2, 0, 0]}
+              fontSize={0.018}
+              color="#38BDF8"
+              anchorX="center"
+              anchorY="middle"
             >
-              <RoundedBox args={[0.078, 0.004, 0.112]} radius={0.004} smoothness={1}>
-                <meshStandardMaterial
-                  color={tc.faceUp ? '#F8FAFC' : '#7F1D1D'}
-                  roughness={0.42}
-                />
-              </RoundedBox>
-              <Suspense fallback={null}>
-                <Text
-                  position={[0, 0.004, 0]}
-                  rotation={[-Math.PI / 2, 0, 0]}
-                  fontSize={0.026}
-                  color={tc.faceUp ? suitMeta.color : '#FDE68A'}
-                  anchorX="center"
-                  anchorY="middle"
-                >
-                  {tc.faceUp ? `${tc.card.rank}${suitMeta.glyph}` : '❖'}
-                </Text>
-              </Suspense>
-            </group>
-          )
-        })}
+              {gameMode === 'blackjack' && myBlackjackScore
+                ? `PLAYER CARDS (${myBlackjackScore.total}${myBlackjackScore.soft ? ' SOFT' : ''})`
+                : gameMode === 'holdem'
+                  ? 'COMMUNITY BOARD'
+                  : 'TABLE CARDS (TAP TO FLIP)'}
+            </Text>
+          </Suspense>
+        )}
+
+        {/* Shared Cards Dealt / Played to Table (Click to Flip!) */}
+        {tabletopState.tableCards.map((tc, idx) => (
+          <group
+            key={`${tc.card.id}-${idx}`}
+            position={[tc.localPos[0], 0.004 + idx * 0.0014, tc.localPos[1]]}
+            rotation={[0, tc.rotationY, 0]}
+            pointerEventsType={{ deny: 'grab' }}
+            onClick={(e) => {
+              e.stopPropagation()
+              onFlipTableCard(tc.card.id)
+            }}
+          >
+            <PlayingCard3D
+              rank={tc.card.rank}
+              suit={tc.card.suit}
+              faceUp={tc.faceUp}
+              orientation="flat"
+              width={0.082}
+              height={0.116}
+            />
+          </group>
+        ))}
 
         {/* Local Player's PRIVATE 3D Hand Fan (Visible ONLY to localUserId!) */}
         {myPrivateCards.length > 0 && (
           <group position={[0, 0.12, 0.62]} rotation={[-0.55, 0, 0]}>
             {myPrivateCards.slice(0, 7).map((card, idx) => {
               const count = Math.min(7, myPrivateCards.length)
-              const offset = (idx - (count - 1) / 2) * 0.075
-              const suitMeta = SUIT_SYMBOLS[card.suit]
+              const offset = (idx - (count - 1) / 2) * 0.078
               return (
                 <group
                   key={card.id}
-                  position={[offset, 0, idx * 0.003]}
+                  position={[offset, 0, idx * 0.0035]}
                   pointerEventsType={{ deny: 'grab' }}
                   onClick={(e) => {
                     e.stopPropagation()
                     onPlayCardFromHand(card.id, true)
                   }}
                 >
-                  <RoundedBox args={[0.072, 0.105, 0.004]} radius={0.005} smoothness={2}>
-                    <meshBasicMaterial color="#FFFFFF" />
-                  </RoundedBox>
-                  <Suspense fallback={null}>
-                    <Text
-                      position={[0, 0.008, 0.004]}
-                      fontSize={0.026}
-                      color={suitMeta.color}
-                      anchorX="center"
-                      anchorY="middle"
-                    >
-                      {`${card.rank}${suitMeta.glyph}`}
-                    </Text>
-                    <Text
-                      position={[0, -0.034, 0.004]}
-                      fontSize={0.014}
-                      color="#334155"
-                      anchorX="center"
-                      anchorY="middle"
-                    >
-                      PLAY
-                    </Text>
-                  </Suspense>
+                  <PlayingCard3D
+                    rank={card.rank}
+                    suit={card.suit}
+                    faceUp={true}
+                    orientation="upright"
+                    width={0.074}
+                    height={0.106}
+                    footerLabel="PLAY"
+                  />
                 </group>
               )
             })}

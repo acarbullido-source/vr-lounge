@@ -175,6 +175,8 @@ export interface SpatialControlDockProps {
   flyMode?: boolean
   onToggleFlyMode?: () => void
   onDropToFloor?: () => void
+  wristHudHidden?: boolean
+  onToggleWristHud?: () => void
   dockSummonToggleVersion?: number
   localUserId?: string
   participants?: ParticipantProfile[]
@@ -228,6 +230,8 @@ export function SpatialControlDock({
   flyMode = false,
   onToggleFlyMode,
   onDropToFloor,
+  wristHudHidden = false,
+  onToggleWristHud,
   dockSummonToggleVersion = 0,
   localUserId,
   participants = [],
@@ -898,7 +902,7 @@ export function SpatialControlDock({
             }}
           />
 
-          {/* 3D Untethered Flight & Floor Recovery Strip */}
+          {/* 3D Untethered Flight, Floor Recovery & Wrist HUD Toggle Strip */}
           {onToggleFlyMode && (
             <>
               <RoundedBox
@@ -911,30 +915,39 @@ export function SpatialControlDock({
               </RoundedBox>
               <DockButton
                 label={flyMode ? '🚀 Fly Mode: ON' : '🚀 Fly Mode: OFF'}
-                sublabel={flyMode ? '3D Free-Flight Active' : 'Soar Above Lounge'}
-                position={[-0.36, -0.188, 0.008]}
-                width={0.46}
+                sublabel={flyMode ? '3D Free-Flight' : 'Soar Above Lounge'}
+                position={[-0.425, -0.188, 0.008]}
+                width={0.35}
                 height={0.064}
                 variant={flyMode ? 'primary' : 'active'}
                 onClick={onToggleFlyMode}
               />
               <DockButton
-                label="⬇ Drop to Floor"
+                label="⬇ Drop Floor"
                 sublabel="Reset Y = 0"
-                position={[0.08, -0.188, 0.008]}
-                width={0.36}
+                position={[-0.095, -0.188, 0.008]}
+                width={0.27}
                 height={0.064}
                 variant="default"
                 onClick={() => onDropToFloor?.()}
               />
               <DockButton
-                label="🎯 Recenter View"
+                label="🎯 Recenter"
                 sublabel="Align Horizon"
-                position={[0.45, -0.188, 0.008]}
-                width={0.33}
+                position={[0.185, -0.188, 0.008]}
+                width={0.25}
                 height={0.064}
                 variant="default"
                 onClick={onRecenterSeat}
+              />
+              <DockButton
+                label={wristHudHidden ? '⌚ Wrist: OFF' : '⌚ Wrist: ON'}
+                sublabel={wristHudHidden ? 'Tap to Show' : 'Tap to Hide'}
+                position={[0.465, -0.188, 0.008]}
+                width={0.27}
+                height={0.064}
+                variant={wristHudHidden ? 'default' : 'active'}
+                onClick={() => onToggleWristHud?.()}
               />
             </>
           )}

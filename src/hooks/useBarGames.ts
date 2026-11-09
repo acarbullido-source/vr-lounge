@@ -1061,6 +1061,10 @@ export function useBarGames({
       revision: prev.revision + 1,
       updatedAt: Date.now(),
       deck: shuffleCards(createOrderedDeck52()),
+      dealerCards: [],
+      dealerHoleRevealed: false,
+      blackjackPhase: 'betting',
+      holdemStreet: 'idle',
       tableCards: [],
       hands: {},
     })
@@ -1935,6 +1939,13 @@ export function useBarGames({
       blackjackPhase: 'settled',
       potChips: 0,
       playerChips: chipsMap,
+      tableCards: playerCards.map((c, idx) => ({
+        card: c,
+        faceUp: true,
+        localPos: [Number((-0.18 + idx * 0.12).toFixed(3)), 0.24],
+        rotationY: 0,
+        playedBy: me.displayName,
+      })),
       tableBanner: banner,
     })
   }, [commitTabletop, localUserId])

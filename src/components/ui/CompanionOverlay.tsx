@@ -200,6 +200,8 @@ export interface CompanionOverlayProps {
   flyMode?: boolean
   onToggleFlyMode?: () => void
   onDropToFloor?: () => void
+  wristHudHidden?: boolean
+  onToggleWristHud?: () => void
   onOpenMobileMode?: (mode: 'pocket-2d' | 'touch-3d') => void
   nesMultiplayerState?: NesMultiplayerState
   onClaimNesPlayerSlot?: (slot: 1 | 2 | null) => void
@@ -286,6 +288,8 @@ export function CompanionOverlay({
   flyMode = false,
   onToggleFlyMode,
   onDropToFloor,
+  wristHudHidden = false,
+  onToggleWristHud,
   onOpenMobileMode,
   nesMultiplayerState,
   onClaimNesPlayerSlot,
@@ -1113,6 +1117,22 @@ export function CompanionOverlay({
               className="inline-flex items-center gap-1 rounded-lg border border-amber-400/40 bg-amber-500/15 px-2 py-1 text-xs font-semibold text-amber-200 transition hover:bg-amber-500/25"
             >
               <span>⬇ Floor</span>
+            </button>
+          )}
+
+          {onToggleWristHud && (
+            <button
+              id="btn-hud-wrist-toggle"
+              type="button"
+              onClick={onToggleWristHud}
+              title="Show or hide the 3D Wrist HUD (Shortcut: H or Left Thumbstick Click in VR)"
+              className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-semibold transition ${
+                !wristHudHidden
+                  ? 'border-[#38bdf8]/40 bg-[#112233] text-[#bae6fd] hover:border-[#38bdf8]'
+                  : 'border-[#f4f1ea]/12 bg-[#141922] text-[#8e887e] hover:border-[#e5a93c]/45 hover:text-[#f4f1ea]'
+              }`}
+            >
+              <span>{wristHudHidden ? '⌚ Wrist: OFF' : '⌚ Wrist: ON'}</span>
             </button>
           )}
 

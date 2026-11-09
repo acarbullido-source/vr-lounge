@@ -1074,6 +1074,35 @@ export function BarGamesDrawer({
                 </div>
               )}
 
+              {/* Dealer / House Cards on Table (Blackjack & Hold'em) */}
+              {tabletopState.dealerCards && tabletopState.dealerCards.length > 0 && (
+                <div>
+                  <div className="mb-1 text-[11px] text-amber-300">
+                    Dealer Cards:
+                  </div>
+                  <div id="dealer-cards-list" className="flex flex-wrap gap-1.5">
+                    {tabletopState.dealerCards.map((dc, idx) => {
+                      const showFace =
+                        idx === 0 || Boolean(tabletopState.dealerHoleRevealed)
+                      const sm = SUIT_SYMBOLS[dc.suit]
+                      return (
+                        <span
+                          key={`dealer-${dc.id}-${idx}`}
+                          className={`rounded-lg border px-2.5 py-1 text-xs font-bold shadow ${
+                            showFace
+                              ? 'border-white bg-white'
+                              : 'border-rose-400/40 bg-rose-950 text-amber-200'
+                          }`}
+                          style={showFace ? { color: sm.color } : undefined}
+                        >
+                          {showFace ? `${dc.rank}${sm.glyph}` : '🂠 Hidden'}
+                        </span>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* Shared Cards on Table */}
               {tabletopState.tableCards.length > 0 && (
                 <div>
