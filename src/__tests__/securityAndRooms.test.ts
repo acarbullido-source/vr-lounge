@@ -424,16 +424,37 @@ describe('VR Lounge Security, E2EE, Anti-Impersonation & Physics Regression Suit
       'Shooting Range must provide 4 tactical firing line booths',
     )
 
-    // Attempting to walk downrange past the firing line (-6.15) clamps safely to the firing line
+    // Verify Second Hallway (West Tactical Annex Corridor) & Outdoor Lake Deck are both walkable
+    const inSecondHallway = resolveWalkablePosition(
+      -8.0,
+      16.58,
+      roomCustomization.architecture,
+    )
+    assert.equal(inSecondHallway[0], -8.0)
+    assert.equal(inSecondHallway[2], 16.58)
+
+    const onOutdoorLakeDeck = resolveWalkablePosition(
+      0,
+      32.3,
+      roomCustomization.architecture,
+    )
+    assert.equal(onOutdoorLakeDeck[0], 0)
+    assert.equal(
+      onOutdoorLakeDeck[2],
+      32.3,
+      'Main North Hallway must open directly onto the Outdoor Lake Deck without any Shooting Range wall blocking it',
+    )
+
+    // Attempting to walk downrange past the firing line (-18.15) clamps safely to the firing line
     const clampedAtFiringLine = resolveWalkablePosition(
-      -20.0,
-      7.2 + 24.6,
+      -30.0,
+      16.58,
       roomCustomization.architecture,
     )
     assert.equal(
       clampedAtFiringLine[0],
-      -6.15,
-      'Walking mode must stop players safely behind the firing line barrier (-6.15)',
+      -18.15,
+      'Walking mode must stop players safely behind the firing line barrier (-18.15)',
     )
   })
 })

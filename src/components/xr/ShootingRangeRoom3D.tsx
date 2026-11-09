@@ -1,4 +1,4 @@
-import { Line, RoundedBox, Text } from '@react-three/drei'
+import { RoundedBox, Text } from '@react-three/drei'
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { useXR, useXRInputSourceState, type XRControllerState } from '@react-three/xr'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -19,6 +19,41 @@ import type {
 } from '../../types/lounge'
 
 const noopRaycast = () => null
+const TRACER_UP_AXIS = new THREE.Vector3(0, 1, 0)
+
+function TracerBeam3D({
+  from,
+  to,
+  color,
+}: {
+  from: [number, number, number]
+  to: [number, number, number]
+  color: string
+}) {
+  const { mid, len, quat } = useMemo(() => {
+    const a = new THREE.Vector3(from[0], from[1], from[2])
+    const b = new THREE.Vector3(to[0], to[1], to[2])
+    const diff = new THREE.Vector3().subVectors(b, a)
+    const length = Math.max(0.05, diff.length())
+    const center = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5)
+    const q = new THREE.Quaternion().setFromUnitVectors(
+      TRACER_UP_AXIS,
+      diff.normalize(),
+    )
+    return {
+      mid: [center.x, center.y, center.z] as [number, number, number],
+      len: length,
+      quat: q,
+    }
+  }, [from, to])
+
+  return (
+    <mesh position={mid} quaternion={quat} raycast={noopRaycast}>
+      <cylinderGeometry args={[0.008, 0.008, len, 6]} />
+      <meshBasicMaterial color={color} transparent opacity={0.86} />
+    </mesh>
+  )
+}
 
 export type RangeGameModeId =
   | 'precision'
@@ -629,8 +664,8 @@ export function ShootingRangeRoom3D({
   const rightController = useXRInputSourceState('controller', 'right')
   const leftController = useXRInputSourceState('controller', 'left')
 
-  const rangeZ = wingLayout.shootingRangeCenter[2] // z0 + 24.6
-  const firingLineX = -6.35
+  const rangeZ = wingLayout.shootingRangeCenter[2] // z0 + 9.38 (West end of Second Hallway)
+  const firingLineX = -18.35
   const emissiveBoost = Math.max(0.3, Math.min(1.5, lighting.brightness || 1.0))
 
   // =========================================================================
@@ -684,7 +719,7 @@ export function ShootingRangeRoom3D({
     {
       id: 'clay-1',
       kind: 'clay',
-      pos: [-18, 2.2, rangeZ - 2.2],
+      pos: [firingLineX - 11.65, 2.2, rangeZ - 2.2],
       vel: [-3.2, 1.4, 2.4],
       radius: 0.34,
       active: true,
@@ -692,7 +727,7 @@ export function ShootingRangeRoom3D({
     {
       id: 'drone-1',
       kind: 'drone',
-      pos: [-24, 2.5, rangeZ + 1.8],
+      pos: [firingLineX - 17.65, 2.5, rangeZ + 1.8],
       vel: [2.4, 0.6, -2.8],
       radius: 0.38,
       active: true,
@@ -700,7 +735,7 @@ export function ShootingRangeRoom3D({
     {
       id: 'clay-2',
       kind: 'clay',
-      pos: [-15, 1.9, rangeZ + 0.5],
+      pos: [firingLineX - 8.65, 1.9, rangeZ + 0.5],
       vel: [-4.0, 1.8, -2.1],
       radius: 0.34,
       active: true,
@@ -733,6 +768,16 @@ export function ShootingRangeRoom3D({
   rangeModeRef.current = rangeMode
   const carrierDistanceRef = useRef(carrierDistanceM)
   carrierDistanceRef.current = carrierDistanceM
+  const scoreRef = useRef(score)
+  scoreRef.current = score
+  const highScoreRef = useRef(highScore)
+  highScoreRef.current = highScore
+  const streakRef = useRef(streak)
+  streakRef.current = streak
+  const bestStreakRef = useRef(bestStreak)
+  bestStreakRef.current = bestStreak
+  const steelTargetsRef = useRef(steelTargets)
+  steelTargetsRef.current = steelTargets
   const twoHandActiveRef = useRef(true)
 
   const lastFireTimeRef = useRef(0)
@@ -757,6 +802,7 @@ export function ShootingRangeRoom3D({
   const scratchSecondaryPos = useMemo(() => new THREE.Vector3(), [])
   const scratchSecondaryQuat = useMemo(() => new THREE.Quaternion(), [])
   const scratchBarrelDir = useMemo(() => new THREE.Vector3(), [])
+  const scratchNegBarrelDir = useMemo(() => new THREE.Vector3(), [])
   const scratchUpVec = useMemo(() => new THREE.Vector3(), [])
   const scratchRightVec = useMemo(() => new THREE.Vector3(), [])
   const scratchRotMat = useMemo(() => new THREE.Matrix4(), [])
@@ -830,27 +876,25 @@ export function ShootingRangeRoom3D({
         if (prev <= 1) {
           setQualRunning(false)
           shootingRangeAudio.playRangeBuzzer('end')
-          setScore((curScore) => {
-            const rating =
-              curScore >= 2500
-                ? 'TIER-1 OPERATOR'
-                : curScore >= 1600
-                  ? 'EXPERT MARKSMAN'
-                  : curScore >= 900
-                    ? 'SHARPSHOOTER'
-                    : 'QUALIFIED'
-            setLastShotBanner(
-              `QUALIFICATION COMPLETE! SCORE: ${curScore} · RATING: ${rating}`,
+          const curScore = scoreRef.current
+          const rating =
+            curScore >= 2500
+              ? 'TIER-1 OPERATOR'
+              : curScore >= 1600
+                ? 'EXPERT MARKSMAN'
+                : curScore >= 900
+                  ? 'SHARPSHOOTER'
+                  : 'QUALIFIED'
+          setLastShotBanner(
+            `QUALIFICATION COMPLETE! SCORE: ${curScore} · RATING: ${rating}`,
+          )
+          if (curScore > 0 && onRecordArcadeScore) {
+            onRecordArcadeScore(
+              'arcade-retro',
+              curScore,
+              `🎯 Range Qualification (${rating})`,
             )
-            if (curScore > 0 && onRecordArcadeScore) {
-              onRecordArcadeScore(
-                'arcade-retro',
-                curScore,
-                `🎯 Range Qualification (${rating})`,
-              )
-            }
-            return curScore
-          })
+          }
           return 0
         }
         return prev - 1
@@ -1005,7 +1049,7 @@ export function ShootingRangeRoom3D({
       // MODE 2: REACTIVE AR500 STEEL CHALLENGE & DUELING TREE
       // ---------------------------------------------------------------------
       if (mode === 'steel-challenge') {
-        for (const st of steelTargets) {
+        for (const st of steelTargetsRef.current) {
           if (st.kind === 'knockdown' && st.down) continue
           const plateX = firingLineX - st.xDist
           const t = (plateX - origin.x) / dir.x
@@ -1027,39 +1071,42 @@ export function ShootingRangeRoom3D({
             const pts =
               (st.xDist >= 22 ? 150 : 100) *
               (spec.armorDamage >= 2 ? 1.25 : 1)
-            const roundedPts = Math.round(pts)
+            let roundedPts = Math.round(pts)
 
-            setSteelTargets((prev) => {
-              const updated = prev.map((item) =>
-                item.id === st.id
-                  ? {
-                      ...item,
-                      down: item.kind === 'knockdown' ? true : false,
-                      paddleSide:
-                        item.kind === 'dueling-paddle'
-                          ? item.paddleSide === 'left'
-                            ? ('right' as const)
-                            : ('left' as const)
-                          : item.paddleSide,
-                      lastHitAt: nowMs,
-                    }
-                  : item,
-              )
-              const allKnockdownsFlat = updated
-                .filter((u) => u.kind === 'knockdown')
-                .every((u) => u.down)
-              if (allKnockdownsFlat) {
-                setScore((s) => s + 250)
-                setLastShotBanner('🔔 ALL STEEL RACKS CLEARED! +250 BONUS · RESETTING RACKS')
-                return updated.map((u) => ({ ...u, down: false }))
-              }
-              return updated
-            })
+            const updated = steelTargetsRef.current.map((item) =>
+              item.id === st.id
+                ? {
+                    ...item,
+                    down: item.kind === 'knockdown' ? true : false,
+                    paddleSide:
+                      item.kind === 'dueling-paddle'
+                        ? item.paddleSide === 'left'
+                          ? ('right' as const)
+                          : ('left' as const)
+                        : item.paddleSide,
+                    lastHitAt: nowMs,
+                  }
+                : item,
+            )
+            const allKnockdownsFlat = updated
+              .filter((u) => u.kind === 'knockdown')
+              .every((u) => u.down)
+            const nextSteel = allKnockdownsFlat
+              ? updated.map((u) => ({ ...u, down: false }))
+              : updated
+            steelTargetsRef.current = nextSteel
+            setSteelTargets(nextSteel)
+
+            if (allKnockdownsFlat) {
+              roundedPts += 250
+            }
 
             return {
               hit: true,
               points: roundedPts,
-              banner: `🔔 AR500 STEEL PING AT ${st.xDist}m! (+${roundedPts})`,
+              banner: allKnockdownsFlat
+                ? `🔔 ALL STEEL RACKS CLEARED! (+${roundedPts} PTS WITH BONUS · RACKS RESET)`
+                : `🔔 AR500 STEEL PING AT ${st.xDist}m! (+${roundedPts})`,
               endPoint: [plateX, hitY, hitZ],
               color: '#38BDF8',
             }
@@ -1213,8 +1260,9 @@ export function ShootingRangeRoom3D({
         }
       }
 
-      // Missed all targets -> impact downrange backstop wall at x = -41.2
-      const backstopT = Math.max(2, (-41.2 - origin.x) / dir.x)
+      // Missed all targets -> impact downrange backstop wall at firingLineX - 34.85
+      const backstopX = firingLineX - 34.85
+      const backstopT = Math.max(2, (backstopX - origin.x) / dir.x)
       return {
         hit: false,
         points: 0,
@@ -1230,7 +1278,7 @@ export function ShootingRangeRoom3D({
         color: '#64748B',
       }
     },
-    [aerialTargets, firingLineX, rangeZ, steelTargets, tacticalTargets],
+    [aerialTargets, firingLineX, rangeZ, tacticalTargets],
   )
 
   // Execute a single discharge (with single bullet or 8-pellet shotgun spread)
@@ -1250,10 +1298,13 @@ export function ShootingRangeRoom3D({
       }
 
       const nowMs = Date.now()
-      setAmmoInMag((prev) => Math.max(0, prev - 1))
+      const nextAmmo = Math.max(0, ammoRef.current - 1)
+      ammoRef.current = nextAmmo
+      setAmmoInMag(nextAmmo)
       setShotsFired((prev) => prev + 1)
 
       if (spec.id === 'shotgun-12g') {
+        shotgunNeedsPumpRef.current = true
         setShotgunNeedsPump(true)
       }
 
@@ -1348,43 +1399,49 @@ export function ShootingRangeRoom3D({
 
       if (anyHit) {
         setShotsHit((prev) => prev + 1)
-        setStreak((prevStreak) => {
-          const nextStreak = prevStreak + 1
-          setBestStreak((b) => Math.max(b, nextStreak))
-          const mult = Math.min(4, 1 + Math.floor(nextStreak / 4))
-          const awarded = Math.max(0, Math.round(totalShotPoints * mult))
-          setScore((prevScore) => {
-            const nextScore = Math.max(0, prevScore + awarded)
-            setHighScore((hs) => {
-              if (nextScore > hs) {
-                setHighScoreHolder(localDisplayName || 'Operator')
-                return nextScore
-              }
-              return hs
-            })
-            return nextScore
-          })
-          setLastShotBanner(
-            mult > 1
-              ? `${bestBanner} · 🔥 ${nextStreak} STREAK (${mult}x = +${awarded})`
-              : bestBanner,
-          )
-          setPopups((prev) => [
-            ...prev.slice(-8),
-            {
-              id: `pop-${nowMs}-${Math.random().toString(36).slice(2, 5)}`,
-              pos: bestEndPoint,
-              text: `+${awarded}`,
-              color: bestColor,
-              createdAt: nowMs,
-            },
-          ])
-          return nextStreak
-        })
+        const nextStreak = streakRef.current + 1
+        streakRef.current = nextStreak
+        setStreak(nextStreak)
+
+        if (nextStreak > bestStreakRef.current) {
+          bestStreakRef.current = nextStreak
+          setBestStreak(nextStreak)
+        }
+
+        const mult = Math.min(4, 1 + Math.floor(nextStreak / 4))
+        const awarded = Math.max(0, Math.round(totalShotPoints * mult))
+        const nextScore = Math.max(0, scoreRef.current + awarded)
+        scoreRef.current = nextScore
+        setScore(nextScore)
+
+        if (nextScore > highScoreRef.current) {
+          highScoreRef.current = nextScore
+          setHighScore(nextScore)
+          setHighScoreHolder(localDisplayName || 'Operator')
+        }
+
+        setLastShotBanner(
+          mult > 1
+            ? `${bestBanner} · 🔥 ${nextStreak} STREAK (${mult}x = +${awarded})`
+            : bestBanner,
+        )
+        setPopups((prev) => [
+          ...prev.slice(-8),
+          {
+            id: `pop-${nowMs}-${Math.random().toString(36).slice(2, 5)}`,
+            pos: bestEndPoint,
+            text: `+${awarded}`,
+            color: bestColor,
+            createdAt: nowMs,
+          },
+        ])
       } else {
+        streakRef.current = 0
         setStreak(0)
         if (totalShotPoints < 0) {
-          setScore((prev) => Math.max(0, prev + totalShotPoints))
+          const nextScore = Math.max(0, scoreRef.current + totalShotPoints)
+          scoreRef.current = nextScore
+          setScore(nextScore)
           setLastShotBanner(bestBanner)
         } else {
           setLastShotBanner('SHOT MISSED · STREAK RESET')
@@ -1559,7 +1616,7 @@ export function ShootingRangeRoom3D({
 
         // Bounce or relaunch at range boundaries
         if (
-          air.pos[0] < -39.5 ||
+          air.pos[0] < firingLineX - 33.15 ||
           air.pos[0] > firingLineX - 6.5 ||
           air.pos[1] < 0.65 ||
           air.pos[1] > 3.45 ||
@@ -1679,10 +1736,11 @@ export function ShootingRangeRoom3D({
               .crossVectors(scratchRightVec, scratchBarrelDir)
               .normalize()
 
+            scratchNegBarrelDir.copy(scratchBarrelDir).negate()
             scratchRotMat.makeBasis(
               scratchRightVec,
               scratchUpVec,
-              scratchBarrelDir.clone().negate(),
+              scratchNegBarrelDir,
             )
             weaponGrp.position.copy(scratchPrimaryPos)
             weaponGrp.quaternion.setFromRotationMatrix(scratchRotMat)
@@ -1694,6 +1752,7 @@ export function ShootingRangeRoom3D({
                   shotgunPumpArmedRef.current = true
                 } else if (shotgunPumpArmedRef.current && distHands > 0.41) {
                   shotgunPumpArmedRef.current = false
+                  shotgunNeedsPumpRef.current = false
                   setShotgunNeedsPump(false)
                   shootingRangeAudio.playPumpAction()
                   pulseControllerHaptics(secondaryCtrl, 0.75, 50)
@@ -1764,7 +1823,11 @@ export function ShootingRangeRoom3D({
         spec.gripMode === 'one-hand' || desktopTwoHandBraced
 
       // Anchor weapon at the firing line in front of the player's camera
-      const camX = THREE.MathUtils.clamp(camera.position.x, -6.35, -3.2)
+      const camX = THREE.MathUtils.clamp(
+        camera.position.x,
+        firingLineX,
+        firingLineX + 3.15,
+      )
       const camZ = THREE.MathUtils.clamp(
         camera.position.z,
         rangeZ - 3.6,
@@ -1786,10 +1849,11 @@ export function ShootingRangeRoom3D({
       scratchUpVec
         .crossVectors(scratchRightVec, scratchBarrelDir)
         .normalize()
+      scratchNegBarrelDir.copy(scratchBarrelDir).negate()
       scratchRotMat.makeBasis(
         scratchRightVec,
         scratchUpVec,
-        scratchBarrelDir.clone().negate(),
+        scratchNegBarrelDir,
       )
       weaponGrp.quaternion.setFromRotationMatrix(scratchRotMat)
 
@@ -1822,12 +1886,12 @@ export function ShootingRangeRoom3D({
   return (
     <group name="wing-shooting-range" visible={visible}>
       {/* =================================================================== */}
-      {/* 1. READY ROOM, TACTICAL ARMORY & 4 FIRING BOOTHS (x -6.4..-1.65)    */}
+      {/* 1. READY ROOM, TACTICAL ARMORY & 4 FIRING BOOTHS (x -18.4..-13.6)   */}
       {/* =================================================================== */}
       <group name="shooting-range-ready-room">
         {/* Ready Room Heavy Rubberized Tactical Floor */}
         <mesh
-          position={[-4.02, 0.005, rangeZ]}
+          position={[-16.0, 0.005, rangeZ]}
           rotation={[-Math.PI / 2, 0, 0]}
           onDoubleClick={(e) => {
             if (!onTeleportToFloor) return
@@ -1835,7 +1899,7 @@ export function ShootingRangeRoom3D({
             onTeleportToFloor([e.point.x, 0, e.point.z])
           }}
         >
-          <planeGeometry args={[4.75, 8.8]} />
+          <planeGeometry args={[4.8, 8.8]} />
           <meshStandardMaterial
             color="#1E293B"
             emissive="#0F172A"
@@ -1845,9 +1909,9 @@ export function ShootingRangeRoom3D({
           />
         </mesh>
 
-        {/* Yellow & Black High-Visibility Firing Line Safety Stripe at x = -6.15 */}
+        {/* Yellow & Black High-Visibility Firing Line Safety Stripe at x = -18.12 */}
         <mesh
-          position={[-6.12, 0.009, rangeZ]}
+          position={[firingLineX + 0.23, 0.009, rangeZ]}
           rotation={[-Math.PI / 2, 0, 0]}
           raycast={noopRaycast}
         >
@@ -1856,8 +1920,12 @@ export function ShootingRangeRoom3D({
         </mesh>
 
         {/* Ready Room Coffered Acoustic Ceiling */}
-        <mesh position={[-4.02, 3.84, rangeZ]} rotation={[Math.PI / 2, 0, 0]}>
-          <planeGeometry args={[4.75, 8.8]} />
+        <mesh
+          position={[-16.0, 3.84, rangeZ]}
+          rotation={[Math.PI / 2, 0, 0]}
+          raycast={noopRaycast}
+        >
+          <planeGeometry args={[4.8, 8.8]} />
           <meshStandardMaterial
             color="#0F172A"
             emissive="#090D16"
@@ -1868,8 +1936,12 @@ export function ShootingRangeRoom3D({
 
         {/* North & South Ready Room Partition Walls */}
         {[rangeZ - 4.4, rangeZ + 4.4].map((wz, idx) => (
-          <mesh key={idx} position={[-4.02, 1.92, wz]}>
-            <boxGeometry args={[4.75, 3.84, 0.14]} />
+          <mesh
+            key={idx}
+            position={[-16.0, 1.92, wz]}
+            raycast={noopRaycast}
+          >
+            <boxGeometry args={[4.8, 3.84, 0.14]} />
             <meshStandardMaterial
               color="#1E293B"
               emissive="#111827"
@@ -1879,11 +1951,45 @@ export function ShootingRangeRoom3D({
           </mesh>
         ))}
 
+        {/* East Ready Room Entrance Wall (x = -13.6) with 2.36m Archway into the Second Hallway */}
+        {[rangeZ - 2.79, rangeZ + 2.79].map((ez, idx) => (
+          <mesh
+            key={idx}
+            position={[-13.6, 1.92, ez]}
+            raycast={noopRaycast}
+          >
+            <boxGeometry args={[0.14, 3.84, 3.22]} />
+            <meshStandardMaterial
+              color="#1E293B"
+              emissive="#111827"
+              emissiveIntensity={0.42 * emissiveBoost}
+              roughness={0.7}
+            />
+          </mesh>
+        ))}
+        <mesh
+          position={[-13.6, 3.48, rangeZ]}
+          raycast={noopRaycast}
+        >
+          <boxGeometry args={[0.14, 0.72, 2.36]} />
+          <meshStandardMaterial
+            color="#1E293B"
+            emissive="#111827"
+            emissiveIntensity={0.42 * emissiveBoost}
+            roughness={0.7}
+          />
+        </mesh>
+
         {/* ================================================================= */}
         {/* NORTH WALL ILLUMINATED TACTICAL ARMORY RACK (1-Hand vs 2-Hand)    */}
         {/* ================================================================= */}
-        <group position={[-3.95, 1.85, rangeZ - 4.28]}>
-          <RoundedBox args={[4.1, 2.35, 0.06]} radius={0.03} smoothness={2}>
+        <group position={[-15.95, 1.85, rangeZ - 4.28]}>
+          <RoundedBox
+            args={[4.1, 2.35, 0.06]}
+            radius={0.03}
+            smoothness={2}
+            raycast={noopRaycast}
+          >
             <meshStandardMaterial
               color="#090D16"
               metalness={0.55}
@@ -1996,12 +2102,201 @@ export function ShootingRangeRoom3D({
         </group>
 
         {/* ================================================================= */}
-        {/* 4 TACTICAL FIRING LINE BOOTHS & BENCH COUNTERS (x = -6.28)        */}
+        {/* SOUTH WALL RANGE COMMAND & TARGET CONTROL CONSOLE                 */}
+        {/* Mounted on the South Ready Room Wall ([-15.95, 1.82, rangeZ+4.28])*/}
+        {/* so it NEVER blocks the downrange targets or firing line sight!    */}
+        {/* ================================================================= */}
+        <group
+          position={[-15.95, 1.82, rangeZ + 4.28]}
+          rotation={[0, Math.PI, 0]}
+        >
+          <RoundedBox
+            args={[4.1, 2.15, 0.06]}
+            radius={0.03}
+            smoothness={2}
+            raycast={noopRaycast}
+          >
+            <meshStandardMaterial
+              color="#090D16"
+              metalness={0.55}
+              roughness={0.35}
+            />
+          </RoundedBox>
+
+          <Text
+            position={[0, 0.88, 0.04]}
+            fontSize={0.088}
+            color="#FACC15"
+            anchorX="center"
+            anchorY="middle"
+          >
+            🎛️ RANGE OPERATIONS & TARGET CONTROL CONSOLE
+          </Text>
+          <Text
+            position={[0, 0.71, 0.04]}
+            fontSize={0.05}
+            color="#94A3B8"
+            anchorX="center"
+            anchorY="middle"
+          >
+            {`EQUIPPED: ${equippedWeapon.name.toUpperCase()} (${equippedWeapon.gripMode === 'two-hand' ? '2-CONTROLLER RIFLE' : '1-CONTROLLER PISTOL'}) · AMMO: ${ammoInMag}/${equippedWeapon.magCapacity}`}
+          </Text>
+
+          {/* Row 1: All 6 Weapons (3 One-Hand Pistols + 3 Two-Hand Rifles) */}
+          {RANGE_WEAPONS.map((w, idx) => (
+            <RangeButton3D
+              key={w.id}
+              label={w.shortName}
+              sublabel={w.gripMode === 'two-hand' ? '2-CTRL RIFLE' : '1-CTRL PISTOL'}
+              position={[-1.55 + idx * 0.62, 0.38, 0.04]}
+              width={0.58}
+              height={0.28}
+              active={equippedWeaponId === w.id}
+              accent={w.accentColor}
+              fontSize={0.042}
+              onClick={() => handleSelectWeapon(w.id)}
+            />
+          ))}
+
+          {/* Row 2: 4 Range Game Modes */}
+          {(
+            [
+              { id: 'precision', label: '🏅 Precision Lanes', sub: `${carrierDistanceM}m Bullseye` },
+              { id: 'steel-challenge', label: '🔔 Steel & Duel Tree', sub: 'AR500 Plates' },
+              { id: 'tactical-qual', label: '🚨 60s Qualification', sub: qualRunning ? `${qualTimeRemaining}s Left` : 'Start Drill' },
+              { id: 'skeet-drones', label: '🛸 Clay & Drones', sub: 'Aerial Intercept' },
+            ] as const
+          ).map((m, idx) => (
+            <RangeButton3D
+              key={m.id}
+              label={m.label}
+              sublabel={m.sub}
+              position={[-1.41 + idx * 0.94, -0.06, 0.04]}
+              width={0.88}
+              height={0.32}
+              active={rangeMode === m.id}
+              accent="#EF4444"
+              fontSize={0.044}
+              onClick={() => {
+                setRangeMode(m.id)
+                if (m.id === 'tactical-qual') {
+                  scoreRef.current = 0
+                  streakRef.current = 0
+                  setScore(0)
+                  setStreak(0)
+                  setQualTimeRemaining(60)
+                  setQualRunning(true)
+                  setTacticalTargets(createInitialTacticalTargets())
+                  shootingRangeAudio.playRangeBuzzer('start')
+                  setLastShotBanner(
+                    '🚨 60-SECOND QUALIFICATION STARTED! SHOOT RED/CYAN THREATS, AVOID GREEN CIVILIANS!',
+                  )
+                } else {
+                  setQualRunning(false)
+                  shootingRangeAudio.playRangeBuzzer('wave')
+                  setLastShotBanner(`RANGE MODE: ${m.label.toUpperCase()}`)
+                }
+              }}
+            />
+          ))}
+
+          {/* Row 3: Carrier Distance (10m/20m/32m), Clear Decals, Reload, 2-Hand Toggle, Laser, Audio */}
+          <RangeButton3D
+            label={`📏 Dist: ${carrierDistanceM}m`}
+            position={[-1.55, -0.52, 0.04]}
+            width={0.58}
+            height={0.26}
+            accent="#38BDF8"
+            fontSize={0.04}
+            onClick={() =>
+              setCarrierDistanceM((prev) =>
+                prev === 10 ? 20 : prev === 20 ? 32 : 10,
+              )
+            }
+          />
+          <RangeButton3D
+            label="🧹 Clear Targets"
+            position={[-0.93, -0.52, 0.04]}
+            width={0.58}
+            height={0.26}
+            accent="#64748B"
+            fontSize={0.04}
+            onClick={() => {
+              setBulletHoles([])
+              const freshSteel = createInitialSteelTargets()
+              steelTargetsRef.current = freshSteel
+              setSteelTargets(freshSteel)
+              setTacticalTargets(createInitialTacticalTargets())
+              setLastShotBanner('TARGETS RESET & BULLET HOLES PATCHED')
+            }}
+          />
+          <RangeButton3D
+            label={
+              shotgunNeedsPump
+                ? '🔄 Pump 12G!'
+                : `🔄 Reload (${ammoInMag}/${equippedWeapon.magCapacity})`
+            }
+            position={[-0.31, -0.52, 0.04]}
+            width={0.58}
+            height={0.26}
+            active={ammoInMag === 0 || shotgunNeedsPump}
+            accent="#F59E0B"
+            fontSize={0.038}
+            onClick={handleReload}
+          />
+          <RangeButton3D
+            label={
+              inVR
+                ? `🖐 Hand: ${primaryHand.toUpperCase()}`
+                : `🪖 2H Brace: ${desktopTwoHandBraced ? 'ON' : 'OFF'}`
+            }
+            position={[0.31, -0.52, 0.04]}
+            width={0.58}
+            height={0.26}
+            active={inVR ? vrTwoHandLocked : desktopTwoHandBraced}
+            accent="#22C55E"
+            fontSize={0.038}
+            onClick={() => {
+              if (inVR) {
+                setPrimaryHand((prev) => (prev === 'right' ? 'left' : 'right'))
+              } else {
+                setDesktopTwoHandBraced((prev) => !prev)
+              }
+            }}
+          />
+          <RangeButton3D
+            label={laserEnabled ? '🟢 Laser: ON' : '⚪ Laser: OFF'}
+            position={[0.93, -0.52, 0.04]}
+            width={0.58}
+            height={0.26}
+            active={laserEnabled}
+            accent="#10B981"
+            fontSize={0.04}
+            onClick={() => setLaserEnabled((prev) => !prev)}
+          />
+          <RangeButton3D
+            label={audioMuted ? '🔇 Muted' : '🔊 SFX On'}
+            position={[1.55, -0.52, 0.04]}
+            width={0.58}
+            height={0.26}
+            active={!audioMuted}
+            accent="#38BDF8"
+            fontSize={0.04}
+            onClick={() => {
+              const next = !audioMuted
+              setAudioMuted(next)
+              shootingRangeAudio.setMuted(next)
+            }}
+          />
+        </group>
+
+        {/* ================================================================= */}
+        {/* 4 TACTICAL FIRING LINE BOOTHS & BENCH COUNTERS (x = -18.28)       */}
         {/* ================================================================= */}
         {[-3.6, -1.8, 0, 1.8, 3.6].map((divOff, idx) => (
-          <group key={idx} position={[-6.05, 1.35, rangeZ + divOff]}>
+          <group key={idx} position={[firingLineX + 0.3, 1.35, rangeZ + divOff]}>
             {/* Steel Partition Post */}
-            <mesh position={[-0.28, 0, 0]}>
+            <mesh position={[-0.28, 0, 0]} raycast={noopRaycast}>
               <boxGeometry args={[0.12, 2.7, 0.08]} />
               <meshStandardMaterial color="#334155" metalness={0.7} roughness={0.3} />
             </mesh>
@@ -2016,8 +2311,9 @@ export function ShootingRangeRoom3D({
         {/* Continuous Padded Ballistic Shooting Counter across the 4 Lanes */}
         <RoundedBox
           args={[0.58, 0.08, 7.6]}
-          position={[-6.28, 0.94, rangeZ]}
+          position={[firingLineX + 0.07, 0.94, rangeZ]}
           radius={0.02}
+          raycast={noopRaycast}
         >
           <meshStandardMaterial
             color="#1E293B"
@@ -2026,10 +2322,87 @@ export function ShootingRangeRoom3D({
           />
         </RoundedBox>
         {/* Lower Knee Wall Barrier Preventing Walking Downrange */}
-        <mesh position={[-6.42, 0.46, rangeZ]}>
+        <mesh position={[firingLineX - 0.07, 0.46, rangeZ]} raycast={noopRaycast}>
           <boxGeometry args={[0.18, 0.92, 8.6]} />
           <meshStandardMaterial color="#0F172A" roughness={0.75} />
         </mesh>
+
+        {/* Low-Profile Flat Benchtop Quick-Control Strip (y = 0.99m, flat on counter — NEVER blocks downrange sightline!) */}
+        <group
+          position={[firingLineX + 0.16, 0.99, rangeZ]}
+          rotation={[0, Math.PI / 2, 0]}
+        >
+          <group rotation={[-1.25, 0, 0]}>
+            <RoundedBox
+              args={[1.56, 0.16, 0.015]}
+              radius={0.01}
+              raycast={noopRaycast}
+            >
+              <meshStandardMaterial color="#090D16" metalness={0.5} roughness={0.35} />
+            </RoundedBox>
+            <RangeButton3D
+              label={`📏 ${carrierDistanceM}m`}
+              position={[-0.58, 0, 0.012]}
+              width={0.34}
+              height={0.11}
+              accent="#38BDF8"
+              fontSize={0.025}
+              onClick={() =>
+                setCarrierDistanceM((prev) =>
+                  prev === 10 ? 20 : prev === 20 ? 32 : 10,
+                )
+              }
+            />
+            <RangeButton3D
+              label={`🎯 Mode: ${rangeMode === 'precision' ? 'Bullseye' : rangeMode === 'steel-challenge' ? 'Steel' : rangeMode === 'tactical-qual' ? '60s Qual' : 'Clay/Drone'}`}
+              position={[-0.12, 0, 0.012]}
+              width={0.5}
+              height={0.11}
+              accent="#EF4444"
+              fontSize={0.024}
+              onClick={() => {
+                const modes: RangeGameModeId[] = [
+                  'precision',
+                  'steel-challenge',
+                  'tactical-qual',
+                  'skeet-drones',
+                ]
+                const next = modes[(modes.indexOf(rangeMode) + 1) % modes.length]
+                setRangeMode(next)
+                setQualRunning(next === 'tactical-qual')
+                if (next === 'tactical-qual') {
+                  setQualTimeRemaining(60)
+                  setTacticalTargets(createInitialTacticalTargets())
+                }
+              }}
+            />
+            <RangeButton3D
+              label={shotgunNeedsPump ? '🔄 Pump!' : `🔄 Reload (${ammoInMag})`}
+              position={[0.35, 0, 0.012]}
+              width={0.36}
+              height={0.11}
+              active={ammoInMag === 0 || shotgunNeedsPump}
+              accent="#F59E0B"
+              fontSize={0.024}
+              onClick={handleReload}
+            />
+            <RangeButton3D
+              label="🧹 Reset"
+              position={[0.66, 0, 0.012]}
+              width={0.22}
+              height={0.11}
+              accent="#64748B"
+              fontSize={0.024}
+              onClick={() => {
+                setBulletHoles([])
+                const freshSteel = createInitialSteelTargets()
+                steelTargetsRef.current = freshSteel
+                setSteelTargets(freshSteel)
+                setTacticalTargets(createInitialTacticalTargets())
+              }}
+            />
+          </group>
+        </group>
 
         {/* 4 Click-to-Stand Booth Floor Mats */}
         {boothSeats.map((seat, idx) => {
@@ -2068,180 +2441,20 @@ export function ShootingRangeRoom3D({
         })}
 
         {/* ================================================================= */}
-        {/* FIRING LINE INTERACTIVE COMMAND & WEAPON CONSOLE                  */}
-        {/* Mounted at [-6.12, 1.12, rangeZ] angled toward the shooter        */}
+        {/* HIGH-MOUNTED OVERHEAD DIGITAL TELEMETRY & SCOREBOARD GANTRY       */}
+        {/* Mounted high at y = 3.42m above the firing line opening so the    */}
+        {/* entire vertical window (y = 0.98m..3.10m) is 100% unobstructed!   */}
         {/* ================================================================= */}
         <group
-          position={[-6.05, 1.12, rangeZ]}
+          position={[firingLineX + 0.03, 3.42, rangeZ]}
           rotation={[0, Math.PI / 2, 0]}
         >
-          <group rotation={[-0.52, 0, 0]}>
-            <RoundedBox args={[2.55, 0.68, 0.03]} radius={0.02} smoothness={2}>
-              <meshStandardMaterial
-                color="#090D16"
-                metalness={0.5}
-                roughness={0.35}
-              />
-            </RoundedBox>
-
-            <Text
-              position={[0, 0.27, 0.02]}
-              fontSize={0.034}
-              color="#FACC15"
-              anchorX="center"
-              anchorY="middle"
-            >
-              {`🎯 FIRING LINE CONTROL DECK · EQUIPPED: ${equippedWeapon.shortName.toUpperCase()} (${equippedWeapon.gripMode === 'two-hand' ? '2-CONTROLLER RIFLE' : '1-CONTROLLER PISTOL'}) · AMMO: ${ammoInMag}/${equippedWeapon.magCapacity}`}
-            </Text>
-
-            {/* Row 1: All 6 Weapons (3 One-Hand Pistols + 3 Two-Hand Rifles) */}
-            {RANGE_WEAPONS.map((w, idx) => (
-              <RangeButton3D
-                key={w.id}
-                label={w.shortName}
-                sublabel={w.gripMode === 'two-hand' ? '2-CTRL RIFLE' : '1-CTRL PISTOL'}
-                position={[-1.02 + idx * 0.408, 0.12, 0.02]}
-                width={0.385}
-                height={0.13}
-                active={equippedWeaponId === w.id}
-                accent={w.accentColor}
-                fontSize={0.026}
-                onClick={() => handleSelectWeapon(w.id)}
-              />
-            ))}
-
-            {/* Row 2: 4 Range Game Modes */}
-            {(
-              [
-                { id: 'precision', label: '🏅 Precision Lanes', sub: `${carrierDistanceM}m Bullseye` },
-                { id: 'steel-challenge', label: '🔔 Steel & Duel Tree', sub: 'AR500 Plates' },
-                { id: 'tactical-qual', label: '🚨 60s Qualification', sub: qualRunning ? `${qualTimeRemaining}s Left` : 'Start Drill' },
-                { id: 'skeet-drones', label: '🛸 Clay & Drones', sub: 'Aerial Intercept' },
-              ] as const
-            ).map((m, idx) => (
-              <RangeButton3D
-                key={m.id}
-                label={m.label}
-                sublabel={m.sub}
-                position={[-0.9 + idx * 0.6, -0.05, 0.02]}
-                width={0.56}
-                height={0.13}
-                active={rangeMode === m.id}
-                accent="#EF4444"
-                fontSize={0.026}
-                onClick={() => {
-                  setRangeMode(m.id)
-                  if (m.id === 'tactical-qual') {
-                    setScore(0)
-                    setStreak(0)
-                    setQualTimeRemaining(60)
-                    setQualRunning(true)
-                    setTacticalTargets(createInitialTacticalTargets())
-                    shootingRangeAudio.playRangeBuzzer('start')
-                    setLastShotBanner(
-                      '🚨 60-SECOND QUALIFICATION STARTED! SHOOT RED/CYAN THREATS, AVOID GREEN CIVILIANS!',
-                    )
-                  } else {
-                    setQualRunning(false)
-                    shootingRangeAudio.playRangeBuzzer('wave')
-                    setLastShotBanner(`RANGE MODE: ${m.label.toUpperCase()}`)
-                  }
-                }}
-              />
-            ))}
-
-            {/* Row 3: Carrier Distance (10m/20m/32m), Clear Decals, Reload, 2-Hand Toggle, VR Hand, Fire */}
-            <RangeButton3D
-              label={`📏 Dist: ${carrierDistanceM}m`}
-              position={[-1.02, -0.22, 0.02]}
-              width={0.38}
-              height={0.11}
-              accent="#38BDF8"
-              onClick={() =>
-                setCarrierDistanceM((prev) =>
-                  prev === 10 ? 20 : prev === 20 ? 32 : 10,
-                )
-              }
-            />
-            <RangeButton3D
-              label="🧹 Clear Targets"
-              position={[-0.61, -0.22, 0.02]}
-              width={0.38}
-              height={0.11}
-              accent="#64748B"
-              onClick={() => {
-                setBulletHoles([])
-                setSteelTargets(createInitialSteelTargets())
-                setTacticalTargets(createInitialTacticalTargets())
-                setLastShotBanner('TARGETS RESET & BULLET HOLES PATCHED')
-              }}
-            />
-            <RangeButton3D
-              label={
-                shotgunNeedsPump
-                  ? '🔄 Pump 12G!'
-                  : `🔄 Reload (${ammoInMag}/${equippedWeapon.magCapacity})`
-              }
-              position={[-0.18, -0.22, 0.02]}
-              width={0.42}
-              height={0.11}
-              active={ammoInMag === 0 || shotgunNeedsPump}
-              accent="#F59E0B"
-              onClick={handleReload}
-            />
-            <RangeButton3D
-              label={
-                inVR
-                  ? `🖐 VR Hand: ${primaryHand.toUpperCase()}`
-                  : `🪖 2H Brace: ${desktopTwoHandBraced ? 'ON' : 'OFF'}`
-              }
-              position={[0.26, -0.22, 0.02]}
-              width={0.4}
-              height={0.11}
-              active={inVR ? vrTwoHandLocked : desktopTwoHandBraced}
-              accent="#22C55E"
-              onClick={() => {
-                if (inVR) {
-                  setPrimaryHand((prev) => (prev === 'right' ? 'left' : 'right'))
-                } else {
-                  setDesktopTwoHandBraced((prev) => !prev)
-                }
-              }}
-            />
-            <RangeButton3D
-              label={laserEnabled ? '🟢 Laser: ON' : '⚪ Laser: OFF'}
-              position={[0.66, -0.22, 0.02]}
-              width={0.34}
-              height={0.11}
-              active={laserEnabled}
-              accent="#10B981"
-              onClick={() => setLaserEnabled((prev) => !prev)}
-            />
-            <RangeButton3D
-              label={audioMuted ? '🔇 Muted' : '🔊 SFX On'}
-              position={[1.03, -0.22, 0.02]}
-              width={0.34}
-              height={0.11}
-              active={!audioMuted}
-              accent="#38BDF8"
-              onClick={() => {
-                const next = !audioMuted
-                setAudioMuted(next)
-                shootingRangeAudio.setMuted(next)
-              }}
-            />
-          </group>
-        </group>
-
-        {/* ================================================================= */}
-        {/* OVERHEAD DIGITAL RANGE TELEMETRY & SCOREBOARD GANTRY              */}
-        {/* Mounted above the firing line at [-6.32, 3.12, rangeZ]            */}
-        {/* ================================================================= */}
-        <group
-          position={[-6.32, 3.12, rangeZ]}
-          rotation={[0, Math.PI / 2, 0]}
-        >
-          <RoundedBox args={[5.8, 0.92, 0.08]} radius={0.03} smoothness={2}>
+          <RoundedBox
+            args={[5.8, 0.64, 0.08]}
+            radius={0.03}
+            smoothness={2}
+            raycast={noopRaycast}
+          >
             <meshStandardMaterial
               color="#090D16"
               metalness={0.6}
@@ -2249,8 +2462,8 @@ export function ShootingRangeRoom3D({
             />
           </RoundedBox>
           <Text
-            position={[0, 0.31, 0.05]}
-            fontSize={0.095}
+            position={[0, 0.21, 0.05]}
+            fontSize={0.078}
             color="#EF4444"
             anchorX="center"
             anchorY="middle"
@@ -2258,8 +2471,8 @@ export function ShootingRangeRoom3D({
             🎯 VR LOUNGE BALLISTICS RANGE · LIVE TELEMETRY
           </Text>
           <Text
-            position={[-2.65, 0.08, 0.05]}
-            fontSize={0.072}
+            position={[-2.65, 0.04, 0.05]}
+            fontSize={0.062}
             color="#F8FAFC"
             anchorX="left"
             anchorY="middle"
@@ -2267,8 +2480,8 @@ export function ShootingRangeRoom3D({
             {`SCORE: ${score}   |   BEST: ${highScore} (${highScoreHolder})`}
           </Text>
           <Text
-            position={[0.35, 0.08, 0.05]}
-            fontSize={0.072}
+            position={[0.35, 0.04, 0.05]}
+            fontSize={0.062}
             color="#38BDF8"
             anchorX="left"
             anchorY="middle"
@@ -2276,15 +2489,15 @@ export function ShootingRangeRoom3D({
             {`ACCURACY: ${accuracyPct}% (${shotsHit}/${shotsFired})   |   STREAK: ${streak}x (MAX ${bestStreak}x)`}
           </Text>
           <Text
-            position={[-2.65, -0.14, 0.05]}
-            fontSize={0.062}
+            position={[0, -0.11, 0.05]}
+            fontSize={0.052}
             color={
               equippedWeapon.gripMode === 'two-hand' ? '#22C55E' : '#FACC15'
             }
-            anchorX="left"
+            anchorX="center"
             anchorY="middle"
           >
-            {`WEAPON: ${equippedWeapon.name.toUpperCase()}  ·  AMMO: ${ammoInMag}/${equippedWeapon.magCapacity}  ·  CONFIG: ${
+            {`WEAPON: ${equippedWeapon.name.toUpperCase()} · AMMO: ${ammoInMag}/${equippedWeapon.magCapacity} · ${
               equippedWeapon.gripMode === 'two-hand'
                 ? inVR
                   ? vrTwoHandLocked
@@ -2297,8 +2510,8 @@ export function ShootingRangeRoom3D({
             }`}
           </Text>
           <Text
-            position={[0, -0.33, 0.05]}
-            fontSize={0.058}
+            position={[0, -0.24, 0.05]}
+            fontSize={0.05}
             color="#FDE047"
             anchorX="center"
             anchorY="middle"
@@ -2309,16 +2522,33 @@ export function ShootingRangeRoom3D({
       </group>
 
       {/* =================================================================== */}
-      {/* 2. 35-METER BALLISTIC DOWNRANGE BAY (x in [-41.5, -6.35])           */}
-      {/* Clicking anywhere downrange aims & fires your equipped weapon!      */}
+      {/* 2. 35-METER BALLISTIC DOWNRANGE BAY (x in [-53.55, -18.35])         */}
+      {/* Dedicated aim plane captures desktop clicks without raycasting      */}
+      {/* against dynamic target sub-meshes or tracers!                       */}
       {/* =================================================================== */}
-      <group
-        name="shooting-range-downrange-bay"
-        onPointerMove={handleRangePointerMove}
-        onPointerDown={handleRangePointerDown}
-      >
+      <group name="shooting-range-downrange-bay">
+        {/* Single Lightweight Downrange Aim & Click Plane for Desktop/Pointer Shooting */}
+        <mesh
+          position={[firingLineX - 18.0, 1.85, rangeZ]}
+          rotation={[0, Math.PI / 2, 0]}
+          onPointerMove={handleRangePointerMove}
+          onPointerDown={handleRangePointerDown}
+        >
+          <planeGeometry args={[8.8, 3.8]} />
+          <meshBasicMaterial
+            color="#000000"
+            transparent
+            opacity={0}
+            depthWrite={false}
+          />
+        </mesh>
+
         {/* Downrange Concrete Ballistic Floor */}
-        <mesh position={[-23.9, 0.004, rangeZ]} rotation={[-Math.PI / 2, 0, 0]}>
+        <mesh
+          position={[firingLineX - 17.55, 0.004, rangeZ]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          raycast={noopRaycast}
+        >
           <planeGeometry args={[35.2, 8.8]} />
           <meshStandardMaterial
             color="#111827"
@@ -2329,14 +2559,22 @@ export function ShootingRangeRoom3D({
         </mesh>
 
         {/* Downrange Ceiling & Acoustic Baffles */}
-        <mesh position={[-23.9, 3.84, rangeZ]} rotation={[Math.PI / 2, 0, 0]}>
+        <mesh
+          position={[firingLineX - 17.55, 3.84, rangeZ]}
+          rotation={[Math.PI / 2, 0, 0]}
+          raycast={noopRaycast}
+        >
           <planeGeometry args={[35.2, 8.8]} />
           <meshStandardMaterial color="#090D16" roughness={0.9} />
         </mesh>
 
         {/* North & South Downrange Concrete Side Walls */}
         {[rangeZ - 4.4, rangeZ + 4.4].map((wz, idx) => (
-          <mesh key={idx} position={[-23.9, 1.92, wz]}>
+          <mesh
+            key={idx}
+            position={[firingLineX - 17.55, 1.92, wz]}
+            raycast={noopRaycast}
+          >
             <boxGeometry args={[35.2, 3.84, 0.16]} />
             <meshStandardMaterial
               color="#1E293B"
@@ -2347,10 +2585,11 @@ export function ShootingRangeRoom3D({
           </mesh>
         ))}
 
-        {/* Angled Steel & Kevlar Bullet-Trap Backstop Wall at x = -41.4 */}
+        {/* Angled Steel & Kevlar Bullet-Trap Backstop Wall at firingLineX - 34.85 */}
         <mesh
-          position={[-41.2, 1.92, rangeZ]}
+          position={[firingLineX - 34.85, 1.92, rangeZ]}
           rotation={[0, 0, -0.18]}
+          raycast={noopRaycast}
         >
           <boxGeometry args={[0.45, 4.1, 8.8]} />
           <meshStandardMaterial
@@ -2362,14 +2601,14 @@ export function ShootingRangeRoom3D({
 
         {/* Downrange Zone Lighting & Distance Marker Stripes (10m, 15m, 20m, 25m, 32m) */}
         <pointLight
-          position={[-16.4, 3.45, rangeZ]}
+          position={[firingLineX - 10.05, 3.45, rangeZ]}
           color="#E2E8F0"
           intensity={22 * emissiveBoost}
           distance={26}
           decay={1.2}
         />
         <pointLight
-          position={[-31.4, 3.45, rangeZ]}
+          position={[firingLineX - 25.05, 3.45, rangeZ]}
           color="#BAE6FD"
           intensity={20 * emissiveBoost}
           distance={26}
@@ -2417,7 +2656,7 @@ export function ShootingRangeRoom3D({
         {[-2.7, -0.9, 0.9, 2.7].map((off, idx) => (
           <mesh
             key={idx}
-            position={[-23.5, 3.25, rangeZ + off]}
+            position={[firingLineX - 17.15, 3.25, rangeZ + off]}
             raycast={noopRaycast}
           >
             <boxGeometry args={[33.5, 0.045, 0.05]} />
@@ -2445,7 +2684,7 @@ export function ShootingRangeRoom3D({
 
               {/* Paper Target Backing Board (Faces +X toward firing line) */}
               <group position={[0, 1.56, 0]} rotation={[0, Math.PI / 2, 0]}>
-                <mesh>
+                <mesh raycast={noopRaycast}>
                   <boxGeometry args={[0.78, 1.08, 0.025]} />
                   <meshStandardMaterial color="#F8FAFC" roughness={0.85} />
                 </mesh>
@@ -2515,7 +2754,10 @@ export function ShootingRangeRoom3D({
         {/* ================================================================= */}
         <group visible={rangeMode === 'steel-challenge'}>
           {/* Central Dueling Tree Vertical Steel Post at 16m */}
-          <mesh position={[firingLineX - 16, 1.25, rangeZ + 0.6]}>
+          <mesh
+            position={[firingLineX - 16, 1.25, rangeZ + 0.6]}
+            raycast={noopRaycast}
+          >
             <boxGeometry args={[0.09, 2.5, 0.09]} />
             <meshStandardMaterial color="#475569" metalness={0.8} roughness={0.3} />
           </mesh>
@@ -2534,7 +2776,7 @@ export function ShootingRangeRoom3D({
               <group key={st.id} position={[worldX, 0, worldZ]}>
                 {/* Steel Stand Post for Knockdown Plates */}
                 {st.kind === 'knockdown' && (
-                  <mesh position={[0, st.baseY / 2, 0]}>
+                  <mesh position={[0, st.baseY / 2, 0]} raycast={noopRaycast}>
                     <cylinderGeometry args={[0.03, 0.04, st.baseY, 8]} />
                     <meshStandardMaterial color="#334155" metalness={0.7} />
                   </mesh>
@@ -2548,6 +2790,7 @@ export function ShootingRangeRoom3D({
                     0,
                     st.down ? -Math.PI / 2.1 : Math.PI / 2,
                   ]}
+                  raycast={noopRaycast}
                 >
                   <cylinderGeometry args={[st.radius, st.radius, 0.025, 20]} />
                   <meshStandardMaterial
@@ -2600,7 +2843,7 @@ export function ShootingRangeRoom3D({
                 position={[worldX, 0, rangeZ + tac.baseZOffset]}
               >
                 {/* Motorized Floor Track & Cover Barricade */}
-                <mesh position={[0.18, 0.45, 0]}>
+                <mesh position={[0.18, 0.45, 0]} raycast={noopRaycast}>
                   <boxGeometry args={[0.08, 0.9, 0.85]} />
                   <meshStandardMaterial color="#1E293B" roughness={0.8} />
                 </mesh>
@@ -2615,6 +2858,7 @@ export function ShootingRangeRoom3D({
                     args={[0.03, 0.68, 0.52]}
                     position={[0, 0.38, 0]}
                     radius={0.01}
+                    raycast={noopRaycast}
                   >
                     <meshStandardMaterial color={bodyColor} roughness={0.5} />
                   </RoundedBox>
@@ -2623,6 +2867,7 @@ export function ShootingRangeRoom3D({
                     args={[0.03, 0.24, 0.24]}
                     position={[0, 0.86, 0]}
                     radius={0.01}
+                    raycast={noopRaycast}
                   >
                     <meshStandardMaterial color={bodyColor} roughness={0.5} />
                   </RoundedBox>
@@ -2670,13 +2915,13 @@ export function ShootingRangeRoom3D({
               position={air.pos}
             >
               {air.kind === 'clay' ? (
-                <mesh>
+                <mesh raycast={noopRaycast}>
                   <cylinderGeometry args={[0.28, 0.32, 0.08, 16]} />
                   <meshBasicMaterial color="#F97316" />
                 </mesh>
               ) : (
                 <group>
-                  <mesh>
+                  <mesh raycast={noopRaycast}>
                     <sphereGeometry args={[0.22, 12, 12]} />
                     <meshStandardMaterial
                       color="#0F172A"
@@ -2684,7 +2929,7 @@ export function ShootingRangeRoom3D({
                       emissiveIntensity={0.6}
                     />
                   </mesh>
-                  <mesh rotation={[Math.PI / 2, 0, 0]}>
+                  <mesh rotation={[Math.PI / 2, 0, 0]} raycast={noopRaycast}>
                     <torusGeometry args={[0.32, 0.025, 8, 20]} />
                     <meshBasicMaterial color="#38BDF8" />
                   </mesh>
@@ -2698,11 +2943,11 @@ export function ShootingRangeRoom3D({
         {/* LIVE BALLISTIC TRACER STREAKS & FLOATING SCORE POPUPS             */}
         {/* ================================================================= */}
         {tracers.map((tr) => (
-          <Line
+          <TracerBeam3D
             key={tr.id}
-            points={[tr.from, tr.to]}
+            from={tr.from}
+            to={tr.to}
             color={tr.color}
-            lineWidth={2.4}
           />
         ))}
 
@@ -2743,14 +2988,18 @@ export function ShootingRangeRoom3D({
           laserLength={22}
         />
 
-        {/* Floating Holographic Weapon HUD above Receiver */}
-        <group position={[0, 0.11, -0.08]}>
-          <RoundedBox args={[0.22, 0.048, 0.006]} radius={0.006}>
+        {/* Compact Wrist/Rear-Receiver Status Readout (positioned below top sight rail so iron sights/scopes are 100% clear) */}
+        <group position={[0, -0.022, 0.095]}>
+          <RoundedBox
+            args={[0.18, 0.036, 0.004]}
+            radius={0.005}
+            raycast={noopRaycast}
+          >
             <meshBasicMaterial color="#090D16" transparent opacity={0.82} />
           </RoundedBox>
           <Text
-            position={[0, 0.008, 0.005]}
-            fontSize={0.013}
+            position={[0, 0.006, 0.004]}
+            fontSize={0.011}
             color={ammoInMag === 0 ? '#EF4444' : equippedWeapon.accentColor}
             anchorX="center"
             anchorY="middle"
@@ -2762,8 +3011,8 @@ export function ShootingRangeRoom3D({
                 : `${equippedWeapon.shortName} · ${ammoInMag}/${equippedWeapon.magCapacity}`}
           </Text>
           <Text
-            position={[0, -0.01, 0.005]}
-            fontSize={0.0095}
+            position={[0, -0.008, 0.004]}
+            fontSize={0.008}
             color={
               equippedWeapon.gripMode === 'two-hand'
                 ? inVR
@@ -2779,12 +3028,12 @@ export function ShootingRangeRoom3D({
             {equippedWeapon.gripMode === 'two-hand'
               ? inVR
                 ? vrTwoHandLocked
-                  ? '2-CONTROLLER GRIP LOCKED'
-                  : 'GRIP BARREL W/ 2ND CONTROLLER'
+                  ? '2-CTRL LOCKED'
+                  : 'GRIP W/ 2ND CTRL'
                 : desktopTwoHandBraced
-                  ? '2-HAND RIFLE BRACED [V]'
-                  : '1-HAND UNBRACED [V]'
-              : '1-CONTROLLER HANDGUN'}
+                  ? '2H BRACED [V]'
+                  : 'UNBRACED [V]'
+              : '1-CTRL HANDGUN'}
           </Text>
         </group>
       </group>

@@ -448,8 +448,10 @@ const JSNES_BUTTON_MAP: Record<NesButtonId, number> = {
   right: Controller.BUTTON_RIGHT,
 }
 
-const AUDIO_BUFFER_SIZE = 8192
+const AUDIO_BUFFER_SIZE = 16384
 const AUDIO_BUFFER_MASK = AUDIO_BUFFER_SIZE - 1
+const TARGET_AUDIO_BUFFER_SAMPLES = 2200
+const MAX_AUDIO_LEAD_SAMPLES = 4400
 
 const romBinaryCache = new Map<string, string>()
 
@@ -533,7 +535,6 @@ function createSafeCanvas(width: number, height: number): {
 
 export type NesConsumerId = 'screen' | 'modal' | 'vr-console'
 
-const MAX_AUDIO_LEAD_SAMPLES = 1800
 const BUTTON_BIT_BY_ID: Record<NesButtonId, number> = {
   a: 1 << 0,
   b: 1 << 1,
@@ -557,6 +558,7 @@ class NesEmulatorSingleton {
   private nesCore: NES | null = null
   private romLoaded = false
   private frameDirty = false
+  private latestFrameBuffer: ArrayLike<number> | null = null
   private loadingRomId: string | null = null
   private activeCartridge: NesCartridgeMeta = NES_LIBRARY_CARTRIDGES[0]
   private customRomName: string | null = null
@@ -569,7 +571,7 @@ class NesEmulatorSingleton {
   private paused = false
   private soundEnabled = true
   private masterVolume = 0.75
-  private targetSampleRate = 44100
+  private targetSampleRate = 48000
 
   // Real NES PAPU WebAudio low-latency ring buffer
   private audioCtx: AudioContext | null = null
@@ -580,8 +582,10 @@ class NesEmulatorSingleton {
   private audioSamplesR = new Float32Array(AUDIO_BUFFER_SIZE)
   private audioWriteIdx = 0
   private audioReadIdx = 0
+  private audioReadFrac = 0
   private lastSampleL = 0
   private lastSampleR = 0
+  private isSteppingAudioCatchup = false
 
   // Explicit Controller Engagement & Two-Player Input Routing
   // engagedPlayerSlot = null when Quest controllers / keyboard are in normal VR locomotion mode;
@@ -638,27 +642,59 @@ class NesEmulatorSingleton {
   private flushPendingFrameToTexture() {
     if (!this.frameDirty) return
     this.frameDirty = false
+    const frameBuffer = this.latestFrameBuffer
+    if (frameBuffer) {
+      const buf32 = this.romBuf32
+      for (let i = 0; i < 61440; i++) {
+        buf32[i] = 0xff000000 | frameBuffer[i]
+      }
+    }
     this.ctx.putImageData(this.romImageData, 0, 0)
     this.texture.needsUpdate = true
   }
 
+  /**
+   * Synchronizes `jsnes` PAPU hardware timer (`sampleRate` and `sampleTimerMax`)
+   * with the actual `AudioContext.sampleRate` (typically 48000 Hz on Meta Quest & modern browsers),
+   * including after save-state restoration where `fromJSON` may overwrite `sampleTimerMax`.
+   */
+  private syncPapuSampleRate() {
+    const rate = this.audioCtx?.sampleRate || this.targetSampleRate || 48000
+    this.targetSampleRate = rate
+    if (!this.nesCore) return
+    const core = this.nesCore as unknown as {
+      opts?: { sampleRate?: number }
+      papu?: {
+        sampleRate?: number
+        sampleTimerMax?: number
+        setSampleRate?: (r: number, reset: boolean) => void
+      }
+    }
+    if (core.opts) {
+      core.opts.sampleRate = rate
+    }
+    if (core.papu) {
+      core.papu.sampleRate = rate
+      core.papu.sampleTimerMax = Math.floor((1024.0 * 1789772.5) / rate)
+      if (typeof core.papu.setSampleRate === 'function') {
+        core.papu.setSampleRate(rate, false)
+      }
+    }
+  }
+
   private createNesCore(): NES {
-    const sampleRate = this.audioCtx?.sampleRate || this.targetSampleRate || 44100
+    const sampleRate = this.audioCtx?.sampleRate || this.targetSampleRate || 48000
     this.targetSampleRate = sampleRate
-    const buf32 = this.romBuf32
     return new NES({
       sampleRate,
       onFrame: (frameBuffer: ArrayLike<number>) => {
-        for (let i = 0; i < 61440; i++) {
-          buf32[i] = 0xff000000 | frameBuffer[i]
-        }
+        this.latestFrameBuffer = frameBuffer
         this.frameDirty = true
       },
       onAudioSample: (left: number, right: number) => {
         if (!this.soundEnabled || this.masterVolume <= 0.001) return
         const writeIdx = this.audioWriteIdx
         const nextWrite = (writeIdx + 1) & AUDIO_BUFFER_MASK
-        // Prevent ring-buffer lead from exceeding ~38ms so audio never lags behind video
         const buffered = (writeIdx - this.audioReadIdx) & AUDIO_BUFFER_MASK
         if (buffered >= MAX_AUDIO_LEAD_SAMPLES || nextWrite === this.audioReadIdx) {
           this.audioReadIdx = (this.audioReadIdx + 1) & AUDIO_BUFFER_MASK
@@ -680,54 +716,102 @@ class NesEmulatorSingleton {
             .webkitAudioContext
         if (!Ctor) return
         this.audioCtx = new Ctor({ latencyHint: 'interactive' })
-        this.targetSampleRate = this.audioCtx.sampleRate || 44100
-        // Synchronize JSNES PAPU sample rate to exact hardware AudioContext rate so buffer never starves or drifts
-        const papu = (
-          this.nesCore as unknown as {
-            papu?: { sampleRate?: number; setSampleRate?: (rate: number, reset: boolean) => void }
-          }
-        )?.papu
-        if (
-          papu &&
-          typeof papu.setSampleRate === 'function' &&
-          papu.sampleRate !== this.targetSampleRate
-        ) {
-          papu.setSampleRate(this.targetSampleRate, false)
-        }
+        this.targetSampleRate = this.audioCtx.sampleRate || 48000
+        this.syncPapuSampleRate()
 
         this.gainNode = this.audioCtx.createGain()
         this.gainNode.gain.value = this.soundEnabled ? this.masterVolume * 0.35 : 0
-        // 512-sample buffer (~10.6ms at 48kHz) for crisp, zero-lag retro audio
-        this.scriptNode = this.audioCtx.createScriptProcessor(512, 0, 2)
+        // 1024-sample buffer (~21.3ms at 48kHz) with adaptive fractional rate control and underrun refill
+        this.scriptNode = this.audioCtx.createScriptProcessor(1024, 0, 2)
         this.scriptNode.onaudioprocess = (e) => {
           const outL = e.outputBuffer.getChannelData(0)
           const outR = e.outputBuffer.getChannelData(1)
+          const len = outL.length
+          const active =
+            !this.paused &&
+            this.soundEnabled &&
+            this.romLoaded &&
+            this.nesCore !== null &&
+            this.activeConsumers.size > 0
+
+          if (active && !this.isSteppingAudioCatchup) {
+            let avail = (this.audioWriteIdx - this.audioReadIdx) & AUDIO_BUFFER_MASK
+            let catchupSteps = 0
+            // Just like official jsnes.Browser onBufferUnderrun, if the ring buffer is below 1 callback quantum,
+            // generate 1-2 hardware frames immediately so the audio output never starves or stutters.
+            this.isSteppingAudioCatchup = true
+            try {
+              while (avail < len + 192 && catchupSteps < 2 && this.nesCore) {
+                this.nesCore.frame()
+                this.framesSteppedOnCurrentCartridge++
+                this.frameAccumulator = Math.max(
+                  0,
+                  this.frameAccumulator - 1 / 60.0988,
+                )
+                avail = (this.audioWriteIdx - this.audioReadIdx) & AUDIO_BUFFER_MASK
+                catchupSteps++
+              }
+            } finally {
+              this.isSteppingAudioCatchup = false
+            }
+          }
+
           let rIdx = this.audioReadIdx
           const wIdx = this.audioWriteIdx
+          let frac = this.audioReadFrac
           let sL = this.lastSampleL
           let sR = this.lastSampleR
-          const active = !this.paused && this.soundEnabled
+          let avail = (wIdx - rIdx) & AUDIO_BUFFER_MASK
 
-          for (let i = 0; i < outL.length; i++) {
-            if (active && rIdx !== wIdx) {
+          // Smooth dynamic rate control (0.985x .. 1.018x) locks buffer fill to TARGET_AUDIO_BUFFER_SAMPLES
+          // without audible pitch shift or sample drop clicks across 60Hz, 72Hz, and 90Hz VR refresh rates.
+          const fillError =
+            (avail - TARGET_AUDIO_BUFFER_SAMPLES) / TARGET_AUDIO_BUFFER_SAMPLES
+          const stepRate = Math.max(
+            0.985,
+            Math.min(1.018, 1.0 + fillError * 0.015),
+          )
+
+          for (let i = 0; i < len; i++) {
+            if (active && avail >= 2) {
+              const nextIdx = (rIdx + 1) & AUDIO_BUFFER_MASK
+              const aL = this.audioSamplesL[rIdx]
+              const bL = this.audioSamplesL[nextIdx]
+              const aR = this.audioSamplesR[rIdx]
+              const bR = this.audioSamplesR[nextIdx]
+              sL = aL + (bL - aL) * frac
+              sR = aR + (bR - aR) * frac
+
+              frac += stepRate
+              while (frac >= 1.0 && avail >= 2) {
+                frac -= 1.0
+                rIdx = (rIdx + 1) & AUDIO_BUFFER_MASK
+                avail--
+              }
+            } else if (active && avail === 1) {
               sL = this.audioSamplesL[rIdx]
               sR = this.audioSamplesR[rIdx]
               rIdx = (rIdx + 1) & AUDIO_BUFFER_MASK
+              avail = 0
+              frac = 0
             } else {
-              // Smooth exponential decay on underrun eliminates audible clicks/pops
+              // Smooth exponential decay on pause/silence
               sL *= 0.96
               sR *= 0.96
+              frac = 0
             }
             outL[i] = sL
             outR[i] = sR
           }
           this.audioReadIdx = rIdx
+          this.audioReadFrac = frac
           this.lastSampleL = sL
           this.lastSampleR = sR
         }
         this.scriptNode.connect(this.gainNode)
         this.gainNode.connect(this.audioCtx.destination)
       }
+      this.syncPapuSampleRate()
       if (this.audioCtx.state === 'suspended') {
         void this.audioCtx.resume().catch(() => undefined)
       }
@@ -875,6 +959,8 @@ class NesEmulatorSingleton {
       this.appliedP1Mask = 0
       this.appliedP2Mask = 0
       this.audioReadIdx = this.audioWriteIdx
+      this.audioReadFrac = 0
+      this.syncPapuSampleRate()
 
       if (!options?.skipAutoBatteryRestore) {
         this.restoreBatterySram(found.id)
@@ -883,6 +969,11 @@ class NesEmulatorSingleton {
       // Step initial 60 frames (~1 second of 6502 boot) so the PPU finishes warm-up and renders the title screen immediately
       for (let i = 0; i < 60; i++) {
         nes.frame()
+      }
+      const bootBuffered = (this.audioWriteIdx - this.audioReadIdx) & AUDIO_BUFFER_MASK
+      if (bootBuffered > TARGET_AUDIO_BUFFER_SAMPLES) {
+        this.audioReadIdx =
+          (this.audioWriteIdx - TARGET_AUDIO_BUFFER_SAMPLES) & AUDIO_BUFFER_MASK
       }
       this.flushPendingFrameToTexture()
 
@@ -923,10 +1014,17 @@ class NesEmulatorSingleton {
       this.appliedP1Mask = 0
       this.appliedP2Mask = 0
       this.audioReadIdx = this.audioWriteIdx
+      this.audioReadFrac = 0
       this.ensureAudioOutput()
+      this.syncPapuSampleRate()
       this.ensureLoopRunning()
       for (let i = 0; i < 60; i++) {
         nes.frame()
+      }
+      const bootBuffered = (this.audioWriteIdx - this.audioReadIdx) & AUDIO_BUFFER_MASK
+      if (bootBuffered > TARGET_AUDIO_BUFFER_SAMPLES) {
+        this.audioReadIdx =
+          (this.audioWriteIdx - TARGET_AUDIO_BUFFER_SAMPLES) & AUDIO_BUFFER_MASK
       }
       this.flushPendingFrameToTexture()
       this.notifySaveStateListeners(this.activeCartridge.id)
@@ -1003,6 +1101,7 @@ class NesEmulatorSingleton {
       snap.ppu.vramMirrorTable = savedVramMirrorTable
 
       this.nesCore.fromJSON(snap as never)
+      this.syncPapuSampleRate()
 
       livePpu.buffer = savedBuffer
       livePpu.bgbuffer = savedBgBuffer
@@ -1441,6 +1540,7 @@ class NesEmulatorSingleton {
     if (active) {
       this.activeConsumers.add(consumer)
       this.paused = false
+      this.ensureAudioOutput()
       this.ensureLoopRunning()
       if (this.gainNode) {
         this.gainNode.gain.value = this.soundEnabled ? this.masterVolume * 0.35 : 0
@@ -1463,6 +1563,7 @@ class NesEmulatorSingleton {
 
   public wakeAudioAndTexture() {
     this.texture.needsUpdate = true
+    this.ensureAudioOutput()
     if (this.audioCtx && this.audioCtx.state === 'suspended' && !this.paused) {
       void this.audioCtx.resume().catch(() => undefined)
     }
@@ -1518,7 +1619,7 @@ class NesEmulatorSingleton {
         this.rafId = null
         return
       }
-      const dt = Math.min(0.032, Math.max(0.001, (now - this.lastTick) / 1000))
+      const dt = Math.min(0.05, Math.max(0.001, (now - this.lastTick) / 1000))
       this.lastTick = now
       // Only step from window.requestAnimationFrame if R3F useFrame (WebXR / 3D Canvas) hasn't stepped in the last 40ms
       if (now - this.lastRenderLoopStepAt > 40) {
@@ -1541,7 +1642,7 @@ class NesEmulatorSingleton {
     if (this.activeConsumers.size > 0 && this.paused) {
       this.paused = false
     }
-    this.stepFrame(Math.min(0.032, Math.max(0.001, dt)))
+    this.stepFrame(Math.min(0.05, Math.max(0.001, dt)))
   }
 
   public stepFrame(dt: number) {
@@ -1551,18 +1652,23 @@ class NesEmulatorSingleton {
     if (!this.romLoaded || !this.nesCore || this.paused) return
 
     const targetFrameTime = 1 / 60.0988
-    // Clamp accumulator to prevent multi-frame catch-up spirals on mobile VR CPUs
+    // Accumulate full frame delta up to 2.8 NTSC frames so 72Hz (13.89ms) and 90Hz (11.11ms)
+    // VR headsets never truncate fractional frame remainders.
     this.frameAccumulator = Math.min(
-      targetFrameTime * 1.45,
+      targetFrameTime * 2.8,
       this.frameAccumulator + dt,
     )
 
-    if (this.frameAccumulator >= targetFrameTime * 0.92) {
-      this.frameAccumulator = Math.max(0, this.frameAccumulator - targetFrameTime)
+    let steps = 0
+    while (this.frameAccumulator >= targetFrameTime && steps < 2) {
+      this.frameAccumulator -= targetFrameTime
       this.nesCore.frame()
       this.framesSteppedOnCurrentCartridge++
-      this.flushPendingFrameToTexture()
+      steps++
     }
+
+    // Flush the latest PPU frame to the 3D texture at most once per render tick
+    this.flushPendingFrameToTexture()
 
     // Periodic battery SRAM flush every 25 seconds while playing
     const now = Date.now()

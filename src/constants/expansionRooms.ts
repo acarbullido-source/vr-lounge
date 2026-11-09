@@ -333,13 +333,13 @@ export interface ExpansionWingLayout {
 export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
   const z0 = Number(backZ.toFixed(2))
   const hallEndZ = Number((z0 + HALLWAY_LENGTH).toFixed(2))
-  const deckZ0 = Number((z0 + (HALLWAY_LENGTH - 20.4)).toFixed(2))
+  const deckZ0 = z0
 
-  const boardZ = Number((z0 + 5.4).toFixed(2))
+  const boardZ = Number((z0 + 4.65).toFixed(2))
   const libZ = Number((z0 + 5.4).toFixed(2))
   const cmdZ = Number((z0 + 15.1).toFixed(2))
   const gameRoomZ = Number((z0 + 15.1).toFixed(2))
-  const rangeZ = Number((z0 + 24.6).toFixed(2))
+  const rangeZ = Number((z0 + 9.38).toFixed(2))
   const deckZ = Number((deckZ0 + 25.0).toFixed(2))
 
   const destinations: ExpansionRoomDestination[] = [
@@ -359,7 +359,7 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
       emoji: '🏛',
       shortLabel: 'Hallway',
       title: 'Grand Clubhouse Gallery Hallway',
-      subtitle: 'Central corridor connecting all private rooms, Range, Game Room & deck',
+      subtitle: 'Central corridor connecting all private rooms, Range Corridor, Game Room & deck',
       accentColor: '#94A3B8',
       spawnPosition: [0, 0, Number((z0 + 2.4).toFixed(2))],
       spawnYaw: Math.PI,
@@ -414,9 +414,9 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
       emoji: '🎯',
       shortLabel: 'Shooting Range',
       title: 'Tactical Ballistics & Shooting Range',
-      subtitle: '1-Hand Pistols · 2-Hand Rifles · 35m Live Target Lanes',
+      subtitle: 'West Annex Corridor · 1-Hand Pistols · 2-Hand Rifles · 35m Target Lanes',
       accentColor: '#EF4444',
-      spawnPosition: [-4.45, 0, rangeZ],
+      spawnPosition: [-15.85, 0, rangeZ],
       spawnYaw: Math.PI / 2,
       defaultSeatId: 'wing:shooting-booth-2',
     },
@@ -610,6 +610,7 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
 
   // -------------------------------------------------------------------------
   // 5. THE SHOOTING RANGE: 4 TACTICAL FIRING LINE BOOTHS (Facing West -X downrange)
+  //    Reached via the West Tactical Annex Hallway (x in [-13.6, -1.65], dz = 9.38)
   // -------------------------------------------------------------------------
   const boothOffsets = [-2.7, -0.9, 0.9, 2.7]
   boothOffsets.forEach((dzOff, idx) => {
@@ -619,11 +620,11 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
       furnitureId: 'wing-shooting-range',
       furnitureType: 'wing-seat',
       label: `🎯 Shooting Range · Lane ${idx + 1}`,
-      position: [-5.65, 0, bz],
+      position: [-17.65, 0, bz],
       localCushionOffset: [0, 0, 0],
       seatHeightOffset: 0.48,
       rotationY: Number((Math.PI / 2).toFixed(4)),
-      lookAtTarget: [-19.5, 1.48, bz],
+      lookAtTarget: [-32.0, 1.48, bz],
       stationKind: 'seat',
       roomWing: 'shooting-range',
     })
@@ -631,7 +632,7 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
 
   // -------------------------------------------------------------------------
   // 6. OUTDOOR LAKE & MOUNTAIN DECK SEATS (6 Adirondack & Firepit Lounge Chairs + Deck Cornhole)
-  //    Lake & Mountains lie in +Z (dz > 39.4). Facing +Z corresponds to rotationY = PI.
+  //    Lake & Mountains lie in +Z (dz > 29.8). Facing +Z corresponds to rotationY = PI.
   // -------------------------------------------------------------------------
   const lakeVistaLook: [number, number, number] = [0, 2.6, Number((deckZ0 + 58).toFixed(2))]
   const deckChairSpecs: Array<{
@@ -725,7 +726,7 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
     libraryCenter: [6.42, 0, libZ],
     commandCenter: [-6.92, 0, cmdZ],
     gameRoomCenter: [9.25, 0, gameRoomZ],
-    shootingRangeCenter: [-5.65, 0, rangeZ],
+    shootingRangeCenter: [-16.65, 0, rangeZ],
     outdoorDeckCenter: [0, 0, deckZ],
     destinations,
     wingSeats,
@@ -739,11 +740,13 @@ export function detectActiveLoungeWing(
 ): LoungeWingId {
   const dz = z - backZ
   if (dz < -0.15) return 'main-lounge'
-  if (dz >= 30.25) return 'outdoor-deck'
-  if (x < -1.75) {
-    if (dz < 9.5) return 'boardroom'
-    if (dz < 20.0) return 'command-center'
+  if (dz >= 20.55) return 'outdoor-deck'
+  // Second Hallway (West Tactical Annex Corridor at dz in [8.15, 10.6]) & Shooting Range (x < -12.6)
+  if (x < -12.6 || (x < -1.75 && dz >= 8.15 && dz <= 10.6)) {
     return 'shooting-range'
+  }
+  if (x < -1.75) {
+    return dz < 9.38 ? 'boardroom' : 'command-center'
   }
   if (x > 1.75) {
     return dz < 9.5 ? 'library' : 'game-room'
@@ -760,26 +763,26 @@ interface WalkRect {
 }
 
 const EXPANSION_WALK_RECTS: readonly WalkRect[] = [
-  // 1. Grand Hallway Corridor (bridges cleanly from Main Lounge through backZ archway to Outdoor Deck)
-  { minX: -1.2, maxX: 1.2, minDz: -0.65, maxDz: 30.7, floorY: 0 },
-  // 2. Executive Board Room Doorway + Interior (West Front)
-  { minX: -2.35, maxX: -0.95, minDz: 4.55, maxDz: 6.25, floorY: 0 },
-  { minX: -10.5, maxX: -2.15, minDz: 1.55, maxDz: 9.25, floorY: 0 },
+  // 1. Grand Hallway Corridor (bridges cleanly from Main Lounge through backZ archway to Outdoor Deck at dz = 20.4)
+  { minX: -1.2, maxX: 1.2, minDz: -0.65, maxDz: 21.1, floorY: 0 },
+  // 2. Executive Board Room Doorway + Interior (West Front, dz 0.8..8.12)
+  { minX: -2.35, maxX: -0.95, minDz: 3.85, maxDz: 5.45, floorY: 0 },
+  { minX: -10.5, maxX: -2.15, minDz: 1.15, maxDz: 7.75, floorY: 0 },
   // 3. Cozy Library Doorway + Interior (East Front)
   { minX: 0.95, maxX: 2.35, minDz: 4.55, maxDz: 6.25, floorY: 0 },
   { minX: 2.15, maxX: 10.15, minDz: 1.75, maxDz: 9.05, floorY: 0 },
-  // 4. Command & Control Center Doorway + Interior (West Middle)
+  // 4. Command & Control Center Doorway + Interior (West Rear)
   { minX: -2.35, maxX: -0.95, minDz: 14.25, maxDz: 15.95, floorY: 0 },
   { minX: -11.25, maxX: -2.15, minDz: 11.2, maxDz: 19.0, floorY: 0 },
   // 5. The Game Room Doorway + Enlarged Interior (East Rear: 15.2m W x 11.2m D)
   { minX: 0.95, maxX: 2.35, minDz: 14.25, maxDz: 15.95, floorY: 0 },
   { minX: 2.15, maxX: 16.35, minDz: 9.85, maxDz: 20.35, floorY: 0 },
-  // 6. The Shooting Range Doorway + Ready Room & Firing Line Booths (West Rear)
-  { minX: -2.35, maxX: -0.95, minDz: 23.65, maxDz: 25.55, floorY: 0 },
-  { minX: -6.15, maxX: -2.15, minDz: 20.65, maxDz: 28.55, floorY: 0 },
-  // 7. Outdoor Lake & Mountain Observation Deck + Central Lakeshore Pier
-  { minX: -8.05, maxX: 8.05, minDz: 30.45, maxDz: 38.75, floorY: 0 },
-  { minX: -1.15, maxX: 1.15, minDz: 38.5, maxDz: 42.75, floorY: 0.02 },
+  // 6. Second Hallway (West Tactical Annex Corridor at dz = 9.38) + Shooting Range Ready Room & Booths
+  { minX: -14.2, maxX: -0.95, minDz: 8.52, maxDz: 10.24, floorY: 0 },
+  { minX: -18.15, maxX: -13.6, minDz: 5.38, maxDz: 13.38, floorY: 0 },
+  // 7. Outdoor Lake & Mountain Observation Deck + Central Lakeshore Pier (at dz = 20.4..33.15)
+  { minX: -8.05, maxX: 8.05, minDz: 20.85, maxDz: 29.15, floorY: 0 },
+  { minX: -1.15, maxX: 1.15, minDz: 28.9, maxDz: 33.15, floorY: 0.02 },
 ]
 
 function pushOutOfBox(
@@ -832,7 +835,7 @@ export function resolveExpansionWingWalkablePosition(
 ): [number, number, number] {
   const dz = rawZ - backZ
   const effectiveX =
-    dz >= 20.0 && dz <= 29.8 && rawX < -6.15 ? -6.15 : rawX
+    dz >= 4.5 && dz <= 14.2 && rawX < -18.15 ? -18.15 : rawX
   let bestX = 0
   let bestDz = 0
   let bestFloorY = 0
@@ -855,8 +858,8 @@ export function resolveExpansionWingWalkablePosition(
   }
 
   // Smooth furniture obstacle avoidance inside each room
-  // 1) Executive Boardroom central marble/mahogany conference table
-  ;[bestX, bestDz] = pushOutOfBox(bestX, bestDz, -8.9, -3.9, 4.48, 6.32)
+  // 1) Executive Boardroom central marble/mahogany conference table (centered at dz = 4.65)
+  ;[bestX, bestDz] = pushOutOfBox(bestX, bestDz, -8.9, -3.9, 3.73, 5.57)
   // 2) Cozy Library central reading table & stone hearth apron
   ;[bestX, bestDz] = pushOutOfBox(bestX, bestDz, 6.15, 7.25, 4.85, 5.95)
   ;[bestX, bestDz] = pushOutOfBox(bestX, bestDz, 9.75, 11.2, 4.05, 6.75)
@@ -864,8 +867,8 @@ export function resolveExpansionWingWalkablePosition(
   ;[bestX, bestDz] = pushOutOfCircle(bestX, bestDz, -5.85, 15.1, 1.08)
   // 4) The Game Room central Tactical Holotable Sanctum (Enlarged at x = 9.25)
   ;[bestX, bestDz] = pushOutOfCircle(bestX, bestDz, 9.25, 15.1, 1.48)
-  // 5) Outdoor Lake Deck circular stone firepit (shifted +9.6m with extended hallway)
-  ;[bestX, bestDz] = pushOutOfCircle(bestX, bestDz, -3.8, 34.6, 1.05)
+  // 5) Outdoor Lake Deck circular stone firepit (at dz = 25.0)
+  ;[bestX, bestDz] = pushOutOfCircle(bestX, bestDz, -3.8, 25.0, 1.05)
 
   return [
     Number(bestX.toFixed(3)),

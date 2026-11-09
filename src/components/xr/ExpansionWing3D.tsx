@@ -531,6 +531,7 @@ export function ExpansionWing3D({
   const isRearWingZone =
     activeLoungeWing === 'command-center' ||
     activeLoungeWing === 'game-room' ||
+    activeLoungeWing === 'shooting-range' ||
     activeLoungeWing === 'outdoor-deck'
   const isFrontRoomsVisible = !isRearWingZone
   const isRearRoomsVisible =
@@ -742,8 +743,9 @@ export function ExpansionWing3D({
   )
 
   const z0 = wingLayout.hallStartZ
-  const boardZ = wingLayout.boardroomCenter[2] // z0 + 5.4
+  const boardZ = wingLayout.boardroomCenter[2] // z0 + 4.65
   const libZ = wingLayout.libraryCenter[2] // z0 + 5.4
+  const rangeZ = wingLayout.shootingRangeCenter[2] // z0 + 9.38
   const activeSlide =
     BOARDROOM_STRATEGY_SLIDES[wingState.boardroomAgendaIndex] ??
     BOARDROOM_STRATEGY_SLIDES[0]
@@ -859,14 +861,18 @@ export function ExpansionWing3D({
           </mesh>
         ))}
 
-        {/* WEST HALLWAY PARTITION WALL (x = -1.65) with Doorways at dz [4.25, 6.55] & [13.85, 16.15] */}
+        {/* WEST HALLWAY PARTITION WALL (x = -1.65) with 3 Doorways:
+            1) Boardroom at dz [3.5, 5.8] (center 4.65)
+            2) Second Hallway (West Tactical Annex Corridor) at dz [8.25, 10.51] (center 9.38)
+            3) Command Center at dz [13.85, 16.15] (center 15.0) */}
         {[
-          [z0 + 2.125, 4.25],
-          [z0 + 10.2, 7.3],
+          [z0 + 1.75, 3.5],
+          [z0 + 7.025, 2.45],
+          [z0 + 12.18, 3.34],
           [z0 + 18.275, 4.25],
         ].map(([wz, wLen], idx) => (
           <group key={idx} position={[-HALLWAY_HALF_WIDTH, 0, wz]}>
-            <mesh position={[0, HALLWAY_HEIGHT / 2, 0]}>
+            <mesh position={[0, HALLWAY_HEIGHT / 2, 0]} raycast={noopRaycast}>
               <boxGeometry args={[0.14, HALLWAY_HEIGHT, wLen]} />
               <meshStandardMaterial
                 color="#333F54"
@@ -892,8 +898,8 @@ export function ExpansionWing3D({
           </group>
         ))}
         {/* West Doorway Lintels (y = 3.45, height 0.7) */}
-        {[z0 + 5.4, z0 + 15.0].map((lz) => (
-          <mesh key={lz} position={[-HALLWAY_HALF_WIDTH, 3.45, lz]}>
+        {[boardZ, rangeZ, z0 + 15.0].map((lz) => (
+          <mesh key={lz} position={[-HALLWAY_HALF_WIDTH, 3.45, lz]} raycast={noopRaycast}>
             <boxGeometry args={[0.14, 0.7, 2.3]} />
             <meshStandardMaterial
               color="#333F54"
@@ -903,6 +909,122 @@ export function ExpansionWing3D({
             />
           </mesh>
         ))}
+
+        {/* =============================================================== */}
+        {/* SECOND HALLWAY: WEST TACTICAL ANNEX CORRIDOR                    */}
+        {/* Branches West at dz = 9.38 from x = -1.65 to x = -13.6          */}
+        {/* =============================================================== */}
+        <group name="wing-tactical-annex-corridor">
+          {/* Corridor Travertine & Tactical Slate Floor */}
+          <mesh
+            position={[-7.625, 0.005, rangeZ]}
+            rotation={[-Math.PI / 2, 0, 0]}
+            onDoubleClick={(e) => {
+              if (!onTeleportToFloor) return
+              e.stopPropagation()
+              onTeleportToFloor([e.point.x, 0, e.point.z])
+            }}
+          >
+            <planeGeometry args={[11.95, 2.36]} />
+            <meshStandardMaterial
+              color="#263042"
+              emissive="#161E2B"
+              emissiveIntensity={0.42 * emissiveBoost}
+              roughness={0.55}
+              metalness={0.2}
+            />
+          </mesh>
+          {/* Tactical Amber-Gold Runner Border */}
+          <mesh
+            position={[-7.625, 0.009, rangeZ]}
+            rotation={[-Math.PI / 2, 0, 0]}
+            raycast={noopRaycast}
+          >
+            <planeGeometry args={[11.6, 1.38]} />
+            <meshBasicMaterial color="#D97706" />
+          </mesh>
+          {/* Crimson-Slate Tactical Runner */}
+          <mesh
+            position={[-7.625, 0.012, rangeZ]}
+            rotation={[-Math.PI / 2, 0, 0]}
+            raycast={noopRaycast}
+          >
+            <planeGeometry args={[11.5, 1.22]} />
+            <meshStandardMaterial
+              color="#7F1D1D"
+              emissive="#450A0A"
+              emissiveIntensity={0.45 * emissiveBoost}
+              roughness={0.85}
+            />
+          </mesh>
+
+          {/* Second Hallway Coffered Ceiling + Recessed Skylight Strips */}
+          <mesh
+            position={[-7.625, HALLWAY_HEIGHT - 0.12, rangeZ]}
+            rotation={[Math.PI / 2, 0, 0]}
+            raycast={noopRaycast}
+          >
+            <planeGeometry args={[11.95, 2.36]} />
+            <meshStandardMaterial
+              color="#1A2230"
+              emissive="#0F1520"
+              emissiveIntensity={0.42 * emissiveBoost}
+              roughness={0.85}
+            />
+          </mesh>
+          {[-3.8, -7.6, -11.4].map((cxLight) => (
+            <group key={cxLight} position={[cxLight, HALLWAY_HEIGHT - 0.15, rangeZ]}>
+              <mesh rotation={[Math.PI / 2, 0, 0]} raycast={noopRaycast}>
+                <planeGeometry args={[1.45, 0.62]} />
+                <meshBasicMaterial color="#EA580C" />
+              </mesh>
+              <mesh position={[0, -0.005, 0]} rotation={[Math.PI / 2, 0, 0]} raycast={noopRaycast}>
+                <planeGeometry args={[1.3, 0.48]} />
+                <meshBasicMaterial color="#FEF9C3" />
+              </mesh>
+            </group>
+          ))}
+
+          {/* Second Hallway North & South Walls (z = rangeZ - 1.18 and rangeZ + 1.18, x in [-13.6, -1.65]) */}
+          {[
+            { zPos: rangeZ - 1.18, innerSign: 1 },
+            { zPos: rangeZ + 1.18, innerSign: -1 },
+          ].map(({ zPos, innerSign }) => (
+            <group key={zPos} position={[-7.625, 0, zPos]}>
+              <mesh position={[0, (HALLWAY_HEIGHT - 0.12) / 2, 0]} raycast={noopRaycast}>
+                <boxGeometry args={[11.95, HALLWAY_HEIGHT - 0.12, 0.12]} />
+                <meshStandardMaterial
+                  color="#2D384C"
+                  emissive="#192130"
+                  emissiveIntensity={0.44 * emissiveBoost}
+                  roughness={0.7}
+                />
+              </mesh>
+              <mesh position={[0, 0.55, innerSign * 0.015]} raycast={noopRaycast}>
+                <boxGeometry args={[11.9, 1.1, 0.11]} />
+                <meshStandardMaterial
+                  color="#4E2C1A"
+                  emissive="#2E180D"
+                  emissiveIntensity={0.45 * emissiveBoost}
+                  roughness={0.62}
+                />
+              </mesh>
+              <mesh position={[0, 1.12, innerSign * 0.068]} raycast={noopRaycast}>
+                <boxGeometry args={[11.9, 0.03, 0.015]} />
+                <meshBasicMaterial color="#F97316" />
+              </mesh>
+            </group>
+          ))}
+
+          {/* Wayfinding Sign at the West End of the Second Hallway (Entering Shooting Range at x = -13.6) */}
+          <DoorwaySign3D
+            position={[-13.48, 3.3, rangeZ]}
+            rotationY={Math.PI / 2}
+            label="🎯 TACTICAL SHOOTING RANGE"
+            sublabel="Armory · 4 Booths · 35m Live-Fire Bay"
+            accent="#F97316"
+          />
+        </group>
 
         {/* EAST HALLWAY PARTITION WALL (x = +1.65) with Doorways at dz [4.25, 6.55] and [13.85, 16.15] */}
         {[
@@ -960,11 +1082,18 @@ export function ExpansionWing3D({
 
         {/* Illuminated Overhead Wayfinding Signs in the Hallway */}
         <DoorwaySign3D
-          position={[-1.55, 3.32, z0 + 5.4]}
+          position={[-1.55, 3.32, boardZ]}
           rotationY={Math.PI / 2}
           label="💼 EXECUTIVE BOARDROOM"
           sublabel="9-Seat Strategy Table · Presentation Wall"
           accent="#F59E0B"
+        />
+        <DoorwaySign3D
+          position={[-1.55, 3.32, rangeZ]}
+          rotationY={Math.PI / 2}
+          label="🎯 TACTICAL RANGE CORRIDOR"
+          sublabel="2nd Hallway to Ballistics Range →"
+          accent="#F97316"
         />
         <DoorwaySign3D
           position={[1.55, 3.32, z0 + 5.4]}
@@ -1023,7 +1152,7 @@ export function ExpansionWing3D({
             .map((dest, idx) => (
               <group
                 key={dest.id}
-                position={[0, 0.36 - idx * 0.145, 0.026]}
+                position={[0, 0.38 - idx * 0.132, 0.026]}
                 onClick={(e) => {
                   e.stopPropagation()
                   if (onJumpToDestination) {
@@ -1033,12 +1162,12 @@ export function ExpansionWing3D({
                   }
                 }}
               >
-                <RoundedBox args={[1.44, 0.12, 0.015]} radius={0.018} smoothness={2}>
+                <RoundedBox args={[1.44, 0.112, 0.015]} radius={0.018} smoothness={2}>
                   <meshBasicMaterial color="#1E293B" />
                 </RoundedBox>
                 <Text
                   position={[-0.65, 0, 0.012]}
-                  fontSize={0.044}
+                  fontSize={0.042}
                   color="#F8FAFC"
                   anchorX="left"
                   anchorY="middle"
@@ -1047,7 +1176,7 @@ export function ExpansionWing3D({
                 </Text>
                 <Text
                   position={[0.65, 0, 0.012]}
-                  fontSize={0.04}
+                  fontSize={0.038}
                   color={dest.accentColor}
                   anchorX="right"
                   anchorY="middle"
@@ -1154,7 +1283,7 @@ export function ExpansionWing3D({
             onTeleportToFloor([e.point.x, 0, e.point.z])
           }}
         >
-          <planeGeometry args={[9.55, 8.8]} />
+          <planeGeometry args={[9.55, 7.1]} />
           <meshStandardMaterial
             color="#3B271C"
             emissive="#24160E"
@@ -1187,7 +1316,7 @@ export function ExpansionWing3D({
 
         {/* Illuminated Coffered Ceiling + Sculptural Double-Tier Brass Chandelier */}
         <mesh position={[-6.425, 3.85, boardZ]} rotation={[Math.PI / 2, 0, 0]}>
-          <planeGeometry args={[9.55, 8.8]} />
+          <planeGeometry args={[9.55, 7.1]} />
           <meshStandardMaterial
             color="#261B15"
             emissive="#17100C"
@@ -1201,7 +1330,7 @@ export function ExpansionWing3D({
           rotation={[Math.PI / 2, 0, 0]}
           raycast={noopRaycast}
         >
-          <ringGeometry args={[3.4, 3.65, 4]} />
+          <ringGeometry args={[3.1, 3.35, 4]} />
           <meshBasicMaterial color="#FDE68A" side={THREE.DoubleSide} />
         </mesh>
         <group position={[-6.4, 3.12, boardZ]}>
@@ -1223,7 +1352,7 @@ export function ExpansionWing3D({
 
         {/* West, North, and South Honey Burl-Walnut & Venetian Plaster Walls */}
         <mesh position={[-11.2, 1.925, boardZ]}>
-          <boxGeometry args={[0.14, 3.85, 8.8]} />
+          <boxGeometry args={[0.14, 3.85, 7.1]} />
           <meshStandardMaterial
             color="#4A2C1B"
             emissive="#2E1A0F"
@@ -1231,7 +1360,7 @@ export function ExpansionWing3D({
             roughness={0.62}
           />
         </mesh>
-        <mesh position={[-6.425, 1.925, z0 + 1.0]}>
+        <mesh position={[-6.425, 1.925, z0 + 1.1]}>
           <boxGeometry args={[9.55, 3.85, 0.14]} />
           <meshStandardMaterial
             color="#52301E"
@@ -1240,7 +1369,7 @@ export function ExpansionWing3D({
             roughness={0.64}
           />
         </mesh>
-        <mesh position={[-6.425, 1.925, z0 + 9.8]}>
+        <mesh position={[-6.425, 1.925, z0 + 8.14]}>
           <boxGeometry args={[9.55, 3.85, 0.14]} />
           <meshStandardMaterial
             color="#52301E"
@@ -1250,7 +1379,7 @@ export function ExpansionWing3D({
           />
         </mesh>
         {/* Warm Brass Architectural Reveal Strips on Boardroom Walls */}
-        {[z0 + 1.09, z0 + 9.71].map((rz) => (
+        {[z0 + 1.19, z0 + 8.05].map((rz) => (
           <mesh key={rz} position={[-6.425, 3.68, rz]} raycast={noopRaycast}>
             <boxGeometry args={[9.2, 0.03, 0.02]} />
             <meshBasicMaterial color={accentHex} />
@@ -1258,7 +1387,7 @@ export function ExpansionWing3D({
         ))}
 
         {/* North Wall Backlit Panoramic Dusk City Skyline Window */}
-        <group position={[-6.4, 2.08, z0 + 1.1]}>
+        <group position={[-6.4, 2.08, z0 + 1.2]}>
           <RoundedBox args={[5.4, 1.95, 0.05]} radius={0.02}>
             <meshStandardMaterial
               color="#D4A54E"
@@ -1295,7 +1424,7 @@ export function ExpansionWing3D({
         </group>
 
         {/* South Wall Executive Credenza Sideboard + Espresso Decanter Set */}
-        <group position={[-6.4, 0, z0 + 9.38]}>
+        <group position={[-6.4, 0, z0 + 7.75]}>
           <RoundedBox args={[3.8, 0.84, 0.54]} position={[0, 0.42, 0]} radius={0.03}>
             <meshStandardMaterial
               color="#5C341E"

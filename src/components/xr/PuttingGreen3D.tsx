@@ -741,6 +741,7 @@ export function PuttingGreen3D({
             points={trajectoryPreviewPoints}
             color={isDraggingPutt ? '#22D3EE' : '#34D399'}
             lineWidth={2.5}
+            raycast={() => null}
           />
         )}
 

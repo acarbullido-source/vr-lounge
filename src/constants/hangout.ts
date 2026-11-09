@@ -709,11 +709,11 @@ export function resolveFlyablePosition(
   architecture: RoomArchitectureConfig,
 ): [number, number, number] {
   const sizeSpec = ROOM_SIZE_SPECS[architecture.sizePreset] ?? ROOM_SIZE_SPECS.classic
-  const clampedX = Math.max(-42.0, Math.min(17.5, Number.isFinite(x) ? x : 0))
+  const clampedX = Math.max(-54.0, Math.min(17.5, Number.isFinite(x) ? x : 0))
   const clampedY = Math.max(0.0, Math.min(14.0, Number.isFinite(y) ? y : 0))
   const clampedZ = Math.max(
     sizeSpec.frontZ + 1.2,
-    Math.min(sizeSpec.backZ + 52.0, Number.isFinite(z) ? z : 0),
+    Math.min(sizeSpec.backZ + 44.0, Number.isFinite(z) ? z : 0),
   )
   return [
     Number(clampedX.toFixed(3)),

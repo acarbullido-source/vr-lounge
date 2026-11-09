@@ -543,6 +543,7 @@ export function DartboardStation3D({
           lineWidth={2}
           transparent
           opacity={0.75}
+          raycast={() => null}
         />
       )}
 
