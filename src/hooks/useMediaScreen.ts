@@ -58,6 +58,7 @@ export interface UseMediaScreenOptions {
   remoteScreenStreams: Record<string, MediaStream>
   cinemaVolume: number
   selectedSpeakerId: string
+  inVR?: boolean
   onPresenterProgress?: (currentTime: number, duration: number) => void
 }
 
@@ -107,6 +108,7 @@ export function useMediaScreen({
   remoteScreenStreams,
   cinemaVolume,
   selectedSpeakerId,
+  inVR = false,
   onPresenterProgress,
 }: UseMediaScreenOptions) {
   const { videoElement, companionAudioElement, videoTexture } = getCinemaScreenMedia()
@@ -119,6 +121,7 @@ export function useMediaScreen({
   const [localDuration, setLocalDuration] = useState(0)
   const [mediaError, setMediaError] = useState<string | null>(null)
   const [needsAudioUnlock, setNeedsAudioUnlock] = useState(false)
+  const [youtubeEmbedVideoId, setYoutubeEmbedVideoId] = useState<string | null>(null)
 
   const hlsRef = useRef<Hls | null>(null)
   const loadedSourceKeyRef = useRef<string>('')
@@ -127,6 +130,15 @@ export function useMediaScreen({
   const candidateIndexRef = useRef<number>(0)
   const hasCompanionAudioRef = useRef<boolean>(false)
   const attachCandidateRef = useRef<((index: number) => void) | null>(null)
+  const activeYouTubeVideoIdRef = useRef<string | null>(null)
+  const candidateWatchdogRef = useRef<number | null>(null)
+
+  const clearCandidateWatchdog = useCallback(() => {
+    if (candidateWatchdogRef.current !== null) {
+      window.clearTimeout(candidateWatchdogRef.current)
+      candidateWatchdogRef.current = null
+    }
+  }, [])
 
   const progressCallbackRef = useRef(onPresenterProgress)
   useEffect(() => {
@@ -172,16 +184,19 @@ export function useMediaScreen({
     }
   }, [companionAudioElement, selectedSpeakerId, videoElement])
 
-  // Apply cinema volume (mute local presenter's own tab preview to prevent doubled audio)
+  // Apply cinema volume (mute local presenter's own tab preview or background WebGL video when 2D YouTube IFrame is active)
   useEffect(() => {
     const muteSelfTabLoopback =
       presenterState.screenMode === 'tab-stream' && isLocalPresenter
-    if (muteSelfTabLoopback) {
+    const muteFor2DYouTubeEmbed = Boolean(youtubeEmbedVideoId && !inVR)
+    if (muteSelfTabLoopback || muteFor2DYouTubeEmbed) {
       videoElement.muted = true
       videoElement.volume = 0
       companionAudioElement.muted = true
       companionAudioElement.volume = 0
-      getNesEmulator().setMasterVolume(0)
+      if (muteSelfTabLoopback) {
+        getNesEmulator().setMasterVolume(0)
+      }
     } else if (!needsAudioUnlock) {
       const muted = cinemaVolume <= 0.001
       const clampedVol = Math.max(0, Math.min(1, cinemaVolume))
@@ -198,11 +213,13 @@ export function useMediaScreen({
   }, [
     cinemaVolume,
     companionAudioElement,
+    inVR,
     isLocalPresenter,
     needsAudioUnlock,
     presenterState.mediaUrl,
     presenterState.screenMode,
     videoElement,
+    youtubeEmbedVideoId,
   ])
 
   const destroyHls = useCallback(() => {
@@ -219,14 +236,46 @@ export function useMediaScreen({
 
     const applyCandidate = (index: number) => {
       if (cancelled) return
+      clearCandidateWatchdog()
       const candidate = candidatesRef.current[index]
-      if (!candidate) return
+      if (!candidate) {
+        if (activeYouTubeVideoIdRef.current) {
+          setYoutubeEmbedVideoId(activeYouTubeVideoIdRef.current)
+          setHasVideoFrames(true)
+          setMediaError(null)
+        }
+        return
+      }
 
       candidateIndexRef.current = index
       destroyHls()
       clearCompanionAudio()
       videoElement.srcObject = null
       setMediaError(null)
+
+      if (activeYouTubeVideoIdRef.current) {
+        if (candidate.isFallbackStream) {
+          setYoutubeEmbedVideoId(activeYouTubeVideoIdRef.current)
+        } else {
+          setYoutubeEmbedVideoId(null)
+          // 4.5s watchdog: if a direct Piped/Invidious stream stalls or hangs on 403, advance to next candidate
+          candidateWatchdogRef.current = window.setTimeout(() => {
+            if (cancelled || candidateIndexRef.current !== index) return
+            if (videoElement.readyState < 2) {
+              const nextIdx = index + 1
+              if (nextIdx < candidatesRef.current.length) {
+                applyCandidate(nextIdx)
+              } else if (activeYouTubeVideoIdRef.current) {
+                setYoutubeEmbedVideoId(activeYouTubeVideoIdRef.current)
+                setHasVideoFrames(true)
+              }
+            }
+          }, 4500)
+        }
+      } else {
+        setYoutubeEmbedVideoId(null)
+      }
+
       setActiveStreamQuality(
         candidate.provider !== 'Direct'
           ? `${candidate.qualityLabel} · ${candidate.provider}`
@@ -253,6 +302,7 @@ export function useMediaScreen({
         )
         companionAudioElement.src = finalAudioUrl
         companionAudioElement.muted =
+          Boolean(activeYouTubeVideoIdRef.current && candidate.isFallbackStream && !inVR) ||
           latestPlaybackRef.current.cinemaVolume <= 0.001
         companionAudioElement.volume = Math.max(
           0,
@@ -275,6 +325,7 @@ export function useMediaScreen({
               hls.attachMedia(videoElement)
               hls.on(HlsCtor.Events.MANIFEST_PARSED, () => {
                 if (cancelled) return
+                clearCandidateWatchdog()
                 setHasVideoFrames(true)
                 const { currentTime, isPlaying } = latestPlaybackRef.current
                 if (currentTime > 0.5) {
@@ -291,6 +342,7 @@ export function useMediaScreen({
               })
               hls.on(HlsCtor.Events.ERROR, (_event, data) => {
                 if (cancelled || !data.fatal) return
+                clearCandidateWatchdog()
                 // Fail over to next stream candidate if available!
                 const nextIdx = candidateIndexRef.current + 1
                 if (nextIdx < candidatesRef.current.length) {
@@ -304,6 +356,12 @@ export function useMediaScreen({
                 ) {
                   autoProxiedUrlRef.current = candidate.streamUrl
                   applyCandidate(candidateIndexRef.current)
+                  return
+                }
+                if (activeYouTubeVideoIdRef.current) {
+                  setYoutubeEmbedVideoId(activeYouTubeVideoIdRef.current)
+                  setHasVideoFrames(true)
+                  setMediaError(null)
                   return
                 }
                 setMediaError(
@@ -351,6 +409,9 @@ export function useMediaScreen({
       const activePresenterId = presenterState.activePresenterId
 
       if (mode === 'idle' || !activePresenterId) {
+        clearCandidateWatchdog()
+        activeYouTubeVideoIdRef.current = null
+        setYoutubeEmbedVideoId(null)
         getNesEmulator().setConsumerActive('screen', false)
         destroyHls()
         clearCompanionAudio()
@@ -368,6 +429,9 @@ export function useMediaScreen({
       }
 
       if (mode === 'tab-stream') {
+        clearCandidateWatchdog()
+        activeYouTubeVideoIdRef.current = null
+        setYoutubeEmbedVideoId(null)
         getNesEmulator().setConsumerActive('screen', false)
         destroyHls()
         clearCompanionAudio()
@@ -414,6 +478,9 @@ export function useMediaScreen({
       // Mode 2: Synchronized URL / Native YouTube / PeerTube Player
       const rawUrl = presenterState.mediaUrl.trim()
       if (!rawUrl) {
+        clearCandidateWatchdog()
+        activeYouTubeVideoIdRef.current = null
+        setYoutubeEmbedVideoId(null)
         getNesEmulator().setConsumerActive('screen', false)
         setHasVideoFrames(false)
         setIsResolvingMedia(false)
@@ -427,6 +494,7 @@ export function useMediaScreen({
       }
 
       loadedSourceKeyRef.current = sourceKey
+      clearCandidateWatchdog()
       setMediaError(null)
       setHasVideoFrames(false)
       setActiveStreamQuality(null)
@@ -435,6 +503,8 @@ export function useMediaScreen({
       videoElement.srcObject = null
 
       if (isNesMediaUrl(rawUrl)) {
+        activeYouTubeVideoIdRef.current = null
+        setYoutubeEmbedVideoId(null)
         const nes = getNesEmulator()
         nes.setConsumerActive('screen', true)
         const cartId = parseNesCartridgeIdFromUrl(rawUrl)
@@ -457,6 +527,10 @@ export function useMediaScreen({
       const ytVideoId = isYouTubeWatchUrl(rawUrl)
         ? extractYouTubeVideoId(rawUrl)
         : null
+      activeYouTubeVideoIdRef.current = ytVideoId
+      if (!ytVideoId) {
+        setYoutubeEmbedVideoId(null)
+      }
       const peerTubeRef = !ytVideoId ? extractPeerTubeRef(rawUrl) : null
 
       if (ytVideoId) {
@@ -478,26 +552,29 @@ export function useMediaScreen({
                 kind: isHlsUrl(data.streamUrl) ? 'hls' : 'mp4',
                 qualityLabel: 'Custom Proxy',
                 provider: 'Custom',
+                isFallbackStream: false,
               },
             ]
           } else {
-            const resolved = await resolveYouTubeStreams(ytVideoId)
+            const resolved = await resolveYouTubeStreams(
+              ytVideoId,
+              presenterState.mediaTitle,
+            )
             if (cancelled) return
             candidatesRef.current = resolved.candidates
             if (resolved.relatedVideos.length > 0) {
               setRelatedVideos(resolved.relatedVideos)
             }
           }
-        } catch (err) {
-          if (!cancelled) {
-            setIsResolvingMedia(false)
-            setMediaError(
-              err instanceof Error
-                ? `Could not resolve YouTube stream (${err.message}). Try Open Web tab or another video.`
-                : 'Unable to resolve YouTube stream right now.',
-            )
-          }
-          return
+        } catch {
+          if (cancelled) return
+          // Even if a custom endpoint failed, fall back to resolveYouTubeStreams
+          const resolved = await resolveYouTubeStreams(
+            ytVideoId,
+            presenterState.mediaTitle,
+          )
+          if (cancelled) return
+          candidatesRef.current = resolved.candidates
         }
         if (cancelled) return
         setIsResolvingMedia(false)
@@ -548,18 +625,22 @@ export function useMediaScreen({
 
     return () => {
       cancelled = true
+      clearCandidateWatchdog()
       attachCandidateRef.current = null
       if (!sourceAttached) {
         loadedSourceKeyRef.current = ''
       }
     }
   }, [
+    clearCandidateWatchdog,
     clearCompanionAudio,
     companionAudioElement,
     destroyHls,
+    inVR,
     isLocalPresenter,
     localScreenStream,
     presenterState.activePresenterId,
+    presenterState.mediaTitle,
     presenterState.mediaUrl,
     presenterState.screenMode,
     presenterState.useCorsProxy,
@@ -634,6 +715,7 @@ export function useMediaScreen({
   // Video element DOM events, companion audio lip-sync & presenter 2s drift heartbeat
   useEffect(() => {
     const onLoadedData = () => {
+      clearCandidateWatchdog()
       setHasVideoFrames(true)
       setLocalDuration(Number.isFinite(videoElement.duration) ? videoElement.duration : 0)
       const { currentTime, isPlaying } = latestPlaybackRef.current
@@ -717,6 +799,7 @@ export function useMediaScreen({
       ) {
         return
       }
+      clearCandidateWatchdog()
 
       // Try next resolved stream candidate first!
       const nextIdx = candidateIndexRef.current + 1
@@ -737,6 +820,13 @@ export function useMediaScreen({
         autoProxiedUrlRef.current = targetStreamUrl
         videoElement.src = resolvePlayableStreamUrl(targetStreamUrl, true, true)
         videoElement.load()
+        return
+      }
+
+      if (activeYouTubeVideoIdRef.current) {
+        setYoutubeEmbedVideoId(activeYouTubeVideoIdRef.current)
+        setHasVideoFrames(true)
+        setMediaError(null)
         return
       }
 
@@ -779,6 +869,7 @@ export function useMediaScreen({
       videoElement.removeEventListener('error', onError)
     }
   }, [
+    clearCandidateWatchdog,
     companionAudioElement,
     isLocalPresenter,
     presenterState.mediaUrl,
@@ -791,10 +882,12 @@ export function useMediaScreen({
     setNeedsAudioUnlock(false)
     const muteSelfTabLoopback =
       presenterState.screenMode === 'tab-stream' && isLocalPresenter
-    const muted = muteSelfTabLoopback || cinemaVolume <= 0.001
-    const vol = muteSelfTabLoopback
-      ? 0
-      : Math.max(0, Math.min(1, cinemaVolume))
+    const muteFor2DYouTubeEmbed = Boolean(youtubeEmbedVideoId && !inVR)
+    const muted = muteSelfTabLoopback || muteFor2DYouTubeEmbed || cinemaVolume <= 0.001
+    const vol =
+      muteSelfTabLoopback || muteFor2DYouTubeEmbed
+        ? 0
+        : Math.max(0, Math.min(1, cinemaVolume))
     videoElement.muted = muted
     videoElement.volume = vol
     companionAudioElement.muted = muted
@@ -808,10 +901,12 @@ export function useMediaScreen({
   }, [
     cinemaVolume,
     companionAudioElement,
+    inVR,
     isLocalPresenter,
     presenterState.isPlaying,
     presenterState.screenMode,
     videoElement,
+    youtubeEmbedVideoId,
   ])
 
   const seekLocalVideo = useCallback(
@@ -830,15 +925,26 @@ export function useMediaScreen({
     [companionAudioElement, videoElement],
   )
 
+  const dismissYouTubeEmbed = useCallback(() => {
+    setYoutubeEmbedVideoId(null)
+  }, [])
+
+  const openYouTubeEmbed = useCallback(() => {
+    if (activeYouTubeVideoIdRef.current) {
+      setYoutubeEmbedVideoId(activeYouTubeVideoIdRef.current)
+    }
+  }, [])
+
   useEffect(() => {
     return () => {
+      clearCandidateWatchdog()
       destroyHls()
       clearCompanionAudio()
       videoElement.pause()
       videoElement.srcObject = null
       videoElement.removeAttribute('src')
     }
-  }, [clearCompanionAudio, destroyHls, videoElement])
+  }, [clearCandidateWatchdog, clearCompanionAudio, destroyHls, videoElement])
 
   const isNesStreamActive =
     presenterState.screenMode === 'url-sync' &&
@@ -882,14 +988,23 @@ export function useMediaScreen({
     videoTexture: isNesStreamActive
       ? (getNesEmulator().texture as unknown as THREE.VideoTexture)
       : videoTexture,
-    hasVideoFrames: isNesStreamActive ? true : hasVideoFrames,
+    hasVideoFrames: isNesStreamActive
+      ? true
+      : Boolean(youtubeEmbedVideoId) || hasVideoFrames,
     isResolvingMedia: isNesStreamActive ? false : isResolvingMedia,
     activeStreamQuality: isNesStreamActive ? '60fps JSNES Hardware' : activeStreamQuality,
     relatedVideos,
     localCurrentTime,
     localDuration,
     mediaError: isNesStreamActive ? null : mediaError,
-    needsAudioUnlock: isNesStreamActive ? false : needsAudioUnlock,
+    needsAudioUnlock: isNesStreamActive
+      ? false
+      : Boolean(youtubeEmbedVideoId && !inVR)
+        ? false
+        : needsAudioUnlock,
+    youtubeEmbedVideoId: isNesStreamActive ? null : youtubeEmbedVideoId,
+    dismissYouTubeEmbed,
+    openYouTubeEmbed,
     unlockAudio,
     seekLocalVideo,
   }

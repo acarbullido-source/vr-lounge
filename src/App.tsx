@@ -34,6 +34,7 @@ import {
   type MobileTouchLocomotionInput,
 } from './components/ui/MobileTouchControlsOverlay'
 import { PasscodeGate } from './components/ui/PasscodeGate'
+import { YouTubeEmbedPlayerOverlay } from './components/ui/YouTubeEmbedPlayerOverlay'
 import { AvatarManager } from './components/xr/AvatarManager'
 import { BarGamesCorner3D } from './components/xr/BarGamesCorner3D'
 import { BuildModePanel3D } from './components/xr/BuildModePanel3D'
@@ -1506,6 +1507,7 @@ export function App() {
     remoteScreenStreams: webrtc.remoteScreenStreams,
     cinemaVolume: effectiveCinemaVolume,
     selectedSpeakerId,
+    inVR: inVRSession,
     onPresenterProgress: handlePresenterHeartbeatProgress,
   })
 
@@ -2616,6 +2618,21 @@ export function App() {
           onShareNesSaveSlot={room.shareNesSaveSlotWithRoom}
         />
       )}
+
+      {/* Official YouTube IFrame Player Overlay (automatically activates on 2D Desktop/Mobile when CORS proxies are blocked) */}
+      {passcodeUnlocked &&
+        room.joined &&
+        !inVRSession &&
+        media.youtubeEmbedVideoId && (
+          <YouTubeEmbedPlayerOverlay
+            videoId={media.youtubeEmbedVideoId}
+            presenterState={room.presenterState}
+            cinemaVolume={effectiveCinemaVolume}
+            isLocalPresenter={room.isLocalPresenter}
+            onDismissToWebGL={media.dismissYouTubeEmbed}
+            onStartTabShare={() => void handleStartTabShare()}
+          />
+        )}
 
       {/* Mobile Mode #1: 2D Pocket Companion Dashboard (Default on Phone / /mobile / ?mobile=1) */}
       {passcodeUnlocked &&

@@ -38,6 +38,7 @@ import {
   verifyAndConsumeOAuthStateNonce,
   getYouTubeAccountState,
 } from '../services/youtubeAccount'
+import { resolveYouTubeStreams } from '../services/youtube'
 import type { ParticipantProfile } from '../types/lounge'
 
 function createMemoryStorage(): Storage {
@@ -456,5 +457,40 @@ describe('VR Lounge Security, E2EE, Anti-Impersonation & Physics Regression Suit
       -18.15,
       'Walking mode must stop players safely behind the firing line barrier (-18.15)',
     )
+  })
+
+  it('7. resolves YouTube streams with guaranteed fallback candidates when all Piped/Invidious proxies reject', async () => {
+    const originalFetch = globalThis.fetch
+    try {
+      // Simulate every upstream Piped/Invidious proxy rejecting with HTTP 403/500
+      globalThis.fetch = (async () =>
+        new Response('Forbidden', { status: 403 })) as typeof fetch
+
+      const resolved = await resolveYouTubeStreams(
+        'dQw4w9WgXcQ',
+        'Rick Astley - Never Gonna Give You Up',
+      )
+
+      assert.equal(
+        resolved.title,
+        'Rick Astley - Never Gonna Give You Up',
+      )
+      assert.equal(
+        resolved.usedFallback,
+        true,
+        'Must mark usedFallback=true when all Piped/Invidious servers reject',
+      )
+      assert.ok(
+        resolved.candidates.length >= 1,
+        'Must always return at least one playable fallback stream candidate instead of throwing AggregateError',
+      )
+      assert.equal(
+        resolved.candidates[0].isFallbackStream,
+        true,
+        'Fallback candidates must be flagged with isFallbackStream=true so 2D Official YouTube IFrame and 3D WebGL stream activate cleanly',
+      )
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })
