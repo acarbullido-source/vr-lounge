@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { registerHooks } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -23,6 +23,14 @@ registerHooks({
     return nextResolve(specifier, context)
   },
   load(url, context, nextLoad) {
+    if (url.endsWith('.tsx')) {
+      const raw = readFileSync(fileURLToPath(url), 'utf8')
+      return {
+        format: 'module-typescript',
+        shortCircuit: true,
+        source: raw,
+      }
+    }
     const result = nextLoad(url, context)
     if (
       url.endsWith('.ts') &&

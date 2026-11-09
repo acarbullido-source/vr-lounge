@@ -22,6 +22,16 @@ import {
   scoreDartPolar,
 } from '../../constants/barGames'
 import { computeBarGamesLayout } from '../../constants/hangout'
+import {
+  ADVENTURE_CAMPAIGNS,
+  ADVENTURE_CAMPAIGN_LIST,
+  ADVENTURE_ITEM_SPECS,
+  ARCHETYPE_SPECS,
+  type AdventureArchetypeId,
+  type AdventureCampaignId,
+  type AdventureItemId,
+  type AdventureQuestState,
+} from '../../games/adventure'
 import { computeBallisticDartVelocity } from '../../services/barGamesPhysics'
 import type {
   ClubhousePersistentState,
@@ -35,7 +45,7 @@ import type {
 } from '../../types/barGames'
 import type { RoomCustomizationState } from '../../types/lounge'
 
-export type BarGamesTabId = 'play' | 'scoreboard' | 'tabletop' | 'props'
+export type BarGamesTabId = 'play' | 'quest' | 'scoreboard' | 'tabletop' | 'props'
 
 export interface BarGamesDrawerProps {
   open: boolean
@@ -50,6 +60,7 @@ export interface BarGamesDrawerProps {
   puttingState: PuttingMatchState
   tabletopState: TabletopState
   clubhouseState: ClubhousePersistentState
+  adventureState?: AdventureQuestState
   hasActiveDartShot: boolean
   hasActivePuttShot: boolean
   onSelectSeat: (seatId: string) => void
@@ -89,6 +100,18 @@ export interface BarGamesDrawerProps {
   onLockProp: (propId: string) => void
   onResolveProp: (propId: string, winningOptionIndex: number) => void
   onDeleteProp: (propId: string) => void
+  // Story Quest (Main Cinema Screen Adventure Game)
+  onStartStoryQuest?: (campaignId: AdventureCampaignId) => void
+  onRestartStoryQuest?: () => void
+  onSelectAdventureArchetype?: (archetype: AdventureArchetypeId) => void
+  onHoverAdventureCard?: (cardId: string | null) => void
+  onLockAdventureCard?: (cardId: string) => void
+  onUseAdventureAbility?: () => void
+  onUseAdventureItem?: (itemId: AdventureItemId) => void
+  onTetherAdventureGhost?: (targetUserId: string) => void
+  onRollAdventureD20?: () => void
+  onRollAdventureCrucialFallback?: () => void
+  onAdvanceAdventureScene?: () => void
 }
 
 const DART_QUICK_TARGETS: ReadonlyArray<{
@@ -118,6 +141,7 @@ export function BarGamesDrawer({
   puttingState,
   tabletopState,
   clubhouseState,
+  adventureState,
   hasActiveDartShot,
   hasActivePuttShot,
   onSelectSeat,
@@ -146,6 +170,17 @@ export function BarGamesDrawer({
   onLockProp,
   onResolveProp,
   onDeleteProp,
+  onStartStoryQuest,
+  onRestartStoryQuest,
+  onSelectAdventureArchetype,
+  onHoverAdventureCard,
+  onLockAdventureCard,
+  onUseAdventureAbility,
+  onUseAdventureItem,
+  onTetherAdventureGhost,
+  onRollAdventureD20,
+  onRollAdventureCrucialFallback,
+  onAdvanceAdventureScene,
 }: BarGamesDrawerProps) {
   const [aimLocalX, setAimLocalX] = useState(0)
   const [aimLocalY, setAimLocalY] = useState(0.122) // Default aimed at T20
@@ -275,14 +310,15 @@ export function BarGamesDrawer({
         </button>
       </div>
 
-      {/* 4-Pillar Navigation Tabs */}
-      <div className="grid grid-cols-4 gap-1 border-b border-white/10 bg-[#080b11] p-1.5 text-[11px] font-semibold">
+      {/* 5-Pillar Navigation Tabs */}
+      <div className="grid grid-cols-5 gap-1 border-b border-white/10 bg-[#080b11] p-1.5 text-[11px] font-semibold">
         {(
           [
             { id: 'play', label: '🎯 Play' },
+            { id: 'quest', label: '⚔️ Quest' },
             { id: 'scoreboard', label: '🏆 Scores' },
             { id: 'tabletop', label: '🎲 Table' },
-            { id: 'props', label: '📋 $1 Props' },
+            { id: 'props', label: '📋 Props' },
           ] as const
         ).map((tab) => (
           <button
@@ -290,7 +326,7 @@ export function BarGamesDrawer({
             id={`tab-bargames-${tab.id}`}
             type="button"
             onClick={() => onChangeTab(tab.id)}
-            className={`rounded-lg px-2 py-1.5 transition ${
+            className={`rounded-lg px-1.5 py-1.5 transition ${
               activeTab === tab.id
                 ? 'bg-[#e5a93c] text-[#090c12] shadow'
                 : 'text-slate-300 hover:bg-white/8'
@@ -303,6 +339,282 @@ export function BarGamesDrawer({
 
       {/* Scrollable Body */}
       <div className="flex-1 space-y-4 overflow-y-auto p-4 text-xs">
+        {/* =============================================================== */}
+        {/* TAB 0: MAIN CINEMA SCREEN ADVENTURE QUEST (STORY QUEST)         */}
+        {/* =============================================================== */}
+        {activeTab === 'quest' && adventureState && (
+          (() => {
+            const camp = ADVENTURE_CAMPAIGNS[adventureState.campaignId]
+            const node = camp.nodes[adventureState.currentNodeId]
+            const myHero = adventureState.players[localUserId]
+            const livingHeroes = Object.values(adventureState.players).filter(
+              (p) => !p.isGhost,
+            )
+            const requiredPts = Math.max(1, Math.ceil(livingHeroes.length / 2))
+
+            return (
+              <div className="space-y-3">
+                {/* Campaign Selector & Screen Launch */}
+                <div className="rounded-xl border border-sky-400/30 bg-sky-950/20 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="font-bold text-sky-300">
+                      ⚔️ Main Screen Story Quest (4 Campaigns)
+                    </span>
+                    <button
+                      id="btn-restart-story-quest"
+                      type="button"
+                      onClick={() => onRestartStoryQuest?.()}
+                      className="rounded-lg border border-white/15 bg-white/5 px-2 py-1 text-[10px] font-semibold text-slate-300 hover:bg-white/10"
+                    >
+                      ↺ Restart Run
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {ADVENTURE_CAMPAIGN_LIST.map((c) => {
+                      const active = c.id === adventureState.campaignId
+                      return (
+                        <button
+                          key={c.id}
+                          id={`btn-quest-campaign-${c.id}`}
+                          type="button"
+                          onClick={() => onStartStoryQuest?.(c.id)}
+                          className={`rounded-xl border p-2 text-left transition ${
+                            active
+                              ? 'border-amber-400 bg-amber-500/20 text-amber-100'
+                              : 'border-white/10 bg-black/35 text-slate-300 hover:bg-white/10'
+                          }`}
+                        >
+                          <div className="font-bold text-[11px]">{c.title}</div>
+                          <div className="text-[10px] text-slate-400">{c.subtitle}</div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* Current Node Header, Threat Meter & World Flags */}
+                {node && (
+                  <div className="rounded-xl border border-white/15 bg-[#101726] p-3 space-y-2">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="font-bold text-amber-300">
+                        ACT {node.act} · STAGE {node.stageNumber}/12{' '}
+                        {node.isSanctuary
+                          ? '· ⛩ SANCTUARY'
+                          : node.isFinale
+                            ? '· 💀 BOSS'
+                            : ''}
+                      </span>
+                      <span className="rounded bg-rose-500/20 px-2 py-0.5 text-[10px] font-bold text-rose-300">
+                        🔥 Threat {adventureState.threatLevel}/10 · Tally{' '}
+                        {adventureState.partySuccessPoints}/{requiredPts}
+                      </span>
+                    </div>
+                    <div className="text-sm font-bold text-white">{node.title}</div>
+                    <p className="text-[11px] leading-relaxed text-slate-300">{node.prose}</p>
+                    {adventureState.worldFlags.length > 0 && (
+                      <div className="flex flex-wrap gap-1 pt-1">
+                        {adventureState.worldFlags.map((flag) => (
+                          <span
+                            key={flag}
+                            className="rounded bg-indigo-500/20 px-1.5 py-0.5 text-[10px] text-indigo-300"
+                          >
+                            🏷 {flag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Crucial Lounge Skill Check Banner */}
+                {adventureState.crucialCheck && !adventureState.crucialCheck.resolved && (
+                  <div className="rounded-xl border border-amber-400/50 bg-amber-950/30 p-3 space-y-2">
+                    <div className="font-bold text-amber-300">
+                      🎯 {adventureState.crucialCheck.title}
+                    </div>
+                    <p className="text-[11px] text-amber-100/90">
+                      {adventureState.crucialCheck.instruction}
+                    </p>
+                    <button
+                      id="btn-quest-crucial-fallback"
+                      type="button"
+                      onClick={() => onRollAdventureCrucialFallback?.()}
+                      className="w-full rounded-xl bg-amber-500 py-2 text-xs font-bold text-slate-950 shadow hover:bg-amber-400"
+                    >
+                      🎲 Roll Couch Fallback D20 (DC {adventureState.crucialCheck.fallbackDc})
+                    </button>
+                  </div>
+                )}
+
+                {/* Class Archetype Picker & Hero Status */}
+                <div className="rounded-xl border border-white/10 bg-[#0e1420] p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-200">
+                      {myHero
+                        ? `${ARCHETYPE_SPECS[myHero.archetype].icon} ${myHero.displayName} (${
+                            myHero.isGhost
+                              ? '👻 SPECTRAL GHOST'
+                              : `${myHero.hp}/${myHero.maxHp} HP`
+                          })`
+                        : 'Choose Your Class Archetype'}
+                    </span>
+                    {myHero && (
+                      <button
+                        id="btn-quest-ability"
+                        type="button"
+                        disabled={myHero.abilityUsedInAct === node?.act}
+                        onClick={() => onUseAdventureAbility?.()}
+                        className="rounded-lg border border-sky-400/40 bg-sky-500/20 px-2.5 py-1 text-[10px] font-bold text-sky-200 hover:bg-sky-500/30 disabled:opacity-40"
+                      >
+                        ⚡ {ARCHETYPE_SPECS[myHero.archetype].abilityName}
+                      </button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-4 gap-1">
+                    {(['vanguard', 'shadow', 'arcanist', 'cleric'] as const).map((archId) => {
+                      const spec = ARCHETYPE_SPECS[archId]
+                      const selected = myHero?.archetype === archId
+                      return (
+                        <button
+                          key={archId}
+                          id={`btn-quest-arch-${archId}`}
+                          type="button"
+                          onClick={() => onSelectAdventureArchetype?.(archId)}
+                          className={`rounded-lg border px-1.5 py-1.5 text-center text-[10px] font-bold transition ${
+                            selected
+                              ? 'border-amber-400 bg-amber-500/25 text-amber-200'
+                              : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
+                          }`}
+                        >
+                          <div>
+                            {spec.icon} {spec.name}
+                          </div>
+                          <div className="text-[9px] font-normal text-slate-400">
+                            {spec.maxHp} HP
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {/* Starting Class Items */}
+                  {myHero && myHero.items.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {myHero.items.map((itemId) => {
+                        const item = ADVENTURE_ITEM_SPECS[itemId]
+                        return (
+                          <button
+                            key={itemId}
+                            id={`btn-quest-item-${itemId}`}
+                            type="button"
+                            onClick={() => onUseAdventureItem?.(itemId)}
+                            className="rounded-lg border border-emerald-400/35 bg-emerald-500/15 px-2 py-1 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-500/25"
+                            title={item.description}
+                          >
+                            {item.icon} Use {item.name}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {/* Spectral Ghost Tethering Controls */}
+                  {myHero?.isGhost && livingHeroes.length > 0 && (
+                    <div className="rounded-lg border border-cyan-400/40 bg-cyan-950/30 p-2 space-y-1.5">
+                      <div className="text-[10px] font-bold text-cyan-300">
+                        👻 Spectral Ghost Mode — Tether to a living ally &amp; roll 12+ on a Spectral D20 to grant +2 Spirit Guidance!
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {livingHeroes.map((ally) => (
+                          <button
+                            key={ally.userId}
+                            type="button"
+                            onClick={() => onTetherAdventureGhost?.(ally.userId)}
+                            className={`rounded px-2 py-1 text-[10px] font-bold ${
+                              myHero.tetheredToUserId === ally.userId
+                                ? 'bg-cyan-400 text-slate-950'
+                                : 'bg-white/10 text-cyan-200'
+                            }`}
+                          >
+                            🔗 Tether {ally.displayName}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 4 Action Cards */}
+                {node && (
+                  <div className="space-y-1.5">
+                    <div className="font-bold text-slate-300">
+                      🃏 Choose Your Action Card (Click to Lock In):
+                    </div>
+                    {node.choices.map((card) => {
+                      const isLocked = myHero?.lockedCardId === card.id
+                      const showDc =
+                        adventureState.arcaneSightActive ||
+                        isLocked ||
+                        adventureState.phase === 'resolution'
+                      return (
+                        <button
+                          key={card.id}
+                          id={`btn-quest-card-${card.id}`}
+                          type="button"
+                          onMouseEnter={() => onHoverAdventureCard?.(card.id)}
+                          onMouseLeave={() => onHoverAdventureCard?.(null)}
+                          onClick={() => onLockAdventureCard?.(card.id)}
+                          className={`w-full rounded-xl border p-2.5 text-left transition ${
+                            isLocked
+                              ? 'border-amber-400 bg-amber-500/20 text-white shadow'
+                              : 'border-white/10 bg-[#111827] text-slate-200 hover:border-white/25'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold">
+                              {isLocked ? '🔒 ' : ''}
+                              {card.title}
+                            </span>
+                            <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold uppercase text-amber-300">
+                              {card.attribute} · {showDc ? `DC ${card.dc}` : 'DC ??'}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-[11px] text-slate-300">{card.description}</p>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* Roll D20 & Advance Scene Buttons */}
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    id="btn-quest-roll-d20"
+                    type="button"
+                    onClick={() => onRollAdventureD20?.()}
+                    className="rounded-xl bg-amber-500 py-2.5 text-xs font-extrabold text-slate-950 shadow-lg transition hover:bg-amber-400"
+                  >
+                    {myHero?.isGhost ? '👻 Roll Spectral D20' : '🎲 Roll Adventure D20'}
+                  </button>
+                  <button
+                    id="btn-quest-advance-scene"
+                    type="button"
+                    onClick={() => onAdvanceAdventureScene?.()}
+                    className="rounded-xl border border-emerald-400/50 bg-emerald-500/20 py-2.5 text-xs font-extrabold text-emerald-200 transition hover:bg-emerald-500/30"
+                  >
+                    ▶ Advance Scene
+                  </button>
+                </div>
+
+                {/* Consequence Log */}
+                <div className="rounded-xl border border-white/10 bg-black/40 p-2.5 text-[11px] text-amber-200">
+                  {adventureState.lastResolutionLog[0] ?? 'Choose a card and roll D20!'}
+                </div>
+              </div>
+            )
+          })()
+        )}
+
         {/* =============================================================== */}
         {/* TAB 1: DARTS & MINI-GOLF PUTTING CONTROLS                       */}
         {/* =============================================================== */}

@@ -3,6 +3,14 @@ import { useEffect, useRef, useState } from 'react'
 import { QUICK_REACTIONS } from '../../constants/cinema'
 import { FREE_ROAM_SEAT_ID } from '../../constants/hangout'
 import {
+  ADVENTURE_CAMPAIGN_LIST,
+  buildQuestMediaUrl,
+  isAdventureMediaUrl,
+  type AdventureArchetypeId,
+  type AdventureCampaignId,
+  type AdventureQuestState,
+} from '../../games/adventure'
+import {
   NES_LIBRARY_CARTRIDGES,
   getNesEmulator,
   isNesMediaUrl,
@@ -183,6 +191,12 @@ export interface SpatialControlDockProps {
   nesMultiplayerState?: NesMultiplayerState
   engagedNesSlot?: 1 | 2 | null
   onClaimNesPlayerSlot?: (slot: 1 | 2 | null) => boolean | void
+  adventureState?: AdventureQuestState
+  onStartStoryQuest?: (campaignId?: AdventureCampaignId) => void
+  onSelectAdventureArchetype?: (archetype: AdventureArchetypeId) => void
+  onUseAdventureAbility?: () => void
+  onRollAdventureD20?: () => void
+  onAdvanceAdventureScene?: () => void
 }
 
 export function SpatialControlDock({
@@ -238,6 +252,12 @@ export function SpatialControlDock({
   nesMultiplayerState,
   engagedNesSlot = null,
   onClaimNesPlayerSlot,
+  adventureState,
+  onStartStoryQuest,
+  onSelectAdventureArchetype,
+  onUseAdventureAbility,
+  onRollAdventureD20,
+  onAdvanceAdventureScene,
 }: SpatialControlDockProps) {
   const [minimized, setMinimized] = useState(() => Boolean(isFreeRoaming))
   const prevRoamingRef = useRef(isFreeRoaming)
@@ -596,6 +616,112 @@ export function SpatialControlDock({
             </group>
           )
         })()
+      ) : isAdventureMediaUrl(presenterState.mediaUrl) ? (
+        (() => {
+          const myHero = localUserId
+            ? adventureState?.players[localUserId]
+            : undefined
+          const arch = myHero?.archetype ?? 'vanguard'
+          const abilityUsed =
+            myHero?.abilityUsedInAct !== null &&
+            myHero?.abilityUsedInAct !== undefined
+          return (
+            <group position={[0, 0.035, 0.016]}>
+              {/* Cycle 4 Story Quest Campaigns */}
+              <DockButton
+                label="🗺 Campaign"
+                sublabel="Switch Quest"
+                position={[-0.495, 0, 0]}
+                width={0.185}
+                height={0.092}
+                variant="active"
+                onClick={() => {
+                  const currIdx = ADVENTURE_CAMPAIGN_LIST.findIndex(
+                    (c) => c.id === adventureState?.campaignId,
+                  )
+                  const nextCamp =
+                    ADVENTURE_CAMPAIGN_LIST[
+                      (currIdx + 1) % ADVENTURE_CAMPAIGN_LIST.length
+                    ]
+                  if (onStartStoryQuest) {
+                    onStartStoryQuest(nextCamp.id)
+                  } else {
+                    onSelectStreamUrl(
+                      buildQuestMediaUrl(nextCamp.id),
+                      `⚔️ Quest: ${nextCamp.title}`,
+                    )
+                  }
+                }}
+              />
+
+              {/* Cycle Class Archetype */}
+              <DockButton
+                label={
+                  arch === 'vanguard'
+                    ? '🛡 Vanguard'
+                    : arch === 'shadow'
+                      ? '🗡 Shadow'
+                      : arch === 'arcanist'
+                        ? '🔮 Arcanist'
+                        : '✨ Cleric'
+                }
+                sublabel="Tap Switch Class"
+                position={[-0.295, 0, 0]}
+                width={0.185}
+                height={0.092}
+                variant="default"
+                onClick={() => {
+                  const order: AdventureArchetypeId[] = [
+                    'vanguard',
+                    'shadow',
+                    'arcanist',
+                    'cleric',
+                  ]
+                  const nextArch = order[(order.indexOf(arch) + 1) % order.length]
+                  onSelectAdventureArchetype?.(nextArch)
+                }}
+              />
+
+              {/* Class Ability */}
+              <DockButton
+                label="⚡ Ability"
+                sublabel={abilityUsed ? 'Used' : 'Class Power'}
+                position={[-0.105, 0, 0]}
+                width={0.165}
+                height={0.092}
+                variant={abilityUsed ? 'default' : 'active'}
+                disabled={abilityUsed}
+                onClick={() => onUseAdventureAbility?.()}
+              />
+
+              {/* Roll D20 */}
+              <DockButton
+                label={myHero?.isGhost ? '👻 Ghost D20' : '🎲 Roll D20'}
+                sublabel={
+                  myHero?.totalRoll !== null && myHero?.totalRoll !== undefined
+                    ? `Last: ${myHero.totalRoll}`
+                    : 'Skill Check'
+                }
+                position={[0.11, 0, 0]}
+                width={0.23}
+                height={0.092}
+                variant="primary"
+                onClick={() => onRollAdventureD20?.()}
+              />
+
+              {/* Next Scene */}
+              <DockButton
+                label="▶ Next Scene"
+                sublabel="Advance Party"
+                position={[0.395, 0, 0]}
+                width={0.28}
+                height={0.092}
+                variant={adventureState?.phase === 'resolution' ? 'primary' : 'active'}
+                onClick={() => onAdvanceAdventureScene?.()}
+              />
+            </group>
+          )
+        })()
       ) : (
         <>
           <DockButton
@@ -801,12 +927,22 @@ export function SpatialControlDock({
             onClick={() => onSelectSeat('game-table:seat-0')}
           />
           <DockButton
-            label="📋 Props"
+            label="⚔️ Quest"
             position={[0.495, 0, 0.008]}
             width={0.185}
             height={0.068}
-            variant={localSeatId === 'station:chalkboard' ? 'primary' : 'default'}
-            onClick={() => onSelectSeat('station:chalkboard')}
+            variant={isAdventureMediaUrl(presenterState.mediaUrl) ? 'primary' : 'active'}
+            onClick={() => {
+              if (onStartStoryQuest) {
+                onStartStoryQuest()
+              } else {
+                const camp = ADVENTURE_CAMPAIGN_LIST[0]
+                onSelectStreamUrl(
+                  buildQuestMediaUrl(camp.id),
+                  `⚔️ Quest: ${camp.title}`,
+                )
+              }
+            }}
           />
 
           {/* Clubhouse Expansion Wing Rooms + 36-ROM NES Quick-Hop Strip */}

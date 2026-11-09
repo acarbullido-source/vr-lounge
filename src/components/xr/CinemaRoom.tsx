@@ -8,6 +8,11 @@ import {
   ROOM_SIZE_SPECS,
   getCatalogEntry,
 } from '../../constants/hangout'
+import {
+  getCinemaQuestCanvas,
+  isAdventureMediaUrl,
+  type QuestHotspotAction,
+} from '../../games/adventure'
 import type {
   ComputedSeat,
   ParticipantProfile,
@@ -36,6 +41,9 @@ export interface CinemaRoomProps {
   selectedFurnitureId: string | null
   onTakeControl: () => void
   onOpenYouTubeBrowser?: () => void
+  onStartStoryQuest?: () => void
+  onQuestScreenAction?: (action: QuestHotspotAction) => void
+  onQuestHoverCard?: (cardId: string | null) => void
   onUnlockAudio: () => void
   onSelectSeat: (seatId: string) => void
   onTeleportToFloor?: (worldPoint: [number, number, number]) => void
@@ -99,6 +107,9 @@ export function CinemaRoom({
   selectedFurnitureId,
   onTakeControl,
   onOpenYouTubeBrowser,
+  onStartStoryQuest,
+  onQuestScreenAction,
+  onQuestHoverCard,
   onUnlockAudio,
   onSelectSeat,
   onTeleportToFloor,
@@ -118,6 +129,8 @@ export function CinemaRoom({
 
   const [screenHovered, setScreenHovered] = useState(false)
   const [ytBtnHovered, setYtBtnHovered] = useState(false)
+  const [questBtnHovered, setQuestBtnHovered] = useState(false)
+  const lastHoveredCardRef = useRef<string | null>(null)
   const [draggingPlacement, setDraggingPlacement] = useState(false)
   const [hoverReticle, setHoverReticle] = useState<[number, number, number] | null>(null)
   const [walkTargetRing, setWalkTargetRing] = useState<[number, number, number] | null>(null)
@@ -991,9 +1004,44 @@ export function CinemaRoom({
           geometry={screen.curved ? curvedScreenGeo : flatScreenGeo}
           pointerEventsType={{ deny: 'grab' }}
           onPointerOver={() => setScreenHovered(true)}
-          onPointerOut={() => setScreenHovered(false)}
+          onPointerMove={(e) => {
+            if (
+              presenterState.screenMode === 'url-sync' &&
+              isAdventureMediaUrl(presenterState.mediaUrl) &&
+              e.uv
+            ) {
+              const hovered = getCinemaQuestCanvas().setHoveredUv(e.uv.x, e.uv.y)
+              const nextCardId =
+                hovered?.action.type === 'lock-card' ? hovered.action.cardId : null
+              if (nextCardId !== lastHoveredCardRef.current) {
+                lastHoveredCardRef.current = nextCardId
+                onQuestHoverCard?.(nextCardId)
+              }
+            }
+          }}
+          onPointerOut={() => {
+            setScreenHovered(false)
+            if (isAdventureMediaUrl(presenterState.mediaUrl)) {
+              getCinemaQuestCanvas().setHoveredUv(null, null)
+              if (lastHoveredCardRef.current !== null) {
+                lastHoveredCardRef.current = null
+                onQuestHoverCard?.(null)
+              }
+            }
+          }}
           onClick={(e) => {
             e.stopPropagation()
+            if (
+              presenterState.screenMode === 'url-sync' &&
+              isAdventureMediaUrl(presenterState.mediaUrl) &&
+              e.uv
+            ) {
+              const hit = getCinemaQuestCanvas().hitTestUv(e.uv.x, e.uv.y)
+              if (hit && onQuestScreenAction) {
+                onQuestScreenAction(hit.action)
+                return
+              }
+            }
             if (needsAudioUnlock) {
               onUnlockAudio()
               return
@@ -1035,7 +1083,17 @@ export function CinemaRoom({
               <group position={[0, -1.08, 0.02]}>
                 {onOpenYouTubeBrowser && (
                   <group
-                    position={[!presenterState.activePresenterId ? -1.42 : 0, 0, 0]}
+                    position={[
+                      !presenterState.activePresenterId
+                        ? onStartStoryQuest
+                          ? -2.65
+                          : -1.42
+                        : onStartStoryQuest
+                          ? -1.42
+                          : 0,
+                      0,
+                      0,
+                    ]}
                     pointerEventsType={{ deny: 'grab' }}
                     onPointerOver={(e) => {
                       e.stopPropagation()
@@ -1047,13 +1105,13 @@ export function CinemaRoom({
                       onOpenYouTubeBrowser()
                     }}
                   >
-                    <RoundedBox args={[2.55, 0.48, 0.04]} radius={0.09} smoothness={3}>
+                    <RoundedBox args={[2.45, 0.48, 0.04]} radius={0.09} smoothness={3}>
                       <meshBasicMaterial color={ytBtnHovered ? '#EA6B58' : '#E05A47'} />
                     </RoundedBox>
                     <Suspense fallback={null}>
                       <Text
                         position={[0, 0, 0.03]}
-                        fontSize={0.165}
+                        fontSize={0.155}
                         color="#F4F1EA"
                         anchorX="center"
                         anchorY="middle"
@@ -1064,22 +1122,69 @@ export function CinemaRoom({
                   </group>
                 )}
 
+                {onStartStoryQuest && (
+                  <group
+                    position={[
+                      !presenterState.activePresenterId
+                        ? 0
+                        : onOpenYouTubeBrowser
+                          ? 1.42
+                          : 0,
+                      0,
+                      0,
+                    ]}
+                    pointerEventsType={{ deny: 'grab' }}
+                    onPointerOver={(e) => {
+                      e.stopPropagation()
+                      setQuestBtnHovered(true)
+                    }}
+                    onPointerOut={() => setQuestBtnHovered(false)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onStartStoryQuest()
+                    }}
+                  >
+                    <RoundedBox args={[2.45, 0.48, 0.04]} radius={0.09} smoothness={3}>
+                      <meshBasicMaterial color={questBtnHovered ? '#38BDF8' : '#0284C7'} />
+                    </RoundedBox>
+                    <Suspense fallback={null}>
+                      <Text
+                        position={[0, 0, 0.03]}
+                        fontSize={0.155}
+                        color="#F8FAFC"
+                        anchorX="center"
+                        anchorY="middle"
+                      >
+                        ⚔️ Start Story Quest
+                      </Text>
+                    </Suspense>
+                  </group>
+                )}
+
                 {!presenterState.activePresenterId && (
                   <group
-                    position={[onOpenYouTubeBrowser ? 1.42 : 0, 0, 0]}
+                    position={[
+                      onOpenYouTubeBrowser && onStartStoryQuest
+                        ? 2.65
+                        : onOpenYouTubeBrowser || onStartStoryQuest
+                          ? 1.42
+                          : 0,
+                      0,
+                      0,
+                    ]}
                     pointerEventsType={{ deny: 'grab' }}
                     onClick={(e) => {
                       e.stopPropagation()
                       onTakeControl()
                     }}
                   >
-                    <RoundedBox args={[2.55, 0.48, 0.04]} radius={0.09} smoothness={3}>
+                    <RoundedBox args={[2.45, 0.48, 0.04]} radius={0.09} smoothness={3}>
                       <meshBasicMaterial color={screenHovered ? '#F2BE5C' : '#E5A93C'} />
                     </RoundedBox>
                     <Suspense fallback={null}>
                       <Text
                         position={[0, 0, 0.03]}
-                        fontSize={0.165}
+                        fontSize={0.155}
                         color="#0B0D10"
                         anchorX="center"
                         anchorY="middle"

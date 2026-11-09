@@ -37,6 +37,27 @@ import {
   scheduleCloudClubhouseSave,
 } from '../services/clubhouseStorage'
 import {
+  ADVENTURE_CAMPAIGNS,
+  advanceAdventureScene as applyAdvanceAdventureScene,
+  createInitialAdventureState,
+  expendAdventureItem as applyExpendAdventureItem,
+  getCinemaQuestCanvas,
+  hoverActionCard as applyHoverActionCard,
+  lockActionCard as applyLockActionCard,
+  resolveCrucialSkillCheck as applyResolveCrucialSkillCheck,
+  rollPlayerAdventureD20 as applyRollPlayerAdventureD20,
+  rollSpectralGhostSupportD20 as applyRollSpectralGhostSupportD20,
+  selectCampaignAndReset as applySelectCampaignAndReset,
+  selectPlayerArchetype as applySelectPlayerArchetype,
+  tetherSpectralGhost as applyTetherSpectralGhost,
+  triggerClassAbility as applyTriggerClassAbility,
+  type AdventureArchetypeId,
+  type AdventureCampaignId,
+  type AdventureItemId,
+  type AdventureQuestState,
+  type QuestHotspotAction,
+} from '../games/adventure'
+import {
   SOUNDBOARD_EFFECTS,
   playSoundboardEffect,
 } from '../services/soundboardAudio'
@@ -124,6 +145,9 @@ export function useBarGames({
   const [holotableState, setHolotableState] = useState<HolotableState>(() =>
     createInitialHolotableState(),
   )
+  const [adventureState, setAdventureState] = useState<AdventureQuestState>(() =>
+    createInitialAdventureState('sunken-reliquary'),
+  )
 
   const [activeDartShot, setActiveDartShot] = useState<LiveDartShotPacket | null>(null)
   const [activePuttShot, setActivePuttShot] = useState<LivePuttShotPacket | null>(null)
@@ -135,6 +159,7 @@ export function useBarGames({
   const shuffleboardRef = useRef<ShuffleboardState>(shuffleboardState)
   const cornholeRef = useRef<CornholeState>(cornholeState)
   const holotableRef = useRef<HolotableState>(holotableState)
+  const adventureRef = useRef<AdventureQuestState>(adventureState)
   const localProfileRef = useRef<ParticipantProfile>(localProfile)
   const roomCodeRef = useRef<string>(roomCode)
   const announcedClubhouseRef = useRef<boolean>(false)
@@ -166,6 +191,11 @@ export function useBarGames({
   useEffect(() => {
     holotableRef.current = holotableState
   }, [holotableState])
+
+  useEffect(() => {
+    adventureRef.current = adventureState
+    getCinemaQuestCanvas().updateState(adventureState, localUserId)
+  }, [adventureState, localUserId])
 
   useEffect(() => {
     localProfileRef.current = localProfile
@@ -218,6 +248,7 @@ export function useBarGames({
       const freshShuffleboard = createInitialShuffleboardState()
       const freshCornhole = createInitialCornholeState()
       const freshHolotable = createInitialHolotableState()
+      const freshAdventure = createInitialAdventureState('sunken-reliquary')
       const savedClubhouse =
         loadLocalClubhouseState(normalizedRoomCode) ?? createInitialClubhouseState()
 
@@ -227,6 +258,7 @@ export function useBarGames({
       shuffleboardRef.current = freshShuffleboard
       cornholeRef.current = freshCornhole
       holotableRef.current = freshHolotable
+      adventureRef.current = freshAdventure
       clubhouseRef.current = savedClubhouse
 
       setDartsState(freshDarts)
@@ -235,6 +267,7 @@ export function useBarGames({
       setShuffleboardState(freshShuffleboard)
       setCornholeState(freshCornhole)
       setHolotableState(freshHolotable)
+      setAdventureState(freshAdventure)
       setClubhouseState(savedClubhouse)
       setActiveDartShot(null)
       setActivePuttShot(null)
@@ -268,6 +301,7 @@ export function useBarGames({
         shuffleboardRef.current.revision > 0 ||
         cornholeRef.current.revision > 0 ||
         holotableRef.current.revision > 0 ||
+        adventureRef.current.revision > 0 ||
         clubhouseRef.current.revision > 0
       if (!hasAnyActivity) return
 
@@ -280,6 +314,7 @@ export function useBarGames({
         shuffleboard: shuffleboardRef.current,
         cornhole: cornholeRef.current,
         holotable: holotableRef.current,
+        adventure: adventureRef.current,
       })
     },
 
@@ -382,6 +417,14 @@ export function useBarGames({
           })
           break
         }
+        case 'adventure-state': {
+          setAdventureState((prev) => {
+            if (!isNewerState(event.payload, prev)) return prev
+            adventureRef.current = event.payload
+            return event.payload
+          })
+          break
+        }
         case 'clubhouse-state': {
           const clean = sanitizeClubhouseState(event.payload)
           if (!clean) break
@@ -455,6 +498,14 @@ export function useBarGames({
               return incomingHolo
             })
           }
+          if (event.adventure) {
+            const incomingAdventure = event.adventure
+            setAdventureState((prev) => {
+              if (!isNewerState(incomingAdventure, prev)) return prev
+              adventureRef.current = incomingAdventure
+              return incomingAdventure
+            })
+          }
           const cleanClub = sanitizeClubhouseState(event.clubhouse)
           if (cleanClub) {
             setClubhouseState((prev) => {
@@ -476,6 +527,17 @@ export function useBarGames({
       setActivePuttShot(null)
     },
   }
+
+  const commitAdventure = useCallback(
+    (next: AdventureQuestState) => {
+      const prev = adventureRef.current
+      if (next === prev) return
+      adventureRef.current = next
+      setAdventureState(next)
+      broadcastBarGamesEvent({ kind: 'adventure-state', payload: next })
+    },
+    [broadcastBarGamesEvent],
+  )
 
   // =========================================================================
   // PILLAR 1 & 2A: AUTHORITATIVE 3D DARTS (501 & CRICKET)
@@ -543,8 +605,49 @@ export function useBarGames({
       if (completedRecord) {
         appendSystemMessage(nextMatch.lastTurnSummary)
       }
+
+      // Crucial Lounge Skill Check hook for Darts station
+      const adv = adventureRef.current
+      if (
+        adv.crucialCheck &&
+        !adv.crucialCheck.resolved &&
+        adv.crucialCheck.kind === 'darts'
+      ) {
+        const passed =
+          packet.hit.points >= 15 ||
+          packet.hit.multiplier >= 2 ||
+          packet.hit.ring === 'outer-bull' ||
+          packet.hit.ring === 'inner-bull'
+        const critical =
+          packet.hit.ring === 'inner-bull' || packet.hit.multiplier === 3
+        const nextAdv = applyResolveCrucialSkillCheck(
+          adv,
+          {
+            userId: packet.shooterId,
+            displayName: packet.shooterName,
+            avatarColor: packet.color,
+          },
+          'darts',
+          {
+            succeeded: passed,
+            isCritical: critical,
+            detailLabel: `Dartboard (${packet.hit.label} · ${packet.hit.points} pts)`,
+          },
+        )
+        commitAdventure(nextAdv)
+        appendSystemMessage(
+          `🎯 Crucial Skill Check (${adv.crucialCheck.title}): ${packet.shooterName} hit ${packet.hit.label} (${packet.hit.points} pts) — ${
+            passed ? (critical ? 'CRITICAL TRIUMPH!' : 'PASSED!') : 'FAILED!'
+          }`,
+        )
+      }
     },
-    [appendSystemMessage, broadcastBarGamesEvent, persistAndBroadcastClubhouse],
+    [
+      appendSystemMessage,
+      broadcastBarGamesEvent,
+      commitAdventure,
+      persistAndBroadcastClubhouse,
+    ],
   )
 
   const joinDartsMatch = useCallback(() => {
@@ -700,8 +803,47 @@ export function useBarGames({
       if (completedRecord) {
         appendSystemMessage(nextMatch.lastOutcomeText)
       }
+
+      // Crucial Lounge Skill Check hook for Putting Strip station
+      const adv = adventureRef.current
+      if (
+        adv.crucialCheck &&
+        !adv.crucialCheck.resolved &&
+        adv.crucialCheck.kind === 'putting'
+      ) {
+        const passed = packet.holed || packet.distanceMeters <= 0.65
+        const critical = packet.holed
+        const distLabel = packet.holed
+          ? 'SUNK IN CUP!'
+          : `${packet.distanceMeters.toFixed(2)}m from cup`
+        const nextAdv = applyResolveCrucialSkillCheck(
+          adv,
+          {
+            userId: packet.shooterId,
+            displayName: packet.shooterName,
+            avatarColor: me.avatarColor,
+          },
+          'putting',
+          {
+            succeeded: passed,
+            isCritical: critical,
+            detailLabel: `Putting Strip (${distLabel})`,
+          },
+        )
+        commitAdventure(nextAdv)
+        appendSystemMessage(
+          `⛳ Crucial Skill Check (${adv.crucialCheck.title}): ${packet.shooterName} putt (${distLabel}) — ${
+            passed ? (critical ? 'CRITICAL TRIUMPH!' : 'PASSED!') : 'FAILED!'
+          }`,
+        )
+      }
     },
-    [appendSystemMessage, broadcastBarGamesEvent, persistAndBroadcastClubhouse],
+    [
+      appendSystemMessage,
+      broadcastBarGamesEvent,
+      commitAdventure,
+      persistAndBroadcastClubhouse,
+    ],
   )
 
   const joinPuttingMatch = useCallback(() => {
@@ -865,8 +1007,34 @@ export function useBarGames({
         lastRollTotal: total,
         lastRollTimestamp: now,
       })
+
+      // Crucial Lounge Skill Check hook for physical D20 rolls on the Game Table / Wrist
+      const d20Die = rolled.find((d) => d.kind === 'd20')
+      const adv = adventureRef.current
+      if (
+        d20Die &&
+        adv.crucialCheck &&
+        !adv.crucialCheck.resolved &&
+        adv.crucialCheck.kind === 'wrist-d20'
+      ) {
+        const nextAdv = applyResolveCrucialSkillCheck(
+          adv,
+          {
+            userId: localUserId,
+            displayName: me.displayName,
+            avatarColor: me.avatarColor,
+          },
+          'wrist-d20',
+          {
+            succeeded: d20Die.value >= adv.crucialCheck.fallbackDc,
+            isCritical: d20Die.value === 20,
+            rollValue: d20Die.value,
+          },
+        )
+        commitAdventure(nextAdv)
+      }
     },
-    [commitTabletop],
+    [commitAdventure, commitTabletop, localUserId],
   )
 
   const rerollSingleDie = useCallback(
@@ -2545,6 +2713,286 @@ export function useBarGames({
     [appendSystemMessage, broadcastBarGamesEvent],
   )
 
+  // =========================================================================
+  // PILLAR 8: MAIN CINEMA SCREEN ADVENTURE QUEST (SKILL-CHECK STORY QUEST)
+  // =========================================================================
+
+  const selectAdventureCampaign = useCallback(
+    (campaignId: AdventureCampaignId) => {
+      const me = localProfileRef.current
+      const userIdent = {
+        userId: localUserId,
+        displayName: me.displayName,
+        avatarColor: me.avatarColor,
+      }
+      const existingHero = adventureRef.current.players[localUserId]
+      const fresh = applySelectCampaignAndReset(
+        adventureRef.current,
+        campaignId,
+        userIdent,
+      )
+      const withMe = applySelectPlayerArchetype(
+        fresh,
+        userIdent,
+        existingHero?.archetype ?? 'vanguard',
+      )
+      commitAdventure(withMe)
+      const camp = ADVENTURE_CAMPAIGNS[campaignId]
+      appendSystemMessage(
+        `⚔️ ${me.displayName} launched Story Quest: "${camp.title}" (${camp.subtitle})!`,
+      )
+    },
+    [appendSystemMessage, commitAdventure, localUserId],
+  )
+
+  const restartAdventureCampaign = useCallback(() => {
+    const me = localProfileRef.current
+    const prev = adventureRef.current
+    const userIdent = {
+      userId: localUserId,
+      displayName: me.displayName,
+      avatarColor: me.avatarColor,
+    }
+    const existingHero = prev.players[localUserId]
+    const fresh = applySelectCampaignAndReset(prev, prev.campaignId, userIdent)
+    const withMe = applySelectPlayerArchetype(
+      fresh,
+      userIdent,
+      existingHero?.archetype ?? 'vanguard',
+    )
+    commitAdventure(withMe)
+    appendSystemMessage(
+      `⚔️ ${me.displayName} restarted "${ADVENTURE_CAMPAIGNS[prev.campaignId].title}" at Node 1!`,
+    )
+  }, [appendSystemMessage, commitAdventure, localUserId])
+
+  const selectAdventureArchetype = useCallback(
+    (archetype: AdventureArchetypeId) => {
+      const me = localProfileRef.current
+      const next = applySelectPlayerArchetype(
+        adventureRef.current,
+        {
+          userId: localUserId,
+          displayName: me.displayName,
+          avatarColor: me.avatarColor,
+        },
+        archetype,
+      )
+      commitAdventure(next)
+    },
+    [commitAdventure, localUserId],
+  )
+
+  const hoverAdventureCard = useCallback(
+    (cardId: string | null) => {
+      const me = localProfileRef.current
+      const next = applyHoverActionCard(
+        adventureRef.current,
+        {
+          userId: localUserId,
+          displayName: me.displayName,
+          avatarColor: me.avatarColor,
+        },
+        cardId,
+      )
+      commitAdventure(next)
+    },
+    [commitAdventure, localUserId],
+  )
+
+  const lockAdventureCard = useCallback(
+    (cardId: string) => {
+      const me = localProfileRef.current
+      const next = applyLockActionCard(
+        adventureRef.current,
+        {
+          userId: localUserId,
+          displayName: me.displayName,
+          avatarColor: me.avatarColor,
+        },
+        cardId,
+      )
+      commitAdventure(next)
+    },
+    [commitAdventure, localUserId],
+  )
+
+  const triggerAdventureAbility = useCallback(
+    (targetUserId?: string) => {
+      const me = localProfileRef.current
+      const next = applyTriggerClassAbility(
+        adventureRef.current,
+        {
+          userId: localUserId,
+          displayName: me.displayName,
+          avatarColor: me.avatarColor,
+        },
+        targetUserId,
+      )
+      commitAdventure(next)
+    },
+    [commitAdventure, localUserId],
+  )
+
+  const expendAdventureItemCallback = useCallback(
+    (itemId: AdventureItemId) => {
+      const me = localProfileRef.current
+      const next = applyExpendAdventureItem(
+        adventureRef.current,
+        {
+          userId: localUserId,
+          displayName: me.displayName,
+          avatarColor: me.avatarColor,
+        },
+        itemId,
+      )
+      commitAdventure(next)
+    },
+    [commitAdventure, localUserId],
+  )
+
+  const tetherAdventureGhost = useCallback(
+    (targetUserId: string) => {
+      const next = applyTetherSpectralGhost(adventureRef.current, localUserId, targetUserId)
+      commitAdventure(next)
+    },
+    [commitAdventure, localUserId],
+  )
+
+  const rollAdventureGhostSupportD20 = useCallback(() => {
+    const next = applyRollSpectralGhostSupportD20(adventureRef.current, localUserId)
+    commitAdventure(next)
+  }, [commitAdventure, localUserId])
+
+  const rollAdventureD20 = useCallback(() => {
+    const me = localProfileRef.current
+    const userIdent = {
+      userId: localUserId,
+      displayName: me.displayName,
+      avatarColor: me.avatarColor,
+    }
+    let state = adventureRef.current
+    const hero = state.players[localUserId]
+    if (hero?.isGhost) {
+      const nextGhost = applyRollSpectralGhostSupportD20(state, localUserId)
+      commitAdventure(nextGhost)
+      return
+    }
+    if (!hero || !hero.lockedCardId) {
+      const camp = ADVENTURE_CAMPAIGNS[state.campaignId]
+      const node = camp.nodes[state.currentNodeId]
+      const firstCard = node?.choices[0]
+      if (firstCard) {
+        state = applyLockActionCard(state, userIdent, firstCard.id)
+      }
+    }
+    const next = applyRollPlayerAdventureD20(state, userIdent)
+    commitAdventure(next)
+  }, [commitAdventure, localUserId])
+
+  const rollAdventureCrucialFallback = useCallback(() => {
+    const me = localProfileRef.current
+    const adv = adventureRef.current
+    if (!adv.crucialCheck || adv.crucialCheck.resolved) return
+    const next = applyResolveCrucialSkillCheck(
+      adv,
+      {
+        userId: localUserId,
+        displayName: me.displayName,
+        avatarColor: me.avatarColor,
+      },
+      'wrist-d20',
+    )
+    commitAdventure(next)
+  }, [commitAdventure, localUserId])
+
+  const advanceAdventureScene = useCallback(() => {
+    const me = localProfileRef.current
+    const next = applyAdvanceAdventureScene(adventureRef.current, {
+      userId: localUserId,
+      displayName: me.displayName,
+      avatarColor: me.avatarColor,
+    })
+    commitAdventure(next)
+  }, [commitAdventure, localUserId])
+
+  const handleQuestScreenHotspot = useCallback(
+    (action: QuestHotspotAction) => {
+      switch (action.type) {
+        case 'select-campaign':
+          selectAdventureCampaign(action.campaignId)
+          break
+        case 'select-archetype':
+          selectAdventureArchetype(action.archetype)
+          break
+        case 'lock-card':
+          lockAdventureCard(action.cardId)
+          break
+        case 'use-ability':
+          triggerAdventureAbility()
+          break
+        case 'use-item':
+          expendAdventureItemCallback(action.itemId)
+          break
+        case 'tether-ghost':
+          tetherAdventureGhost(action.targetUserId)
+          break
+        case 'roll-d20':
+          rollAdventureD20()
+          break
+        case 'roll-crucial-fallback':
+          rollAdventureCrucialFallback()
+          break
+        case 'advance-scene':
+          advanceAdventureScene()
+          break
+        case 'restart-campaign':
+          restartAdventureCampaign()
+          break
+      }
+    },
+    [
+      advanceAdventureScene,
+      expendAdventureItemCallback,
+      lockAdventureCard,
+      restartAdventureCampaign,
+      rollAdventureCrucialFallback,
+      rollAdventureD20,
+      selectAdventureArchetype,
+      selectAdventureCampaign,
+      tetherAdventureGhost,
+      triggerAdventureAbility,
+    ],
+  )
+
+  // 60-second Spotlight Countdown Auto-Fallback for Crucial Lounge Skill Checks
+  useEffect(() => {
+    const crucial = adventureState.crucialCheck
+    if (!crucial || crucial.resolved) return
+    const elapsedMs = Date.now() - crucial.startedAt
+    const remainingMs = Math.max(1200, 60000 - elapsedMs)
+    const timer = window.setTimeout(() => {
+      const curr = adventureRef.current.crucialCheck
+      if (!curr || curr.resolved) return
+      const me = localProfileRef.current
+      const next = applyResolveCrucialSkillCheck(
+        adventureRef.current,
+        {
+          userId: localUserId,
+          displayName: me.displayName,
+          avatarColor: me.avatarColor,
+        },
+        'wrist-d20',
+      )
+      commitAdventure(next)
+    }, remainingMs)
+    return () => window.clearTimeout(timer)
+  }, [
+    adventureState.crucialCheck,
+    commitAdventure,
+    localUserId,
+  ])
+
   return {
     dartsState,
     puttingState,
@@ -2553,6 +3001,7 @@ export function useBarGames({
     shuffleboardState,
     cornholeState,
     holotableState,
+    adventureState,
     activeDartShot,
     activePuttShot,
     // Darts
@@ -2625,5 +3074,19 @@ export function useBarGames({
     dropConnect4Column,
     resetConnect4Grid,
     recordArcadeStationScore,
+    // Main Cinema Screen Adventure Quest (Skill-Check Story Quest)
+    selectAdventureCampaign,
+    restartAdventureCampaign,
+    selectAdventureArchetype,
+    hoverAdventureCard,
+    lockAdventureCard,
+    useAdventureAbility: triggerAdventureAbility,
+    useAdventureItem: expendAdventureItemCallback,
+    tetherAdventureGhost,
+    rollAdventureGhostSupportD20,
+    rollAdventureD20,
+    rollAdventureCrucialFallback,
+    advanceAdventureScene,
+    handleQuestScreenHotspot,
   }
 }

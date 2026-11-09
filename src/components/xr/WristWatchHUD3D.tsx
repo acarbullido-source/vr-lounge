@@ -28,6 +28,8 @@ export interface WristWatchHUD3DProps {
   onToggleMute: () => void
   onCycleStreamVolume: () => void
   onSummonMainDock: () => void
+  onRollQuestD20?: () => void
+  onStartStoryQuest?: () => void
 }
 
 const WING_LABELS: Record<LoungeWingId, { short: string; emoji: string }> = {
@@ -151,7 +153,7 @@ export function WristWatchHUD3D({
   activeLoungeWing,
   flyMode,
   isMuted,
-  cinemaVolume,
+  cinemaVolume: _cinemaVolume,
   effectiveCinemaVolume,
   presenterState,
   liveAlertText,
@@ -163,6 +165,8 @@ export function WristWatchHUD3D({
   onToggleMute,
   onCycleStreamVolume,
   onSummonMainDock,
+  onRollQuestD20,
+  onStartStoryQuest,
 }: WristWatchHUD3DProps) {
   const { camera, gl } = useThree()
   const xrOriginRefSpace = useXR((s) => s.originReferenceSpace)
@@ -547,12 +551,12 @@ export function WristWatchHUD3D({
               onClick={onRecenterView}
             />
 
-            {/* Row 4: Audio & Media (Mic Mute, Stream Volume/Mute, Main Dock) */}
+            {/* Row 4: Audio, Story Quest D20 Roller & Main Dock */}
             <WatchChipButton
-              label={isMuted ? '🔇 Mic Off' : '🎙 Mic On'}
-              sublabel={isMuted ? 'Tap Unmute' : 'Voice Live'}
-              position={[-0.072, -0.067, 0.008]}
-              width={0.068}
+              label={isMuted ? '🔇 Mic' : '🎙 Mic'}
+              sublabel={isMuted ? 'Muted' : 'Live'}
+              position={[-0.081, -0.067, 0.008]}
+              width={0.051}
               height={0.028}
               danger={isMuted}
               active={!isMuted}
@@ -560,19 +564,35 @@ export function WristWatchHUD3D({
               onClick={onToggleMute}
             />
             <WatchChipButton
-              label={streamPct === 0 ? '🔇 TV 0%' : `🔊 TV ${streamPct}%`}
-              sublabel={`Saved ${Math.round(cinemaVolume * 100)}%`}
-              position={[0, -0.067, 0.008]}
-              width={0.068}
+              label={streamPct === 0 ? '🔇 0%' : `🔊 ${streamPct}%`}
+              sublabel="TV Vol"
+              position={[-0.027, -0.067, 0.008]}
+              width={0.051}
               height={0.028}
               active={streamPct > 0}
               onClick={onCycleStreamVolume}
             />
             <WatchChipButton
-              label="🎛 Main Dock"
-              sublabel="Toggle UI"
-              position={[0.072, -0.067, 0.008]}
-              width={0.068}
+              label="🎲 D20"
+              sublabel="Quest Roll"
+              position={[0.027, -0.067, 0.008]}
+              width={0.051}
+              height={0.028}
+              active={true}
+              accentColor="#F59E0B"
+              onClick={() => {
+                if (onRollQuestD20) {
+                  onRollQuestD20()
+                } else if (onStartStoryQuest) {
+                  onStartStoryQuest()
+                }
+              }}
+            />
+            <WatchChipButton
+              label="🎛 Dock"
+              sublabel="UI / Quest"
+              position={[0.081, -0.067, 0.008]}
+              width={0.051}
               height={0.028}
               onClick={onSummonMainDock}
             />

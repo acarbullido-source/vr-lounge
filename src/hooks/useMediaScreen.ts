@@ -2,6 +2,10 @@ import type Hls from 'hls.js'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import {
+  getCinemaQuestCanvas,
+  isAdventureMediaUrl,
+} from '../games/adventure'
+import {
   getNesEmulator,
   isNesMediaUrl,
   parseNesCartridgeIdFromUrl,
@@ -413,6 +417,7 @@ export function useMediaScreen({
         activeYouTubeVideoIdRef.current = null
         setYoutubeEmbedVideoId(null)
         getNesEmulator().setConsumerActive('screen', false)
+        getCinemaQuestCanvas().setConsumerActive('screen', false)
         destroyHls()
         clearCompanionAudio()
         candidatesRef.current = []
@@ -433,6 +438,7 @@ export function useMediaScreen({
         activeYouTubeVideoIdRef.current = null
         setYoutubeEmbedVideoId(null)
         getNesEmulator().setConsumerActive('screen', false)
+        getCinemaQuestCanvas().setConsumerActive('screen', false)
         destroyHls()
         clearCompanionAudio()
         candidatesRef.current = []
@@ -482,6 +488,7 @@ export function useMediaScreen({
         activeYouTubeVideoIdRef.current = null
         setYoutubeEmbedVideoId(null)
         getNesEmulator().setConsumerActive('screen', false)
+        getCinemaQuestCanvas().setConsumerActive('screen', false)
         setHasVideoFrames(false)
         setIsResolvingMedia(false)
         return
@@ -501,6 +508,25 @@ export function useMediaScreen({
       destroyHls()
       clearCompanionAudio()
       videoElement.srcObject = null
+
+      if (isAdventureMediaUrl(rawUrl)) {
+        activeYouTubeVideoIdRef.current = null
+        setYoutubeEmbedVideoId(null)
+        getNesEmulator().setConsumerActive('screen', false)
+        const questCanvas = getCinemaQuestCanvas()
+        questCanvas.setConsumerActive('screen', true)
+        sourceAttached = true
+        setIsResolvingMedia(false)
+        setActiveStreamQuality('1080p Story Quest Engine')
+        videoElement.pause()
+        videoElement.removeAttribute('src')
+        videoElement.srcObject = null
+        if (!cancelled) {
+          setHasVideoFrames(true)
+        }
+        return
+      }
+      getCinemaQuestCanvas().setConsumerActive('screen', false)
 
       if (isNesMediaUrl(rawUrl)) {
         activeYouTubeVideoIdRef.current = null
@@ -654,7 +680,8 @@ export function useMediaScreen({
       presenterState.screenMode !== 'url-sync' ||
       !presenterState.activePresenterId ||
       isResolvingMedia ||
-      isNesMediaUrl(presenterState.mediaUrl)
+      isNesMediaUrl(presenterState.mediaUrl) ||
+      isAdventureMediaUrl(presenterState.mediaUrl)
     ) {
       return
     }
@@ -722,6 +749,7 @@ export function useMediaScreen({
       if (
         presenterState.screenMode === 'url-sync' &&
         !isNesMediaUrl(presenterState.mediaUrl) &&
+        !isAdventureMediaUrl(presenterState.mediaUrl) &&
         currentTime > 0.5 &&
         Math.abs(videoElement.currentTime - currentTime) > 0.6
       ) {
@@ -795,7 +823,8 @@ export function useMediaScreen({
     const onError = () => {
       if (
         presenterState.screenMode !== 'url-sync' ||
-        isNesMediaUrl(presenterState.mediaUrl)
+        isNesMediaUrl(presenterState.mediaUrl) ||
+        isAdventureMediaUrl(presenterState.mediaUrl)
       ) {
         return
       }
@@ -848,6 +877,7 @@ export function useMediaScreen({
         isLocalPresenter &&
         presenterState.screenMode === 'url-sync' &&
         !isNesMediaUrl(presenterState.mediaUrl) &&
+        !isAdventureMediaUrl(presenterState.mediaUrl) &&
         !videoElement.paused &&
         videoElement.readyState >= 2
       ) {
@@ -951,6 +981,11 @@ export function useMediaScreen({
     Boolean(presenterState.activePresenterId) &&
     isNesMediaUrl(presenterState.mediaUrl)
 
+  const isAdventureStreamActive =
+    presenterState.screenMode === 'url-sync' &&
+    Boolean(presenterState.activePresenterId) &&
+    isAdventureMediaUrl(presenterState.mediaUrl)
+
   // Automatically resume active video/audio or NES PAPU audio when a VR headset wakes up
   useEffect(() => {
     const onVisibilityChange = () => {
@@ -958,6 +993,10 @@ export function useMediaScreen({
       videoTexture.needsUpdate = true
       if (isNesStreamActive) {
         getNesEmulator().wakeAudioAndTexture()
+        return
+      }
+      if (isAdventureStreamActive) {
+        getCinemaQuestCanvas().texture.needsUpdate = true
         return
       }
       const { isPlaying } = latestPlaybackRef.current
@@ -976,6 +1015,7 @@ export function useMediaScreen({
     return () => document.removeEventListener('visibilitychange', onVisibilityChange)
   }, [
     companionAudioElement,
+    isAdventureStreamActive,
     isNesStreamActive,
     presenterState.activePresenterId,
     presenterState.screenMode,
@@ -983,26 +1023,34 @@ export function useMediaScreen({
     videoTexture,
   ])
 
+  const isInteractiveCanvasStream = isNesStreamActive || isAdventureStreamActive
+
   return {
     videoElement,
     videoTexture: isNesStreamActive
       ? (getNesEmulator().texture as unknown as THREE.VideoTexture)
-      : videoTexture,
-    hasVideoFrames: isNesStreamActive
+      : isAdventureStreamActive
+        ? (getCinemaQuestCanvas().texture as unknown as THREE.VideoTexture)
+        : videoTexture,
+    hasVideoFrames: isInteractiveCanvasStream
       ? true
       : Boolean(youtubeEmbedVideoId) || hasVideoFrames,
-    isResolvingMedia: isNesStreamActive ? false : isResolvingMedia,
-    activeStreamQuality: isNesStreamActive ? '60fps JSNES Hardware' : activeStreamQuality,
+    isResolvingMedia: isInteractiveCanvasStream ? false : isResolvingMedia,
+    activeStreamQuality: isNesStreamActive
+      ? '60fps JSNES Hardware'
+      : isAdventureStreamActive
+        ? '1080p Story Quest Engine'
+        : activeStreamQuality,
     relatedVideos,
     localCurrentTime,
     localDuration,
-    mediaError: isNesStreamActive ? null : mediaError,
-    needsAudioUnlock: isNesStreamActive
+    mediaError: isInteractiveCanvasStream ? null : mediaError,
+    needsAudioUnlock: isInteractiveCanvasStream
       ? false
       : Boolean(youtubeEmbedVideoId && !inVR)
         ? false
         : needsAudioUnlock,
-    youtubeEmbedVideoId: isNesStreamActive ? null : youtubeEmbedVideoId,
+    youtubeEmbedVideoId: isInteractiveCanvasStream ? null : youtubeEmbedVideoId,
     dismissYouTubeEmbed,
     openYouTubeEmbed,
     unlockAudio,

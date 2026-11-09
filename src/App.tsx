@@ -61,6 +61,12 @@ import {
   resolveFlyablePosition,
   resolveWalkablePosition,
 } from './constants/hangout'
+import {
+  ADVENTURE_CAMPAIGNS,
+  buildQuestMediaUrl,
+  type AdventureCampaignId,
+  type QuestHotspotAction,
+} from './games/adventure'
 import { useBarGames } from './hooks/useBarGames'
 import { useMediaScreen } from './hooks/useMediaScreen'
 import { useRoomSession, type JoinRoomOptions } from './hooks/useRoomSession'
@@ -207,6 +213,8 @@ interface SeatRigProps {
   onToggleMute: () => void
   onCycleStreamVolume: () => void
   onSummonDockToggle: () => void
+  onRollQuestD20?: () => void
+  onStartStoryQuest?: () => void
   onInVRChange: (inVR: boolean) => void
   onRoamWingChange?: (wing: LoungeWingId) => void
   children?: React.ReactNode
@@ -258,6 +266,8 @@ function SeatCameraAndOriginRig({
   onToggleMute,
   onCycleStreamVolume,
   onSummonDockToggle,
+  onRollQuestD20,
+  onStartStoryQuest,
   onInVRChange,
   onRoamWingChange,
   children,
@@ -1243,6 +1253,8 @@ function SeatCameraAndOriginRig({
           onToggleMute={onToggleMute}
           onCycleStreamVolume={onCycleStreamVolume}
           onSummonMainDock={onSummonDockToggle}
+          onRollQuestD20={onRollQuestD20}
+          onStartStoryQuest={onStartStoryQuest}
         />
       </SceneSectionBoundary>
 
@@ -1760,6 +1772,39 @@ export function App() {
     [handleLoadStreamUrl],
   )
 
+  const handleStartStoryQuest = useCallback(
+    (campaignId?: AdventureCampaignId) => {
+      const targetId = campaignId ?? barGames.adventureState.campaignId ?? 'sunken-reliquary'
+      const camp = ADVENTURE_CAMPAIGNS[targetId] ?? ADVENTURE_CAMPAIGNS['sunken-reliquary']
+      barGames.selectAdventureCampaign(camp.id)
+      handleLoadStreamUrl(
+        buildQuestMediaUrl(camp.id),
+        `⚔️ Quest: ${camp.title}`,
+        false,
+      )
+      setYoutubeBrowserOpen(false)
+      setNesLibraryOpen(false)
+    },
+    [barGames, handleLoadStreamUrl],
+  )
+
+  const handleQuestScreenAction = useCallback(
+    (action: QuestHotspotAction) => {
+      if (action.type === 'select-campaign') {
+        const camp =
+          ADVENTURE_CAMPAIGNS[action.campaignId] ??
+          ADVENTURE_CAMPAIGNS['sunken-reliquary']
+        handleLoadStreamUrl(
+          buildQuestMediaUrl(camp.id),
+          `⚔️ Quest: ${camp.title}`,
+          false,
+        )
+      }
+      barGames.handleQuestScreenHotspot(action)
+    },
+    [barGames, handleLoadStreamUrl],
+  )
+
   const handleOpenYouTubeBrowser = useCallback(() => {
     setNesLibraryOpen(false)
     setBuildMode(false)
@@ -2210,6 +2255,8 @@ export function App() {
               onCycleStreamVolume={handleCycleStreamVolume}
               onRoamWingChange={setFreeRoamWing}
               onSummonDockToggle={() => setDockSummonToggleVersion((v) => v + 1)}
+              onRollQuestD20={barGames.rollAdventureD20}
+              onStartStoryQuest={() => handleStartStoryQuest()}
               onInVRChange={handleInVRChange}
             >
               {room.joined && (
@@ -2347,6 +2394,12 @@ export function App() {
                         nesMultiplayerState={room.nesMultiplayerState}
                         engagedNesSlot={engagedNesSlot}
                         onClaimNesPlayerSlot={room.claimNesPlayerSlot}
+                        adventureState={barGames.adventureState}
+                        onStartStoryQuest={handleStartStoryQuest}
+                        onSelectAdventureArchetype={barGames.selectAdventureArchetype}
+                        onUseAdventureAbility={barGames.useAdventureAbility}
+                        onRollAdventureD20={barGames.rollAdventureD20}
+                        onAdvanceAdventureScene={barGames.advanceAdventureScene}
                       />
                     </SceneSectionBoundary>
                   )}
@@ -2373,6 +2426,9 @@ export function App() {
               selectedFurnitureId={selectedFurnitureId}
               onTakeControl={() => room.takeControl()}
               onOpenYouTubeBrowser={room.joined ? handleOpenYouTubeBrowser : undefined}
+              onStartStoryQuest={room.joined ? () => handleStartStoryQuest() : undefined}
+              onQuestScreenAction={room.joined ? handleQuestScreenAction : undefined}
+              onQuestHoverCard={room.joined ? barGames.hoverAdventureCard : undefined}
               onUnlockAudio={media.unlockAudio}
               onSelectSeat={handleSelectSeat}
               onTeleportToFloor={room.joined ? handleTeleportToFloor : undefined}
@@ -2506,6 +2562,11 @@ export function App() {
                 remoteVoiceStreams={webrtc.remoteVoiceStreams}
                 voiceVolume={voiceVolume}
                 broadcastPose={room.broadcastPose}
+                spectralGhostUserIds={Object.values(
+                  barGames.adventureState.players,
+                )
+                  .filter((p) => p.isGhost)
+                  .map((p) => p.userId)}
               />
             </SceneSectionBoundary>
 
@@ -2707,6 +2768,16 @@ export function App() {
             onTriggerSoundboard={barGames.triggerSoundboardEffect}
             onSpawnFurniture={handleSpawnFurniture}
             onUpdateFurnitureItem={handleUpdateFurnitureItem}
+            adventureState={barGames.adventureState}
+            onStartStoryQuest={handleStartStoryQuest}
+            onSelectAdventureArchetype={barGames.selectAdventureArchetype}
+            onLockAdventureCard={barGames.lockAdventureCard}
+            onUseAdventureAbility={barGames.useAdventureAbility}
+            onUseAdventureItem={barGames.useAdventureItem}
+            onTetherAdventureGhost={barGames.tetherAdventureGhost}
+            onRollAdventureD20={barGames.rollAdventureD20}
+            onRollAdventureCrucialFallback={barGames.rollAdventureCrucialFallback}
+            onAdvanceAdventureScene={barGames.advanceAdventureScene}
           />
         )}
 
@@ -2805,6 +2876,18 @@ export function App() {
           onLockProp={barGames.lockPredictionProp}
           onResolveProp={barGames.resolvePredictionProp}
           onDeleteProp={barGames.deletePredictionProp}
+          adventureState={barGames.adventureState}
+          onStartStoryQuest={handleStartStoryQuest}
+          onRestartStoryQuest={barGames.restartAdventureCampaign}
+          onSelectAdventureArchetype={barGames.selectAdventureArchetype}
+          onHoverAdventureCard={barGames.hoverAdventureCard}
+          onLockAdventureCard={barGames.lockAdventureCard}
+          onUseAdventureAbility={barGames.useAdventureAbility}
+          onUseAdventureItem={barGames.useAdventureItem}
+          onTetherAdventureGhost={barGames.tetherAdventureGhost}
+          onRollAdventureD20={barGames.rollAdventureD20}
+          onRollAdventureCrucialFallback={barGames.rollAdventureCrucialFallback}
+          onAdvanceAdventureScene={barGames.advanceAdventureScene}
         />
       )}
 

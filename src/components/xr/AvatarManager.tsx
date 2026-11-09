@@ -26,6 +26,7 @@ export interface AvatarManagerProps {
     yaw: number
   }>
   isFlying?: boolean
+  spectralGhostUserIds?: string[]
   remoteVoiceStreams: Record<string, MediaStream>
   voiceVolume: number
   broadcastPose: (pose: AvatarPose6DoF) => void
@@ -62,6 +63,7 @@ interface RemoteAvatarProps {
   participant: ParticipantProfile
   computedSeats: ComputedSeat[]
   isPresenter: boolean
+  isSpectralGhost: boolean
   remotePosesRef: React.RefObject<Map<string, AvatarPose6DoF>>
   voiceStream: MediaStream | undefined
   listener: THREE.AudioListener
@@ -72,6 +74,7 @@ function RemoteAvatar({
   participant,
   computedSeats,
   isPresenter,
+  isSpectralGhost,
   remotePosesRef,
   voiceStream,
   listener,
@@ -317,6 +320,7 @@ function RemoteAvatar({
 
   const statusTag = [
     participant.inVR ? 'VR' : 'DESKTOP',
+    isSpectralGhost ? '👻 GHOST' : null,
     isRemoteFlying
       ? '🚀 FLYING'
       : participant.seatId === FREE_ROAM_SEAT_ID
@@ -341,7 +345,7 @@ function RemoteAvatar({
       >
         <AvatarHead3D
           style={participant.avatarStyle}
-          accentColor={participant.avatarColor}
+          accentColor={isSpectralGhost ? '#22D3EE' : participant.avatarColor}
           customization={cust}
           speakLevelRef={speakLevelRef}
         />
@@ -353,7 +357,7 @@ function RemoteAvatar({
         position={[seat.position[0], seat.position[1] + 0.82, seat.position[2]]}
       >
         <AvatarTorso3D
-          accentColor={participant.avatarColor}
+          accentColor={isSpectralGhost ? '#22D3EE' : participant.avatarColor}
           customization={cust}
         />
       </group>
@@ -396,6 +400,7 @@ function RemoteAvatar({
         <AvatarHand3D
           accentColor={participant.avatarColor}
           bodyColor={cust.bodyColor}
+          isSpectralGhost={isSpectralGhost}
         />
       </group>
 
@@ -404,6 +409,7 @@ function RemoteAvatar({
         <AvatarHand3D
           accentColor={participant.avatarColor}
           bodyColor={cust.bodyColor}
+          isSpectralGhost={isSpectralGhost}
         />
       </group>
 
@@ -415,7 +421,7 @@ function RemoteAvatar({
         <Text
           position={[0, 0.032, 0.012]}
           fontSize={0.064}
-          color="#F4F1EA"
+          color={isSpectralGhost ? '#67E8F9' : '#F4F1EA'}
           maxWidth={0.72}
           anchorX="center"
           anchorY="middle"
@@ -425,7 +431,7 @@ function RemoteAvatar({
         <Text
           position={[0, -0.042, 0.012]}
           fontSize={0.042}
-          color={isPresenter ? '#E5A93C' : participant.avatarColor}
+          color={isSpectralGhost ? '#22D3EE' : isPresenter ? '#E5A93C' : participant.avatarColor}
           anchorX="center"
           anchorY="middle"
         >
@@ -445,6 +451,7 @@ export function AvatarManager({
   remotePosesRef,
   localRoamPoseRef,
   isFlying = false,
+  spectralGhostUserIds = [],
   remoteVoiceStreams,
   voiceVolume,
   broadcastPose,
@@ -459,6 +466,9 @@ export function AvatarManager({
   const rightController = useXRInputSourceState('controller', 'right')
   const leftHand = useXRInputSourceState('hand', 'left')
   const rightHand = useXRInputSourceState('hand', 'right')
+  const localLeftGhostHandRef = useRef<THREE.Group>(null)
+  const localRightGhostHandRef = useRef<THREE.Group>(null)
+  const isLocalSpectralGhost = spectralGhostUserIds.includes(localProfile.userId)
 
   // Single THREE.AudioListener mounted to the local viewer's camera for 3D spatial voice
   const audioListener = useMemo(() => new THREE.AudioListener(), [])
@@ -481,6 +491,25 @@ export function AvatarManager({
 
   // Throttled ~20Hz (50ms) local 6DoF capture & broadcast
   useFrame(({ clock }) => {
+    // Update local VR Spectral Ghost hand overlays every frame if local player is a Spectral Ghost
+    if (inXRSession && isLocalSpectralGhost) {
+      const lObj = leftController?.object ?? leftHand?.object
+      if (localLeftGhostHandRef.current && lObj) {
+        lObj.getWorldPosition(localLeftGhostHandRef.current.position)
+        lObj.getWorldQuaternion(localLeftGhostHandRef.current.quaternion)
+        localLeftGhostHandRef.current.visible = true
+      }
+      const rObj = rightController?.object ?? rightHand?.object
+      if (localRightGhostHandRef.current && rObj) {
+        rObj.getWorldPosition(localRightGhostHandRef.current.position)
+        rObj.getWorldQuaternion(localRightGhostHandRef.current.quaternion)
+        localRightGhostHandRef.current.visible = true
+      }
+    } else {
+      if (localLeftGhostHandRef.current) localLeftGhostHandRef.current.visible = false
+      if (localRightGhostHandRef.current) localRightGhostHandRef.current.visible = false
+    }
+
     if (!joined) return
     const nowElapsed = clock.elapsedTime
     if (nowElapsed - lastBroadcastTimeRef.current < 0.05) return
@@ -638,12 +667,21 @@ export function AvatarManager({
 
   return (
     <group name="avatar-manager">
+      {/* Local VR Spectral Ghost Hand Overlays (translucent cyan when local hero is at 0 HP) */}
+      <group ref={localLeftGhostHandRef} visible={false}>
+        <AvatarHand3D accentColor="#67E8F9" isSpectralGhost />
+      </group>
+      <group ref={localRightGhostHandRef} visible={false}>
+        <AvatarHand3D accentColor="#67E8F9" isSpectralGhost />
+      </group>
+
       {remoteParticipants.map((remote) => (
         <RemoteAvatar
           key={remote.userId}
           participant={remote}
           computedSeats={computedSeats}
           isPresenter={remote.userId === activePresenterId}
+          isSpectralGhost={spectralGhostUserIds.includes(remote.userId)}
           remotePosesRef={remotePosesRef}
           voiceStream={remoteVoiceStreams[remote.userId]}
           listener={audioListener}

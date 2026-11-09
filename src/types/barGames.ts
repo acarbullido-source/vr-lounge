@@ -1,3 +1,5 @@
+import type { AdventureQuestState } from '../games/adventure/types'
+
 export type DartGameMode = '501' | 'cricket'
 
 export type PuttingGameMode = 'streak' | 'puttoff'
@@ -436,6 +438,7 @@ export type BarGamesWireEvent =
   | { kind: 'shuffleboard-state'; payload: ShuffleboardState }
   | { kind: 'cornhole-state'; payload: CornholeState }
   | { kind: 'holotable-state'; payload: HolotableState }
+  | { kind: 'adventure-state'; payload: AdventureQuestState }
   | { kind: 'clubhouse-state'; payload: ClubhousePersistentState }
   | {
       kind: 'soundboard-fx'
@@ -451,6 +454,7 @@ export type BarGamesWireEvent =
       shuffleboard?: ShuffleboardState
       cornhole?: CornholeState
       holotable?: HolotableState
+      adventure?: AdventureQuestState
       clubhouse: ClubhousePersistentState
     }
 

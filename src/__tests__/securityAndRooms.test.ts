@@ -39,6 +39,19 @@ import {
   getYouTubeAccountState,
 } from '../services/youtubeAccount'
 import { resolveYouTubeStreams } from '../services/youtube'
+import {
+  ADVENTURE_CAMPAIGNS,
+  ADVENTURE_CAMPAIGN_LIST,
+  advanceAdventureScene,
+  createInitialAdventureState,
+  expendAdventureItem,
+  getActiveSceneNode,
+  lockActionCard,
+  resolveCrucialSkillCheck,
+  resolveNarrativeEchoText,
+  rollPlayerAdventureD20,
+  selectPlayerArchetype,
+} from '../games/adventure'
 import type { ParticipantProfile } from '../types/lounge'
 
 function createMemoryStorage(): Storage {
@@ -493,4 +506,137 @@ describe('VR Lounge Security, E2EE, Anti-Impersonation & Physics Regression Suit
       globalThis.fetch = originalFetch
     }
   })
+
+  it('8. validates all 4 12-node Adventure Quest campaigns, stateful worldFlags, Crucial Lounge Checks, and Spectral Ghost revival', () => {
+    assert.equal(
+      ADVENTURE_CAMPAIGN_LIST.length,
+      4,
+      'Must include all 4 branching campaigns',
+    )
+
+    for (const campaign of ADVENTURE_CAMPAIGN_LIST) {
+      const stagesPresent = new Set<number>()
+      let hasSanctuaryStage7 = false
+      let hasBossStage12 = false
+
+      for (const node of Object.values(campaign.nodes)) {
+        stagesPresent.add(node.stageNumber)
+        assert.ok(
+          node.choices.length >= 3 && node.choices.length <= 4,
+          `${campaign.id}:${node.id} must have 3-4 action cards`,
+        )
+        assert.ok(
+          node.prose.length > 80,
+          `${campaign.id}:${node.id} must have rich atmospheric narrative text`,
+        )
+        if (node.stageNumber < 12) {
+          assert.ok(
+            campaign.nodes[node.nextNodeSuccess],
+            `${campaign.id}:${node.id} nextNodeSuccess (${node.nextNodeSuccess}) must exist`,
+          )
+          assert.ok(
+            campaign.nodes[node.nextNodeFail],
+            `${campaign.id}:${node.id} nextNodeFail (${node.nextNodeFail}) must exist`,
+          )
+        }
+        if (node.stageNumber === 7 && node.isSanctuary) {
+          hasSanctuaryStage7 = true
+        }
+        if (node.stageNumber === 12 && node.isFinale) {
+          hasBossStage12 = true
+        }
+      }
+
+      for (let stage = 1; stage <= 12; stage++) {
+        assert.equal(
+          stagesPresent.has(stage),
+          true,
+          `Campaign ${campaign.id} must cover stage ${stage}/12`,
+        )
+      }
+      assert.equal(
+        hasSanctuaryStage7,
+        true,
+        `Campaign ${campaign.id} must include a Stage 7 Mid-Dungeon Sanctuary Shrine`,
+      )
+      assert.equal(
+        hasBossStage12,
+        true,
+        `Campaign ${campaign.id} must culminate in a Stage 12 Boss Finale`,
+      )
+    }
+
+    const alice = { userId: 'u_alice', displayName: 'Alice', avatarColor: '#E5A93C' }
+    const bob = { userId: 'u_bob', displayName: 'Bob', avatarColor: '#38BDF8' }
+
+    // Stateful gameplay loop: Party joins Sunken Reliquary, uses class items, resolves Crucial Check, and revives a Spectral Ghost at Stage 7
+    let state = createInitialAdventureState('sunken-reliquary')
+    state = selectPlayerArchetype(state, alice, 'vanguard')
+    state = selectPlayerArchetype(state, bob, 'shadow')
+    assert.equal(Object.keys(state.players).length, 2)
+    assert.equal(state.players.u_alice.hp, 12)
+    assert.equal(state.players.u_bob.hp, 9)
+
+    const node1 = getActiveSceneNode(state)
+    state = lockActionCard(state, alice, node1.choices[0].id)
+    state = lockActionCard(state, bob, node1.choices[1].id)
+
+    // Vanguard uses Bloodstone Axe to auto-pass Might check; Shadow rolls natural 20
+    state = expendAdventureItem(state, alice, 'bloodstone-axe')
+    assert.equal(state.players.u_alice.rollOutcome, 'bypassed')
+
+    state = rollPlayerAdventureD20(state, bob, 20)
+    assert.equal(state.players.u_bob.rollOutcome, 'critical')
+    assert.equal(state.bossWeaknessExposed, true)
+
+    // Advance to Stage 2 and verify narrativeEcho callback is populated
+    state = advanceAdventureScene(state, alice)
+    const node2 = getActiveSceneNode(state)
+    assert.equal(node2.stageNumber, 2)
+    const echoes = resolveNarrativeEchoText(state, node2)
+    assert.ok(
+      echoes.length >= 1 && echoes.join(' ').length > 15,
+      'Stage 2 must prepend a stateful narrativeEcho callback from Stage 1',
+    )
+
+    // Stage 2 has a Crucial Putting Check; test resolving it via the Lounge Putting Strip
+    assert.ok(state.crucialCheck && !state.crucialCheck.resolved)
+    assert.equal(state.crucialCheck?.kind, 'putting')
+
+    state = resolveCrucialSkillCheck(state, alice, 'putting', {
+      succeeded: true,
+      isCritical: true,
+      detailLabel: 'Putting Strip (SUNK IN CUP!)',
+    })
+    assert.equal(state.crucialCheck?.resolved, true)
+    assert.equal(state.crucialCheck?.outcome, 'critical')
+
+    // Simulate Bob falling to 0 HP (Spectral Ghost) on Stage 6 before advancing into the Stage 7 Sanctuary Shrine
+    const stage6Node = Object.values(
+      ADVENTURE_CAMPAIGNS['sunken-reliquary'].nodes,
+    ).find((n) => n.stageNumber === 6 && n.nextNodeSuccess === 'node-7')!
+    state = {
+      ...state,
+      currentNodeId: stage6Node.id,
+      partySuccessPoints: 2,
+      requiredSuccessPoints: 1,
+      players: {
+        ...state.players,
+        u_alice: { ...state.players.u_alice, hp: 5, rollOutcome: 'success' },
+        u_bob: { ...state.players.u_bob, hp: 0, isGhost: true, rollOutcome: 'pending' },
+      },
+    }
+
+    state = advanceAdventureScene(state, alice)
+    const node7 = getActiveSceneNode(state)
+    assert.equal(node7.stageNumber, 7)
+    assert.equal(node7.isSanctuary, true)
+    assert.equal(
+      state.players.u_bob.isGhost,
+      false,
+      'Sanctuary Shrine at Stage 7 must revive Spectral Ghosts back to living form',
+    )
+    assert.equal(state.players.u_bob.hp, 4, 'Revived Spectral Ghost must return at 4 HP')
+  })
 })
+

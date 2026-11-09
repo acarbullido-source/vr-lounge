@@ -2,6 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import { QUICK_REACTIONS } from '../../constants/cinema'
 import { normalizePlayerKey } from '../../constants/barGames'
 import {
+  ADVENTURE_CAMPAIGNS,
+  ADVENTURE_CAMPAIGN_LIST,
+  ADVENTURE_ITEM_SPECS,
+  ARCHETYPE_SPECS,
+  type AdventureArchetypeId,
+  type AdventureCampaignId,
+  type AdventureItemId,
+  type AdventureQuestState,
+} from '../../games/adventure'
+import {
   compressImageFileToDataUrl,
   getShareableMobileUrl,
 } from '../../services/mobileMode'
@@ -28,6 +38,7 @@ import type {
 
 export type MobilePocketTabId =
   | 'chat'
+  | 'quest'
   | 'sports'
   | 'watchlist'
   | 'soundboard'
@@ -41,6 +52,7 @@ export interface MobileCompanionDashboardProps {
   presenterState: PresenterState
   messages: ChatMessage[]
   clubhouseState: ClubhousePersistentState
+  adventureState?: AdventureQuestState
   roomCustomization: RoomCustomizationState
   activeLoungeWing: LoungeWingId
   isMuted: boolean
@@ -64,6 +76,15 @@ export interface MobileCompanionDashboardProps {
   onTriggerSoundboard: (effectId: SoundboardEffectId) => void
   onSpawnFurniture: (type: FurnitureCatalogId) => void
   onUpdateFurnitureItem: (id: string, patch: Partial<PlacedFurnitureItem>) => void
+  onStartStoryQuest?: (campaignId: AdventureCampaignId) => void
+  onSelectAdventureArchetype?: (archetype: AdventureArchetypeId) => void
+  onLockAdventureCard?: (cardId: string) => void
+  onUseAdventureAbility?: () => void
+  onUseAdventureItem?: (itemId: AdventureItemId) => void
+  onTetherAdventureGhost?: (targetUserId: string) => void
+  onRollAdventureD20?: () => void
+  onRollAdventureCrucialFallback?: () => void
+  onAdvanceAdventureScene?: () => void
 }
 
 export function MobileCompanionDashboard({
@@ -74,6 +95,7 @@ export function MobileCompanionDashboard({
   presenterState,
   messages,
   clubhouseState,
+  adventureState,
   roomCustomization,
   activeLoungeWing,
   isMuted,
@@ -97,6 +119,15 @@ export function MobileCompanionDashboard({
   onTriggerSoundboard,
   onSpawnFurniture,
   onUpdateFurnitureItem,
+  onStartStoryQuest,
+  onSelectAdventureArchetype,
+  onLockAdventureCard,
+  onUseAdventureAbility,
+  onUseAdventureItem,
+  onTetherAdventureGhost,
+  onRollAdventureD20,
+  onRollAdventureCrucialFallback,
+  onAdvanceAdventureScene,
 }: MobileCompanionDashboardProps) {
   const [activeTab, setActiveTab] = useState<MobilePocketTabId>('chat')
   const [chatText, setChatText] = useState('')
@@ -870,13 +901,210 @@ export function MobileCompanionDashboard({
             </div>
           </div>
         )}
+
+        {activeTab === 'quest' && adventureState && (
+          (() => {
+            const camp = ADVENTURE_CAMPAIGNS[adventureState.campaignId]
+            const node = camp.nodes[adventureState.currentNodeId]
+            const myHero = adventureState.players[localProfile.userId]
+            const livingHeroes = Object.values(adventureState.players).filter(
+              (p) => !p.isGhost,
+            )
+
+            return (
+              <div className="space-y-3 pb-4">
+                <div className="rounded-2xl border border-sky-400/30 bg-[#111723] p-3">
+                  <div className="mb-2 text-xs font-bold text-sky-300">
+                    ⚔️ Main Screen Story Quest
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {ADVENTURE_CAMPAIGN_LIST.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => onStartStoryQuest?.(c.id)}
+                        className={`rounded-xl border p-2 text-left text-xs ${
+                          c.id === adventureState.campaignId
+                            ? 'border-amber-400 bg-amber-500/20 text-amber-100'
+                            : 'border-white/10 bg-black/35 text-slate-300'
+                        }`}
+                      >
+                        <div className="font-bold">{c.title}</div>
+                        <div className="text-[10px] text-slate-400">{c.subtitle}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {node && (
+                  <div className="rounded-2xl border border-white/10 bg-[#111723] p-3 space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-amber-300">
+                        ACT {node.act} · STAGE {node.stageNumber}/12
+                      </span>
+                      <span className="text-[11px] text-rose-300">
+                        🔥 Threat {adventureState.threatLevel}/10
+                      </span>
+                    </div>
+                    <div className="text-sm font-bold text-white">{node.title}</div>
+                    <p className="text-xs leading-relaxed text-slate-300">{node.prose}</p>
+                  </div>
+                )}
+
+                {adventureState.crucialCheck && !adventureState.crucialCheck.resolved && (
+                  <div className="rounded-2xl border border-amber-400/50 bg-amber-950/30 p-3 space-y-2">
+                    <div className="text-xs font-bold text-amber-300">
+                      🎯 {adventureState.crucialCheck.title}
+                    </div>
+                    <p className="text-xs text-amber-100">
+                      {adventureState.crucialCheck.instruction}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => onRollAdventureCrucialFallback?.()}
+                      className="w-full rounded-xl bg-amber-500 py-2.5 text-xs font-bold text-slate-950"
+                    >
+                      🎲 Roll Mobile Fallback D20 (DC {adventureState.crucialCheck.fallbackDc})
+                    </button>
+                  </div>
+                )}
+
+                <div className="rounded-2xl border border-white/10 bg-[#111723] p-3 space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-white">
+                      {myHero
+                        ? `${ARCHETYPE_SPECS[myHero.archetype].icon} ${myHero.displayName} (${
+                            myHero.isGhost
+                              ? '👻 GHOST'
+                              : `${myHero.hp}/${myHero.maxHp} HP`
+                          })`
+                        : 'Select Class'}
+                    </span>
+                    {myHero && (
+                      <button
+                        type="button"
+                        disabled={myHero.abilityUsedInAct === node?.act}
+                        onClick={() => onUseAdventureAbility?.()}
+                        className="rounded-lg bg-sky-500/20 px-2.5 py-1 text-[11px] font-bold text-sky-200 disabled:opacity-40"
+                      >
+                        ⚡ {ARCHETYPE_SPECS[myHero.archetype].abilityName}
+                      </button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {(['vanguard', 'shadow', 'arcanist', 'cleric'] as const).map((archId) => (
+                      <button
+                        key={archId}
+                        type="button"
+                        onClick={() => onSelectAdventureArchetype?.(archId)}
+                        className={`rounded-xl border py-2 text-center text-[11px] font-bold ${
+                          myHero?.archetype === archId
+                            ? 'border-amber-400 bg-amber-500/25 text-amber-200'
+                            : 'border-white/10 bg-white/5 text-slate-300'
+                        }`}
+                      >
+                        {ARCHETYPE_SPECS[archId].icon} {ARCHETYPE_SPECS[archId].name}
+                      </button>
+                    ))}
+                  </div>
+                  {myHero && myHero.items.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {myHero.items.map((itemId) => (
+                        <button
+                          key={itemId}
+                          type="button"
+                          onClick={() => onUseAdventureItem?.(itemId)}
+                          className="rounded-lg border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-1 text-[11px] font-bold text-emerald-200"
+                        >
+                          {ADVENTURE_ITEM_SPECS[itemId].icon}{' '}
+                          {ADVENTURE_ITEM_SPECS[itemId].name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {myHero?.isGhost && livingHeroes.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {livingHeroes.map((ally) => (
+                        <button
+                          key={ally.userId}
+                          type="button"
+                          onClick={() => onTetherAdventureGhost?.(ally.userId)}
+                          className={`rounded-lg px-2.5 py-1 text-[11px] font-bold ${
+                            myHero.tetheredToUserId === ally.userId
+                              ? 'bg-cyan-400 text-slate-950'
+                              : 'bg-white/10 text-cyan-200'
+                          }`}
+                        >
+                          🔗 Tether {ally.displayName}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {node && (
+                  <div className="space-y-1.5">
+                    {node.choices.map((card) => {
+                      const isLocked = myHero?.lockedCardId === card.id
+                      return (
+                        <button
+                          key={card.id}
+                          type="button"
+                          onClick={() => onLockAdventureCard?.(card.id)}
+                          className={`w-full rounded-xl border p-2.5 text-left text-xs ${
+                            isLocked
+                              ? 'border-amber-400 bg-amber-500/20 text-white'
+                              : 'border-white/10 bg-[#111723] text-slate-200'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between font-bold">
+                            <span>
+                              {isLocked ? '🔒 ' : ''}
+                              {card.title}
+                            </span>
+                            <span className="text-[10px] uppercase text-amber-300">
+                              {card.attribute}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-[11px] text-slate-300">{card.description}</p>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onRollAdventureD20?.()}
+                    className="rounded-2xl bg-amber-500 py-3 text-sm font-extrabold text-slate-950 shadow-lg"
+                  >
+                    {myHero?.isGhost ? '👻 Spectral D20' : '🎲 Roll D20'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onAdvanceAdventureScene?.()}
+                    className="rounded-2xl border border-emerald-400/50 bg-emerald-500/20 py-3 text-sm font-extrabold text-emerald-200"
+                  >
+                    ▶ Next Scene
+                  </button>
+                </div>
+
+                <div className="rounded-xl border border-white/10 bg-black/40 p-2.5 text-xs text-amber-200">
+                  {adventureState.lastResolutionLog[0] ?? 'Choose a card and roll D20!'}
+                </div>
+              </div>
+            )
+          })()
+        )}
       </main>
 
-      {/* Bottom 5-Tab Touch Navigation Bar */}
-      <nav className="grid grid-cols-5 border-t border-white/10 bg-[#0d121c] px-1.5 py-1.5">
+      {/* Bottom 6-Tab Touch Navigation Bar */}
+      <nav className="grid grid-cols-6 border-t border-white/10 bg-[#0d121c] px-1 py-1.5">
         {(
           [
             { id: 'chat', icon: '💬', label: 'Chat' },
+            { id: 'quest', icon: '⚔️', label: 'Quest' },
             { id: 'sports', icon: '🏈', label: 'Scores' },
             { id: 'watchlist', icon: '📺', label: 'Queue' },
             { id: 'soundboard', icon: '🔊', label: 'FX Pad' },

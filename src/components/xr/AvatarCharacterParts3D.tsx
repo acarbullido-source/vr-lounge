@@ -894,18 +894,32 @@ export function AvatarTorso3D({
 export function AvatarHand3D({
   accentColor,
   bodyColor = '#1D2432',
+  isSpectralGhost = false,
 }: {
   accentColor: string
   bodyColor?: string
+  isSpectralGhost?: boolean
 }) {
   return (
     <group>
       <RoundedBox args={[0.075, 0.065, 0.14]} radius={0.028} smoothness={3} raycast={NOOP_RAYCAST}>
-        <meshStandardMaterial color={bodyColor} roughness={0.45} metalness={0.35} />
+        <meshStandardMaterial
+          color={isSpectralGhost ? '#0891B2' : bodyColor}
+          emissive={isSpectralGhost ? '#22D3EE' : '#000000'}
+          emissiveIntensity={isSpectralGhost ? 0.65 : 0}
+          roughness={isSpectralGhost ? 0.25 : 0.45}
+          metalness={0.35}
+          transparent={isSpectralGhost}
+          opacity={isSpectralGhost ? 0.52 : 1}
+        />
       </RoundedBox>
       <mesh position={[0, 0.022, -0.038]} raycast={NOOP_RAYCAST}>
         <boxGeometry args={[0.048, 0.012, 0.055]} />
-        <meshBasicMaterial color={accentColor} />
+        <meshBasicMaterial
+          color={isSpectralGhost ? '#67E8F9' : accentColor}
+          transparent={isSpectralGhost}
+          opacity={isSpectralGhost ? 0.78 : 1}
+        />
       </mesh>
     </group>
   )
