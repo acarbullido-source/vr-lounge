@@ -189,7 +189,30 @@ export function CinemaRoom({
   }, [])
 
   useEffect(() => {
+    if (!buildMode) {
+      setDraggingPlacement(false)
+      setHoverReticle(null)
+    }
+  }, [buildMode])
+
+  useEffect(() => {
+    if (!draggingPlacement) return
+    const stopDrag = () => setDraggingPlacement(false)
+    window.addEventListener('pointerup', stopDrag)
+    window.addEventListener('pointercancel', stopDrag)
+    window.addEventListener('blur', stopDrag)
     return () => {
+      window.removeEventListener('pointerup', stopDrag)
+      window.removeEventListener('pointercancel', stopDrag)
+      window.removeEventListener('blur', stopDrag)
+    }
+  }, [draggingPlacement])
+
+  useEffect(() => {
+    return () => {
+      if (walkRingTimerRef.current !== null) {
+        window.clearTimeout(walkRingTimerRef.current)
+      }
       starGeometry.dispose()
       curvedScreenGeo.dispose()
       curvedFrameGeo.dispose()

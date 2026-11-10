@@ -168,9 +168,10 @@ export function useMediaScreen({
     hasCompanionAudioRef.current = false
     companionAudioElement.pause()
     companionAudioElement.removeAttribute('src')
+    companionAudioElement.load()
   }, [companionAudioElement])
 
-  // Route audio output device when supported by Chromium
+  // Route audio output device when supported by Chromium (including '' for Default)
   useEffect(() => {
     const sinkableVideo = videoElement as HTMLVideoElement & {
       setSinkId?: (sinkId: string) => Promise<void>
@@ -178,13 +179,12 @@ export function useMediaScreen({
     const sinkableAudio = companionAudioElement as HTMLAudioElement & {
       setSinkId?: (sinkId: string) => Promise<void>
     }
-    if (selectedSpeakerId) {
-      if (typeof sinkableVideo.setSinkId === 'function') {
-        void sinkableVideo.setSinkId(selectedSpeakerId).catch(() => undefined)
-      }
-      if (typeof sinkableAudio.setSinkId === 'function') {
-        void sinkableAudio.setSinkId(selectedSpeakerId).catch(() => undefined)
-      }
+    const targetSink = selectedSpeakerId || ''
+    if (typeof sinkableVideo.setSinkId === 'function') {
+      void sinkableVideo.setSinkId(targetSink).catch(() => undefined)
+    }
+    if (typeof sinkableAudio.setSinkId === 'function') {
+      void sinkableAudio.setSinkId(targetSink).catch(() => undefined)
     }
   }, [companionAudioElement, selectedSpeakerId, videoElement])
 
@@ -325,10 +325,14 @@ export function useMediaScreen({
                 lowLatencyMode: false,
               })
               hlsRef.current = hls
+              let netRetries = 0
+              let mediaRetries = 0
               hls.loadSource(finalUrl)
               hls.attachMedia(videoElement)
               hls.on(HlsCtor.Events.MANIFEST_PARSED, () => {
                 if (cancelled) return
+                netRetries = 0
+                mediaRetries = 0
                 clearCandidateWatchdog()
                 setHasVideoFrames(true)
                 const { currentTime, isPlaying } = latestPlaybackRef.current
@@ -346,6 +350,19 @@ export function useMediaScreen({
               })
               hls.on(HlsCtor.Events.ERROR, (_event, data) => {
                 if (cancelled || !data.fatal) return
+                if (data.type === HlsCtor.ErrorTypes.NETWORK_ERROR && netRetries < 2) {
+                  netRetries += 1
+                  hls.startLoad()
+                  return
+                }
+                if (data.type === HlsCtor.ErrorTypes.MEDIA_ERROR && mediaRetries < 2) {
+                  mediaRetries += 1
+                  if (mediaRetries === 2) {
+                    hls.swapAudioCodec()
+                  }
+                  hls.recoverMediaError()
+                  return
+                }
                 clearCandidateWatchdog()
                 // Fail over to next stream candidate if available!
                 const nextIdx = candidateIndexRef.current + 1
@@ -697,7 +714,9 @@ export function useMediaScreen({
     videoElement,
   ])
 
-  // Synchronize Play/Pause & Drift Correction (> 0.5s) in Mode 2
+  const lastSyncedRevisionRef = useRef<number>(-1)
+
+  // Synchronize Play/Pause & Clock-Skew-Free Drift Correction in Mode 2
   useEffect(() => {
     if (
       presenterState.screenMode !== 'url-sync' ||
@@ -709,16 +728,32 @@ export function useMediaScreen({
       return
     }
 
-    const elapsedSec = presenterState.isPlaying
-      ? Math.max(0, (Date.now() - presenterState.updatedAt) / 1000)
-      : 0
-    const targetTime = Math.max(0, presenterState.currentTime + elapsedSec)
+    const revisionChanged =
+      lastSyncedRevisionRef.current !== presenterState.revision
+    lastSyncedRevisionRef.current = presenterState.revision
 
-    if (
+    // Measure elapsed time strictly via local monotonic performance.now() since packet receipt
+    // so cross-device wall-clock skew (PC vs. Quest headset) never triggers 2s seek thrashing.
+    const elapsedSec =
+      presenterState.isPlaying && typeof presenterState.receivedAtPerfMs === 'number'
+        ? Math.max(0, (performance.now() - presenterState.receivedAtPerfMs) / 1000)
+        : 0
+    const rawTargetTime = Math.max(0, presenterState.currentTime + elapsedSec)
+    const targetTime =
+      Number.isFinite(videoElement.duration) && videoElement.duration > 0.5
+        ? Math.min(rawTargetTime, Math.max(0, videoElement.duration - 0.25))
+        : rawTargetTime
+
+    // Local presenter only seeks its own <video> on explicit revision jumps (e.g. scrubber seek),
+    // never on its own periodic progress heartbeats. Viewers allow 1.75s steady jitter tolerance.
+    const driftThreshold = revisionChanged ? 0.65 : 1.75
+    const shouldSeek =
+      (!isLocalPresenter || revisionChanged) &&
       videoElement.readyState >= 1 &&
       Number.isFinite(targetTime) &&
-      Math.abs(videoElement.currentTime - targetTime) > 0.5
-    ) {
+      Math.abs(videoElement.currentTime - targetTime) > driftThreshold
+
+    if (shouldSeek) {
       try {
         videoElement.currentTime = targetTime
         if (hasCompanionAudioRef.current) {
@@ -751,14 +786,15 @@ export function useMediaScreen({
     }
   }, [
     companionAudioElement,
+    isLocalPresenter,
     isResolvingMedia,
     presenterState.activePresenterId,
     presenterState.currentTime,
     presenterState.isPlaying,
     presenterState.mediaUrl,
+    presenterState.receivedAtPerfMs,
     presenterState.revision,
     presenterState.screenMode,
-    presenterState.updatedAt,
     videoElement,
   ])
 
@@ -767,6 +803,7 @@ export function useMediaScreen({
     const onLoadedData = () => {
       clearCandidateWatchdog()
       setHasVideoFrames(true)
+      videoTexture.needsUpdate = true
       setLocalDuration(Number.isFinite(videoElement.duration) ? videoElement.duration : 0)
       const { currentTime, isPlaying } = latestPlaybackRef.current
       if (
@@ -774,12 +811,16 @@ export function useMediaScreen({
         !isNesMediaUrl(presenterState.mediaUrl) &&
         !isAdventureMediaUrl(presenterState.mediaUrl) &&
         currentTime > 0.5 &&
-        Math.abs(videoElement.currentTime - currentTime) > 0.6
+        Math.abs(videoElement.currentTime - currentTime) > 0.75
       ) {
         try {
-          videoElement.currentTime = currentTime
+          const safeTarget =
+            Number.isFinite(videoElement.duration) && videoElement.duration > 0.5
+              ? Math.min(currentTime, Math.max(0, videoElement.duration - 0.25))
+              : currentTime
+          videoElement.currentTime = safeTarget
           if (hasCompanionAudioRef.current) {
-            companionAudioElement.currentTime = currentTime
+            companionAudioElement.currentTime = safeTarget
           }
         } catch {
           // Ignore
@@ -808,6 +849,28 @@ export function useMediaScreen({
       }
     }
 
+    const onWaiting = () => {
+      if (hasCompanionAudioRef.current && !companionAudioElement.paused) {
+        companionAudioElement.pause()
+      }
+    }
+
+    const onPlaying = () => {
+      videoTexture.needsUpdate = true
+      if (hasCompanionAudioRef.current && !videoElement.paused) {
+        if (Math.abs(companionAudioElement.currentTime - videoElement.currentTime) > 0.25) {
+          try {
+            companionAudioElement.currentTime = videoElement.currentTime
+          } catch {
+            // Ignore
+          }
+        }
+        if (companionAudioElement.paused) {
+          void companionAudioElement.play().catch(() => undefined)
+        }
+      }
+    }
+
     const onPause = () => {
       if (hasCompanionAudioRef.current && !companionAudioElement.paused) {
         companionAudioElement.pause()
@@ -815,12 +878,22 @@ export function useMediaScreen({
     }
 
     const onSeeking = () => {
+      videoTexture.needsUpdate = true
       if (hasCompanionAudioRef.current) {
         try {
           companionAudioElement.currentTime = videoElement.currentTime
         } catch {
           // Ignore
         }
+      }
+    }
+
+    const onCompanionAudioError = () => {
+      if (!hasCompanionAudioRef.current) return
+      hasCompanionAudioRef.current = false
+      const nextIdx = candidateIndexRef.current + 1
+      if (nextIdx < candidatesRef.current.length && attachCandidateRef.current) {
+        attachCandidateRef.current(nextIdx)
       }
     }
 
@@ -897,17 +970,26 @@ export function useMediaScreen({
     videoElement.addEventListener('loadeddata', onLoadedData)
     videoElement.addEventListener('loadedmetadata', onLoadedData)
     videoElement.addEventListener('play', onPlay)
+    videoElement.addEventListener('waiting', onWaiting)
+    videoElement.addEventListener('playing', onPlaying)
     videoElement.addEventListener('pause', onPause)
     videoElement.addEventListener('seeking', onSeeking)
     videoElement.addEventListener('timeupdate', onTimeUpdate)
     videoElement.addEventListener('error', onError)
+    companionAudioElement.addEventListener('error', onCompanionAudioError)
 
     const heartbeat = window.setInterval(() => {
+      const currentCandidate = candidatesRef.current[candidateIndexRef.current]
+      const isYoutubeFallbackClip =
+        Boolean(currentCandidate?.isFallbackStream) &&
+        Boolean(activeYouTubeVideoIdRef.current)
+
       if (
         isLocalPresenter &&
         presenterState.screenMode === 'url-sync' &&
         !isNesMediaUrl(presenterState.mediaUrl) &&
         !isAdventureMediaUrl(presenterState.mediaUrl) &&
+        !isYoutubeFallbackClip &&
         !videoElement.paused &&
         videoElement.readyState >= 2
       ) {
@@ -923,10 +1005,13 @@ export function useMediaScreen({
       videoElement.removeEventListener('loadeddata', onLoadedData)
       videoElement.removeEventListener('loadedmetadata', onLoadedData)
       videoElement.removeEventListener('play', onPlay)
+      videoElement.removeEventListener('waiting', onWaiting)
+      videoElement.removeEventListener('playing', onPlaying)
       videoElement.removeEventListener('pause', onPause)
       videoElement.removeEventListener('seeking', onSeeking)
       videoElement.removeEventListener('timeupdate', onTimeUpdate)
       videoElement.removeEventListener('error', onError)
+      companionAudioElement.removeEventListener('error', onCompanionAudioError)
     }
   }, [
     clearCandidateWatchdog,
@@ -936,6 +1021,7 @@ export function useMediaScreen({
     presenterState.screenMode,
     presenterState.useCorsProxy,
     videoElement,
+    videoTexture,
   ])
 
   const unlockAudio = useCallback(() => {

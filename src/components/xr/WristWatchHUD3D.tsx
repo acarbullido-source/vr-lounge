@@ -6,6 +6,7 @@ import * as THREE from 'three'
 import { isAdventureMediaUrl } from '../../games/adventure'
 import { playSpatialUiFeedback } from '../../services/soundboardAudio'
 import {
+  clearSpatialUiHoverPrefix,
   isControllerButtonPressed,
   readXRSpaceWorldPose,
   setSpatialUiHovered,
@@ -238,6 +239,22 @@ export function WristWatchHUD3D({
   )
 
   const isExpanded = !hudHidden && (pinnedOpen || (glancedOpen && !glanceDismissed))
+
+  useEffect(() => {
+    if (!visible || hudHidden || !isExpanded) {
+      clearSpatialUiHoverPrefix('wrist-chip-')
+    }
+    if (!visible || hudHidden) {
+      setSpatialUiHovered(false, 'wrist-watch-bezel')
+    }
+  }, [hudHidden, isExpanded, visible])
+
+  useEffect(() => {
+    return () => {
+      clearSpatialUiHoverPrefix('wrist-chip-')
+      setSpatialUiHovered(false, 'wrist-watch-bezel')
+    }
+  }, [])
 
   const handleToggleDeckExpand = () => {
     if (isExpanded) {

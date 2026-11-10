@@ -828,6 +828,7 @@ export function ShootingRangeRoom3D({
   const recoilPitchRef = useRef(0)
   const reloadTimerRef = useRef<number | null>(null)
   const muzzleTimerRef = useRef<number | null>(null)
+  const burstTimersRef = useRef<number[]>([])
   const prevTriggerPressedRef = useRef(false)
   const prevReloadPressedRef = useRef(false)
   const prevSwapPressedRef = useRef(false)
@@ -867,6 +868,14 @@ export function ShootingRangeRoom3D({
 
   // Select a weapon and fill magazine
   const handleSelectWeapon = useCallback((weaponId: RangeWeaponId) => {
+    if (reloadTimerRef.current) {
+      window.clearTimeout(reloadTimerRef.current)
+      reloadTimerRef.current = null
+    }
+    for (const tid of burstTimersRef.current) {
+      window.clearTimeout(tid)
+    }
+    burstTimersRef.current = []
     const spec =
       RANGE_WEAPONS.find((w) => w.id === weaponId) ?? RANGE_WEAPONS[0]
     setEquippedWeaponId(spec.id)
@@ -908,6 +917,10 @@ export function ShootingRangeRoom3D({
     return () => {
       if (reloadTimerRef.current) window.clearTimeout(reloadTimerRef.current)
       if (muzzleTimerRef.current) window.clearTimeout(muzzleTimerRef.current)
+      for (const tid of burstTimersRef.current) {
+        window.clearTimeout(tid)
+      }
+      burstTimersRef.current = []
     }
   }, [])
 
@@ -1527,9 +1540,11 @@ export function ShootingRangeRoom3D({
       fireOnceNow()
       if (spec.burstCount > 1) {
         for (let b = 1; b < spec.burstCount; b++) {
-          window.setTimeout(() => {
+          const tid = window.setTimeout(() => {
+            burstTimersRef.current = burstTimersRef.current.filter((id) => id !== tid)
             fireOnceNow()
           }, b * 68)
+          burstTimersRef.current.push(tid)
         }
       }
     },
@@ -2427,10 +2442,22 @@ export function ShootingRangeRoom3D({
                 ]
                 const next = modes[(modes.indexOf(rangeMode) + 1) % modes.length]
                 setRangeMode(next)
-                setQualRunning(next === 'tactical-qual')
                 if (next === 'tactical-qual') {
+                  scoreRef.current = 0
+                  streakRef.current = 0
+                  setScore(0)
+                  setStreak(0)
                   setQualTimeRemaining(60)
+                  setQualRunning(true)
                   setTacticalTargets(createInitialTacticalTargets())
+                  shootingRangeAudio.playRangeBuzzer('start')
+                  setLastShotBanner(
+                    '🚨 60-SECOND QUALIFICATION STARTED! SHOOT RED/CYAN THREATS, AVOID GREEN CIVILIANS!',
+                  )
+                } else {
+                  setQualRunning(false)
+                  shootingRangeAudio.playRangeBuzzer('wave')
+                  setLastShotBanner(`RANGE MODE: ${next.toUpperCase()}`)
                 }
               }}
             />

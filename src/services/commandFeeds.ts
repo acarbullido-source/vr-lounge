@@ -358,6 +358,10 @@ export async function fetchCommandWeather(
     weatherCache.set(cacheKey, report)
     return report
   } catch {
+    const staleLive = weatherCache.get(cacheKey)
+    if (staleLive && staleLive.source === 'open-meteo-live') {
+      return staleLive
+    }
     const fb = buildFallbackWeather(
       matchedPreset,
       cityId === 'custom' && trimmedCustom ? trimmedCustom : undefined,
@@ -677,13 +681,22 @@ export async function fetchCommandNewsFeed(
         }>
       }>('https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=7')
 
+      const safeHost = (rawUrl?: string) => {
+        if (!rawUrl) return 'news.ycombinator.com'
+        try {
+          return new URL(rawUrl).hostname.replace(/^www\./, '') || 'news.ycombinator.com'
+        } catch {
+          return 'news.ycombinator.com'
+        }
+      }
+
       const items: CommandNewsItem[] = (hn.hits ?? [])
         .filter((h) => Boolean(h.title))
         .slice(0, 6)
         .map((h) => ({
           id: `hn-${h.objectID}`,
           title: (h.title ?? '').trim().slice(0, 140),
-          source: h.url ? new URL(h.url).hostname.replace(/^www\./, '') : 'news.ycombinator.com',
+          source: safeHost(h.url),
           publishedAgo: formatRelativeMinutes(h.created_at_i ?? Date.now() / 1000),
           url: h.url || `https://news.ycombinator.com/item?id=${h.objectID}`,
           badge: `${h.points ?? 100}▲`,
@@ -793,7 +806,12 @@ export async function fetchCommandNewsFeed(
       }
     }
   } catch {
-    // Graceful fallback to curated resilient telemetry below
+    // Graceful fallback to last live cached feed or curated resilient telemetry below
+  }
+
+  const staleLive = newsCache.get(category)
+  if (staleLive && staleLive.isLive) {
+    return staleLive
   }
 
   const fallback: CommandNewsFeedResult = {

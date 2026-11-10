@@ -107,6 +107,12 @@ export function stepDartFlightCCD(
   // Bristle face sits 0.028m out from board group center toward -Z (into room)
   const boardFaceZ = boardCenter[2] - 0.028
 
+  // Point-blank VR controller release guard: if hand reached right up to or past boardFaceZ,
+  // pull start Z just in front of bristle plane so swept CCD scores the impact cleanly!
+  if (sim.pos[2] > boardFaceZ && sim.pos[2] <= boardCenter[2] + 0.35 && sim.vel[2] > 0) {
+    sim.pos = [sim.pos[0], sim.pos[1], boardFaceZ - 0.005]
+  }
+
   while (remaining > 1e-6) {
     const subDt = Math.min(remaining, FIXED_STEP)
     remaining -= subDt
@@ -149,8 +155,8 @@ export function stepDartFlightCCD(
       return
     }
 
-    // Floor or far-wall miss guard
-    if (ny <= 0.03 || nz > boardCenter[2] + 0.35 || Math.abs(nx) > 12) {
+    // Floor or far-wall miss guard (including backwards throws away from board)
+    if (ny <= 0.03 || nz > boardCenter[2] + 0.35 || nz < boardCenter[2] - 8.5 || Math.abs(nx) > 12) {
       const clampedY = Math.max(0.03, ny)
       const localX = boardCenter[0] - nx
       const localY = clampedY - boardCenter[1]
@@ -192,6 +198,8 @@ export interface ActivePuttSim {
   settled: boolean
   holed: boolean
   lipOut: boolean
+  rimDeflected?: boolean
+  stationarySubsteps?: number
 }
 
 export function getPuttingSurfaceHeight(
@@ -367,15 +375,17 @@ export function stepPuttingBallCCD(
         sim.holed = true
         sim.settled = true
         return
-      } else {
-        // Hit way too hard -> realistic lip-out deflection!
+      } else if (!sim.rimDeflected) {
+        // Hit way too hard -> realistic one-shot lip-out deflection!
         sim.lipOut = true
+        sim.rimDeflected = true
         vx = (closestX >= 0 ? 0.42 : -0.42) + vx * 0.32
         vz *= 0.42
       }
-    } else if (distToCup <= cupR * 1.14 && curSpeed > 0.35) {
-      // Rim graze lip-out
+    } else if (distToCup <= cupR * 1.14 && curSpeed > 0.35 && !sim.rimDeflected) {
+      // Rim graze lip-out (one-shot impulse)
       sim.lipOut = true
+      sim.rimDeflected = true
       vx += (closestX >= 0 ? 0.22 : -0.22)
       vz *= 0.78
     }
@@ -390,11 +400,18 @@ export function stepPuttingBallCCD(
     sim.localPos = [nx, nextY, nz]
     sim.localVel = [vx, vz]
 
-    // Rest settle check (only settle when not perched on steep ramp face)
+    const postSpeed = Math.hypot(vx, vz)
+    if (postSpeed < 0.012) {
+      sim.stationarySubsteps = (sim.stationarySubsteps ?? 0) + 1
+    } else {
+      sim.stationarySubsteps = 0
+    }
+
+    // Rest settle check: settle immediately on flat green, or after ~0.1s (18 substeps)
+    // if static turf friction holds the ball stationary on a gentle ramp/ridge slope!
     if (
-      Math.hypot(vx, vz) < 0.022 &&
-      Math.abs(slopeDz) < 0.03 &&
-      Math.abs(slopeDx) < 0.04
+      (postSpeed < 0.022 && Math.abs(slopeDz) < 0.03 && Math.abs(slopeDx) < 0.04) ||
+      (sim.stationarySubsteps ?? 0) >= 18
     ) {
       sim.localPos = [
         Number(nx.toFixed(4)),

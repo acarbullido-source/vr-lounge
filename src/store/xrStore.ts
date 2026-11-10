@@ -75,50 +75,64 @@ function probeNativeVRSupport(): void {
 // before calling `navigator.xr.requestSession('immersive-vr')` inside a user gesture.
 probeNativeVRSupport()
 
+let inFlightSimulatorPromise: Promise<{
+  ok: boolean
+  usedEmulator: boolean
+  error?: string
+}> | null = null
+
 async function installQuest3SimulatorAndEnter(): Promise<{
   ok: boolean
   usedEmulator: boolean
   error?: string
 }> {
-  try {
-    if (!simulatorInstalled) {
-      const [{ XRDevice, metaQuest3 }, { DevUI }] = await Promise.all([
-        import('iwer'),
-        import('@iwer/devui'),
-      ])
-      const xrDevice = new XRDevice(metaQuest3, {
-        ipd: 0,
-        stereoEnabled: false,
-      })
-      xrDevice.position.set(0, 1.2, 0)
-      xrDevice.primaryInputMode = 'controller'
-      xrDevice.installRuntime({ forceInstall: true })
-      xrDevice.installDevUI(DevUI)
-      simulatorInstalled = true
-      cachedNativeVRSupported = true
-      notifySupportListeners()
-    }
+  if (inFlightSimulatorPromise) return inFlightSimulatorPromise
+
+  inFlightSimulatorPromise = (async () => {
     try {
-      await xrStore.enterVR()
-    } catch (firstErr) {
-      const msg = firstErr instanceof Error ? firstErr.message : String(firstErr)
-      if (msg.includes('not connected to three.js')) {
-        await new Promise<void>((r) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => r())),
-        )
-        await xrStore.enterVR()
-      } else {
-        throw firstErr
+      if (!simulatorInstalled) {
+        const [{ XRDevice, metaQuest3 }, { DevUI }] = await Promise.all([
+          import('iwer'),
+          import('@iwer/devui'),
+        ])
+        const xrDevice = new XRDevice(metaQuest3, {
+          ipd: 0,
+          stereoEnabled: false,
+        })
+        xrDevice.position.set(0, 1.2, 0)
+        xrDevice.primaryInputMode = 'controller'
+        xrDevice.installRuntime({ forceInstall: true })
+        xrDevice.installDevUI(DevUI)
+        simulatorInstalled = true
+        cachedNativeVRSupported = true
+        notifySupportListeners()
       }
+      try {
+        await xrStore.enterVR()
+      } catch (firstErr) {
+        const msg = firstErr instanceof Error ? firstErr.message : String(firstErr)
+        if (msg.includes('not connected to three.js')) {
+          await new Promise<void>((r) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => r())),
+          )
+          await xrStore.enterVR()
+        } else {
+          throw firstErr
+        }
+      }
+      return { ok: true, usedEmulator: true }
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Unable to start WebXR session in this browser.'
+      return { ok: false, usedEmulator: false, error: message }
+    } finally {
+      inFlightSimulatorPromise = null
     }
-    return { ok: true, usedEmulator: true }
-  } catch (err) {
-    const message =
-      err instanceof Error
-        ? err.message
-        : 'Unable to start WebXR session in this browser.'
-    return { ok: false, usedEmulator: false, error: message }
-  }
+  })()
+
+  return inFlightSimulatorPromise
 }
 
 /**
@@ -205,6 +219,13 @@ export function triggerEnterVRFromGesture(): Promise<{
 }
 
 export function exitVRSession(): void {
+  if (typeof document !== 'undefined' && document.pointerLockElement) {
+    try {
+      document.exitPointerLock()
+    } catch {
+      // Ignore pointer lock exit errors
+    }
+  }
   const activeSession = xrStore.getState().session
   if (activeSession) {
     void activeSession.end().catch(() => undefined)

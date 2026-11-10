@@ -12,6 +12,8 @@ interface PeerEntry {
   lastOfferSentAt: number
   lastRenegotiateReqAt: number
   remoteVoiceTrack: MediaStreamTrack | null
+  remoteVoiceStreamId: string | null
+  remoteScreenStreamId: string | null
   pendingCandidates: RTCIceCandidateInit[]
   voiceSender: RTCRtpSender | null
   screenSenders: RTCRtpSender[]
@@ -272,12 +274,17 @@ export function useWebRTC({
   const localScreenStreamRef = useRef<MediaStream | null>(null)
   const screenShareQualityRef = useRef<ScreenShareQualityMode>(screenShareQuality)
   const isMutedRef = useRef(isMuted)
+  const joinedRef = useRef(joined)
   const sendSignalRef = useRef(sendSignal)
   const onEndedCallbackRef = useRef(onScreenShareEndedByBrowser)
 
   useEffect(() => {
     isMutedRef.current = isMuted
   }, [isMuted])
+
+  useEffect(() => {
+    joinedRef.current = joined
+  }, [joined])
 
   useEffect(() => {
     sendSignalRef.current = sendSignal
@@ -386,23 +393,36 @@ export function useWebRTC({
 
   // Acquire & switch microphone track
   const acquireMicrophone = useCallback(
-    async (deviceId?: string) => {
+    async function acquireMicImpl(deviceId?: string): Promise<MediaStreamTrack | null> {
       if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
         setMicPermissionError('Browser requires HTTPS or localhost for microphone access.')
         return null
       }
 
+      const baseAudio: MediaTrackConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      }
+
       try {
-        const constraints: MediaStreamConstraints = {
-          audio: {
-            ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-          video: false,
+        let rawStream: MediaStream
+        try {
+          rawStream = await navigator.mediaDevices.getUserMedia({
+            audio: deviceId
+              ? { ...baseAudio, deviceId: { exact: deviceId } }
+              : baseAudio,
+            video: false,
+          })
+        } catch (primaryErr) {
+          // If a saved USB/Bluetooth microphone was unplugged, seamlessly fall back to default mic
+          if (!deviceId) throw primaryErr
+          rawStream = await navigator.mediaDevices.getUserMedia({
+            audio: baseAudio,
+            video: false,
+          })
         }
-        const rawStream = await navigator.mediaDevices.getUserMedia(constraints)
+
         const newTrack = rawStream.getAudioTracks()[0] ?? null
         if (!newTrack) return null
 
@@ -414,8 +434,19 @@ export function useWebRTC({
 
         const prevTrack = localMicTrackRef.current
         if (prevTrack && prevTrack !== newTrack) {
+          prevTrack.onended = null
           localVoiceContainerRef.current.removeTrack(prevTrack)
           prevTrack.stop()
+        }
+
+        newTrack.onended = () => {
+          if (localMicTrackRef.current === newTrack && joinedRef.current) {
+            window.setTimeout(() => {
+              if (localMicTrackRef.current === newTrack && joinedRef.current) {
+                void acquireMicImpl()
+              }
+            }, 250)
+          }
         }
 
         localVoiceContainerRef.current.addTrack(newTrack)
@@ -586,6 +617,8 @@ export function useWebRTC({
         lastOfferSentAt: 0,
         lastRenegotiateReqAt: 0,
         remoteVoiceTrack: null,
+        remoteVoiceStreamId: null,
+        remoteScreenStreamId: null,
         pendingCandidates: [],
         voiceSender: null,
         screenSenders: [],
@@ -604,12 +637,17 @@ export function useWebRTC({
         )
       }
 
-      // Attach local presenter tab stream if currently sharing
+      // Attach local presenter tab stream if currently sharing (video BEFORE audio so
+      // receivers always classify the shared stream's ID as screen media first)
       if (localScreenStreamRef.current) {
         const screenStream = localScreenStreamRef.current
         const totalPeers = peersRef.current.size + 1
         const qualityMode = screenShareQualityRef.current
-        for (const track of screenStream.getTracks()) {
+        const orderedScreenTracks = [
+          ...screenStream.getVideoTracks(),
+          ...screenStream.getAudioTracks(),
+        ]
+        for (const track of orderedScreenTracks) {
           const sender = pc.addTrack(track, screenStream)
           applyScreenBitrateCap(sender, totalPeers, qualityMode)
           entry.screenSenders.push(sender)
@@ -662,31 +700,56 @@ export function useWebRTC({
       pc.ontrack = (ev) => {
         const rawStream = ev.streams[0] ?? new MediaStream([ev.track])
         const isScreenStream =
-          ev.track.kind === 'video' || rawStream.getVideoTracks().length > 0
+          ev.track.kind === 'video' ||
+          rawStream.getVideoTracks().length > 0 ||
+          (entry.remoteScreenStreamId !== null && rawStream.id === entry.remoteScreenStreamId) ||
+          (entry.remoteVoiceStreamId !== null && rawStream.id !== entry.remoteVoiceStreamId)
 
         if (isScreenStream) {
-          setRemoteScreenStreams((prev) => ({
-            ...prev,
-            [remoteUserId]: rawStream,
-          }))
+          entry.remoteScreenStreamId = rawStream.id
+          // Safety recovery if an earlier audio track from this screen stream was temporarily misclassified
+          if (entry.remoteVoiceStreamId === rawStream.id) {
+            entry.remoteVoiceStreamId = null
+            entry.remoteVoiceTrack = null
+            setRemoteVoiceStreams((prev) => {
+              if (!prev[remoteUserId]) return prev
+              const next = { ...prev }
+              delete next[remoteUserId]
+              return next
+            })
+          }
 
-          const cleanupIfEnded = () => {
-            const activeTracks = rawStream
+          const syncScreenSnapshot = () => {
+            const liveTracks = rawStream
               .getTracks()
               .filter((t) => t.readyState === 'live')
-            if (activeTracks.length === 0) {
+            if (liveTracks.length === 0) {
+              if (entry.remoteScreenStreamId === rawStream.id) {
+                entry.remoteScreenStreamId = null
+              }
               setRemoteScreenStreams((prev) => {
-                if (prev[remoteUserId] !== rawStream) return prev
+                if (!prev[remoteUserId]) return prev
                 const next = { ...prev }
                 delete next[remoteUserId]
                 return next
               })
+              return
             }
+            setRemoteScreenStreams((prev) => ({
+              ...prev,
+              [remoteUserId]: new MediaStream(liveTracks),
+            }))
           }
-          ev.track.addEventListener('ended', cleanupIfEnded)
-          rawStream.addEventListener('removetrack', cleanupIfEnded)
+
+          syncScreenSnapshot()
+          ev.track.addEventListener('ended', syncScreenSnapshot)
+          ev.track.addEventListener('mute', syncScreenSnapshot)
+          ev.track.addEventListener('unmute', syncScreenSnapshot)
+          rawStream.addEventListener('addtrack', syncScreenSnapshot)
+          rawStream.addEventListener('removetrack', syncScreenSnapshot)
         } else if (ev.track.kind === 'audio') {
           entry.remoteVoiceTrack = ev.track
+          entry.remoteVoiceStreamId = rawStream.id
           // Always wrap voice track in a fresh MediaStream instance so React effects
           // in AvatarManager reliably re-bind when a peer renegotiates or replaces their mic.
           const publishVoiceStream = () => {
@@ -1119,6 +1182,10 @@ export function useWebRTC({
         setLocalScreenStream(displayStream)
 
         const totalPeers = Math.max(1, peersRef.current.size)
+        const orderedScreenTracks = [
+          ...displayStream.getVideoTracks(),
+          ...displayStream.getAudioTracks(),
+        ]
         for (const entry of peersRef.current.values()) {
           for (const oldSender of entry.screenSenders) {
             try {
@@ -1129,7 +1196,7 @@ export function useWebRTC({
           }
           entry.screenSenders = []
           if (entry.pc.signalingState !== 'closed') {
-            for (const track of displayStream.getTracks()) {
+            for (const track of orderedScreenTracks) {
               const sender = entry.pc.addTrack(track, displayStream)
               applyScreenBitrateCap(sender, totalPeers, activeQuality)
               entry.screenSenders.push(sender)

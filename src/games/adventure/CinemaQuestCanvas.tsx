@@ -1114,28 +1114,46 @@ class CinemaQuestCanvasController {
     const rollBtnY = midBarY + 122
     const rollBtnW = 305
     const rollBtnH = 58
-    this.hotspots.push({
-      id: 'btn-roll-d20',
-      x: rollBtnX,
-      y: rollBtnY,
-      w: rollBtnW,
-      h: rollBtnH,
-      action: { type: 'roll-d20' },
-    })
-    drawRoundedRect(ctx, rollBtnX, rollBtnY, rollBtnW, rollBtnH, 12)
-    ctx.fillStyle =
-      this.hoveredHotspotId === 'btn-roll-d20' ? '#FBBF24' : '#E5A93C'
-    ctx.fill()
-    ctx.fillStyle = '#090D16'
-    ctx.font = 'bold 18px Inter, system-ui, sans-serif'
     const myPlayer = state.players[this.localUserId]
+    const alreadyRolledThisScene = myPlayer
+      ? myPlayer.isGhost
+        ? myPlayer.spectralRoll !== null
+        : myPlayer.rollOutcome !== 'pending'
+      : false
+
+    if (!alreadyRolledThisScene) {
+      this.hotspots.push({
+        id: 'btn-roll-d20',
+        x: rollBtnX,
+        y: rollBtnY,
+        w: rollBtnW,
+        h: rollBtnH,
+        action: { type: 'roll-d20' },
+      })
+    }
+    drawRoundedRect(ctx, rollBtnX, rollBtnY, rollBtnW, rollBtnH, 12)
+    ctx.fillStyle = alreadyRolledThisScene
+      ? '#1E293B'
+      : this.hoveredHotspotId === 'btn-roll-d20'
+        ? '#FBBF24'
+        : '#E5A93C'
+    ctx.fill()
+    if (alreadyRolledThisScene) {
+      ctx.lineWidth = 1.5
+      ctx.strokeStyle = '#38BDF8'
+      ctx.stroke()
+    }
+    ctx.fillStyle = alreadyRolledThisScene ? '#E2E8F0' : '#090D16'
+    ctx.font = 'bold 17px Inter, system-ui, sans-serif'
     ctx.fillText(
       myPlayer?.isGhost
-        ? '👻 Roll Spectral Ghost D20'
-        : myPlayer?.d20Roll
-          ? `🎲 Re-Roll / Rolled (${myPlayer.totalRoll})`
+        ? myPlayer.spectralRoll !== null
+          ? `👻 Spectral Rolled (${myPlayer.spectralRoll})`
+          : '👻 Roll Spectral Ghost D20'
+        : alreadyRolledThisScene
+          ? `✓ Rolled: ${myPlayer?.totalRoll ?? 'Pass'} (${myPlayer?.rollOutcome.toUpperCase()})`
           : '🎲 Roll My Check D20!',
-      rollBtnX + 24,
+      rollBtnX + 20,
       rollBtnY + 36,
     )
 

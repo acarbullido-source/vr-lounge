@@ -706,7 +706,7 @@ export function rollSpectralGhostSupportD20(
   forcedD20?: number,
 ): AdventureQuestState {
   const ghost = state.players[ghostUserId]
-  if (!ghost || !ghost.isGhost) return state
+  if (!ghost || !ghost.isGhost || ghost.spectralRoll !== null) return state
 
   const livingAllies = Object.values(state.players).filter(
     (p) => !p.isGhost && p.hp > 0 && p.userId !== ghostUserId,
@@ -904,6 +904,14 @@ export function rollPlayerAdventureD20(
     return rollSpectralGhostSupportD20(state, user.userId, forcedD20)
   }
 
+  // Prevent infinite D20 re-roll farming once a hero has already rolled in this scene
+  if (
+    player.d20Roll !== null ||
+    (player.rollOutcome !== 'pending' && player.rollOutcome !== 'bypassed')
+  ) {
+    return state
+  }
+
   const card =
     node.choices.find((c) => c.id === player.lockedCardId) ??
     node.choices.find((c) => c.id === player.hoveredCardId) ??
@@ -937,11 +945,8 @@ export function rollPlayerAdventureD20(
   let nextTriumphBurst = state.triumphBurstAt
   let logLine = ''
 
-  // Avoid double-counting if player already rolled a pass this turn
-  const previouslyPassed =
-    player.rollOutcome === 'success' ||
-    player.rollOutcome === 'critical' ||
-    player.rollOutcome === 'bypassed'
+  // Avoid double-counting if player already bypassed this turn
+  const previouslyPassed = player.rollOutcome === 'bypassed'
 
   if (passed) {
     const addedPoints = isNat20 ? 2 : 1
@@ -1123,18 +1128,19 @@ export function advanceAdventureScene(
   }
 
   if (targetNodeId === 'defeat' || (allDead && !campaign.nodes[targetNodeId]?.isSanctuary)) {
-    if (currentNode.isFinale) {
-      return {
-        ...workingState,
-        revision: workingState.revision + 1,
-        updatedAt: Date.now(),
-        phase: 'defeat',
-        combatShakeAt: Date.now(),
-        lastResolutionLog: [
-          `💀 DEFEAT AT THE FINALE! ${campaign.bossName} overwhelmed the party. Click "Restart Campaign" or switch adventures to try again!`,
-          ...workingState.lastResolutionLog.slice(0, 5),
-        ],
-      }
+    const defeatMessage = currentNode.isFinale
+      ? `💀 DEFEAT AT THE FINALE! ${campaign.bossName} overwhelmed the party. Click "Restart Campaign" or switch adventures to try again!`
+      : `💀 PARTY WIPED! Every hero fell into the Spectral Realm before reaching a Sanctuary Shrine. Click "Restart Campaign" or switch adventures to try again!`
+    return {
+      ...workingState,
+      revision: workingState.revision + 1,
+      updatedAt: Date.now(),
+      phase: 'defeat',
+      combatShakeAt: Date.now(),
+      lastResolutionLog: [
+        defeatMessage,
+        ...workingState.lastResolutionLog.slice(0, 5),
+      ],
     }
   }
 

@@ -35,7 +35,7 @@ import {
 } from './components/ui/MobileTouchControlsOverlay'
 import { PasscodeGate } from './components/ui/PasscodeGate'
 import { YouTubeEmbedPlayerOverlay } from './components/ui/YouTubeEmbedPlayerOverlay'
-import { AvatarManager } from './components/xr/AvatarManager'
+import { AvatarManager, resumeAllVoiceAudioOutputs } from './components/xr/AvatarManager'
 import { BarGamesCorner3D } from './components/xr/BarGamesCorner3D'
 import { BuildModePanel3D } from './components/xr/BuildModePanel3D'
 import { CinemaRoom } from './components/xr/CinemaRoom'
@@ -64,6 +64,7 @@ import {
 import {
   ADVENTURE_CAMPAIGNS,
   buildQuestMediaUrl,
+  getCinemaQuestCanvas,
   type AdventureCampaignId,
   type QuestHotspotAction,
 } from './games/adventure'
@@ -86,12 +87,14 @@ import {
   isNesMediaUrl,
   type NesCartridgeMeta,
 } from './services/nesEmulator'
+import { resumeSoundboardAudio } from './services/soundboardAudio'
 import {
   isControllerButtonPressed,
   isSpatialDrawingSurfaceActive,
   onSpatialDrawingSurfaceChange,
   readControllerThumbstick,
   readXRSpaceWorldPose,
+  resetAllSpatialInteractionLocks,
 } from './services/xrTracking'
 import type { YouTubeVideoItem } from './services/youtube'
 import { exitVRSession, xrStore } from './store/xrStore'
@@ -110,13 +113,19 @@ import type {
 } from './types/lounge'
 
 class CanvasRootBoundary extends Component<
-  { children: ReactNode },
+  { children: ReactNode; resetKey?: string | number },
   { hasError: boolean }
 > {
   state = { hasError: false }
 
   static getDerivedStateFromError(): { hasError: boolean } {
     return { hasError: true }
+  }
+
+  componentDidUpdate(prevProps: { resetKey?: string | number }) {
+    if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ hasError: false })
+    }
   }
 
   componentDidCatch(error: unknown) {
@@ -132,13 +141,19 @@ class CanvasRootBoundary extends Component<
 }
 
 class SceneSectionBoundary extends Component<
-  { children: ReactNode },
+  { children: ReactNode; resetKey?: string | number },
   { hasError: boolean }
 > {
   state = { hasError: false }
 
   static getDerivedStateFromError(): { hasError: boolean } {
     return { hasError: true }
+  }
+
+  componentDidUpdate(prevProps: { resetKey?: string | number }) {
+    if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ hasError: false })
+    }
   }
 
   componentDidCatch(error: unknown) {
@@ -313,10 +328,12 @@ function SeatCameraAndOriginRig({
   const leftYHoldSecRef = useRef(0)
   const activeVrTeleportTargetRef = useRef<[number, number, number] | null>(null)
 
+  const prevInVRRef = useRef(inVR)
   const prevIsFreeRoamingRef = useRef(isFreeRoaming)
   const isFreeRoamingRef = useRef(isFreeRoaming)
   const prevFlyModeRef = useRef(flyMode)
   const flyModeRef = useRef(flyMode)
+  const keyboardOpenRef = useRef(keyboardOpen)
   const nesActiveOnScreenRef = useRef(nesActiveOnScreen)
   const nesControllerEngagedRef = useRef(nesControllerEngaged)
   const onDisengageNesControllerRef = useRef(onDisengageNesController)
@@ -346,6 +363,7 @@ function SeatCameraAndOriginRig({
   useEffect(() => {
     isFreeRoamingRef.current = isFreeRoaming
     flyModeRef.current = flyMode
+    keyboardOpenRef.current = keyboardOpen
     nesActiveOnScreenRef.current = nesActiveOnScreen
     nesControllerEngagedRef.current = nesControllerEngaged
     onDisengageNesControllerRef.current = onDisengageNesController
@@ -358,6 +376,7 @@ function SeatCameraAndOriginRig({
   }, [
     flyMode,
     isFreeRoaming,
+    keyboardOpen,
     nesActiveOnScreen,
     nesControllerEngaged,
     onDisengageNesController,
@@ -385,11 +404,48 @@ function SeatCameraAndOriginRig({
     }
   }, [])
 
+  // Handle WebXR session enter/exit transitions: wake suspended audio contexts and
+  // re-align the 2D Desktop camera + OrbitControls look sphere when exiting VR in Free-Roam!
   useEffect(() => {
     onInVRChangeRef.current(inVR)
-  }, [inVR])
+    if (prevInVRRef.current !== inVR) {
+      resumeAllVoiceAudioOutputs()
+      resumeSoundboardAudio()
+      fireplaceAudio.resumeIfNeeded()
+      getNesEmulator().wakeAudioAndTexture()
 
-  // Smoothly recover to floor level when Fly Mode is disabled or lifted slightly when enabled
+      if (prevInVRRef.current && !inVR) {
+        resetAllSpatialInteractionLocks()
+        if (isFreeRoamingRef.current) {
+          const roamPos = localRoamPoseRef.current.position
+          const roamYaw = localRoamPoseRef.current.yaw
+          const fx = -Math.sin(roamYaw)
+          const fz = -Math.cos(roamYaw)
+          desktopFloorYRef.current = roamPos[1]
+          desktopGlideTargetRef.current = null
+          camera.position.set(roamPos[0], roamPos[1] + 1.56, roamPos[2])
+          camera.lookAt(roamPos[0] + fx * 3, roamPos[1] + 1.5, roamPos[2] + fz * 3)
+          const rafId = window.requestAnimationFrame(() => {
+            if (orbitRef.current) {
+              orbitRef.current.target.set(
+                roamPos[0] + fx * 0.85,
+                roamPos[1] + 1.54,
+                roamPos[2] + fz * 0.85,
+              )
+              orbitRef.current.update()
+            }
+          })
+          prevInVRRef.current = inVR
+          return () => window.cancelAnimationFrame(rafId)
+        } else {
+          desktopTransitionRemainingRef.current = 0.45
+        }
+      }
+      prevInVRRef.current = inVR
+    }
+  }, [camera, inVR, localRoamPoseRef])
+
+  // Smoothly recover to floor level & walkable room bounds when Fly Mode is disabled
   useEffect(() => {
     if (flyMode && !prevFlyModeRef.current) {
       // Gentle hover liftoff (+0.65m) when activating Fly Mode from floor level
@@ -410,18 +466,50 @@ function SeatCameraAndOriginRig({
         }
       }
     } else if (!flyMode && prevFlyModeRef.current && isFreeRoaming) {
-      // Drop to floor level cleanly when disabling Fly Mode
+      // Drop to floor level AND re-clamp X/Z inside walkable walls cleanly when disabling Fly Mode
       const curPos = localRoamPoseRef.current.position
       const grounded = resolveWalkablePosition(curPos[0], curPos[2], architecture)
-      localRoamPoseRef.current.position = grounded
       if (inVR) {
+        camera.getWorldPosition(scratchHeadWorld)
+        vrOriginTargetPosRef.current.x += grounded[0] - scratchHeadWorld.x
+        vrOriginTargetPosRef.current.z += grounded[2] - scratchHeadWorld.z
         vrOriginTargetPosRef.current.y = grounded[1]
+        localRoamPoseRef.current.position = grounded
       } else {
+        // Leave localRoamPoseRef.current.position at curPos so useFrame computes non-zero dx/dz glide!
         desktopGlideTargetRef.current = grounded
       }
     }
     prevFlyModeRef.current = flyMode
-  }, [architecture, camera, flyMode, inVR, isFreeRoaming, localRoamPoseRef])
+  }, [
+    architecture,
+    camera,
+    flyMode,
+    inVR,
+    isFreeRoaming,
+    localRoamPoseRef,
+    scratchHeadWorld,
+  ])
+
+  // Re-clamp Free-Roam walker when room sizePreset, alcoves, or rear balcony change mid-session
+  useEffect(() => {
+    if (!isFreeRoaming || flyMode) return
+    const curPos = localRoamPoseRef.current.position
+    const clamped = resolveWalkablePosition(curPos[0], curPos[2], architecture)
+    const horizDelta = Math.hypot(clamped[0] - curPos[0], clamped[2] - curPos[2])
+    const vertDelta = Math.abs(clamped[1] - curPos[1])
+    if (horizDelta < 0.02 && vertDelta < 0.02) return
+
+    if (inVR) {
+      camera.getWorldPosition(scratchHeadWorld)
+      vrOriginTargetPosRef.current.x += clamped[0] - scratchHeadWorld.x
+      vrOriginTargetPosRef.current.z += clamped[2] - scratchHeadWorld.z
+      vrOriginTargetPosRef.current.y = clamped[1]
+      localRoamPoseRef.current.position = clamped
+    } else {
+      desktopGlideTargetRef.current = clamped
+    }
+  }, [architecture, camera, flyMode, inVR, isFreeRoaming, localRoamPoseRef, scratchHeadWorld])
 
   // Desktop WASD / Arrow-Key Walk + Fly Listener + Global NES Controller Keyboard Listener
   useEffect(() => {
@@ -438,7 +526,9 @@ function SeatCameraAndOriginRig({
     }
 
     const onKeyDown = (e: KeyboardEvent) => {
-      if (!joined || isEditableDomElement(document.activeElement)) return
+      if (!joined || keyboardOpenRef.current || isEditableDomElement(document.activeElement)) {
+        return
+      }
       if (nesActiveOnScreenRef.current && nesControllerEngagedRef.current) {
         const nesBtn = mapNesKeyCode(e.code)
         if (nesBtn) {
@@ -478,26 +568,16 @@ function SeatCameraAndOriginRig({
     }
 
     const onKeyUp = (e: KeyboardEvent) => {
-      if (nesActiveOnScreenRef.current && nesControllerEngagedRef.current) {
-        const nesBtn = mapNesKeyCode(e.code)
-        if (nesBtn) {
-          getNesEmulator().setButtonState(nesBtn, false)
-        }
+      const nesBtn = mapNesKeyCode(e.code)
+      if (nesBtn) {
+        getNesEmulator().setButtonState(nesBtn, false)
       }
       pressedKeysRef.current.delete(e.code)
     }
 
     const clearKeys = () => {
       pressedKeysRef.current.clear()
-      const emu = getNesEmulator()
-      emu.setButtonState('up', false)
-      emu.setButtonState('down', false)
-      emu.setButtonState('left', false)
-      emu.setButtonState('right', false)
-      emu.setButtonState('a', false)
-      emu.setButtonState('b', false)
-      emu.setButtonState('start', false)
-      emu.setButtonState('select', false)
+      getNesEmulator().releaseAllUiButtons()
     }
 
     window.addEventListener('keydown', onKeyDown)
@@ -1436,8 +1516,8 @@ export function App() {
 
   useEffect(() => {
     const emu = getNesEmulator()
-    return emu.onSaveSlotsChanged(() => {
-      setEngagedNesSlot(emu.getEngagedPlayerSlot())
+    return emu.onEngagedSlotChange((slot) => {
+      setEngagedNesSlot(slot)
     })
   }, [])
 
@@ -1447,6 +1527,7 @@ export function App() {
     joined: room.joined,
     localUserId: room.localUserId,
     localProfile: room.localProfile,
+    participants: room.participants,
     barGamesBridgeRef: room.barGamesBridgeRef,
     broadcastBarGamesEvent: room.broadcastBarGamesEvent,
     appendSystemMessage: room.appendSystemMessage,
@@ -1529,10 +1610,17 @@ export function App() {
       cur[2],
       roomCustomization.architecture,
     )
-    localRoamPoseRef.current.position = grounded
     if (!isFreeRoaming) {
       roomSelectSeat(FREE_ROAM_SEAT_ID)
     }
+    const spec =
+      ROOM_SIZE_SPECS[roomCustomization.architecture.sizePreset] ??
+      ROOM_SIZE_SPECS.classic
+    setFreeRoamWing(detectActiveLoungeWing(grounded[0], grounded[2], spec.backZ))
+    setTeleportRequest((prev) => ({
+      id: (prev?.id ?? 0) + 1,
+      position: grounded,
+    }))
   }, [isFreeRoaming, roomCustomization.architecture, roomSelectSeat])
 
   const handleCycleStreamVolume = useCallback(() => {
@@ -1996,12 +2084,12 @@ export function App() {
       roomUpdateCustomization((prev) => ({
         ...prev,
         expansionWing: {
-          ...resolveExpansionWingState(prev.expansionWing),
+          ...resolveExpansionWingState(prev.expansionWing, room.roomCode),
           ...patch,
         },
       }))
     },
-    [roomUpdateCustomization],
+    [room.roomCode, roomUpdateCustomization],
   )
 
   const handleSpawnFurniture = useCallback(
@@ -2077,6 +2165,45 @@ export function App() {
       setSelectedFurnitureId(newId)
     },
     [activeSeat.position, activeSeat.rotationY, roomUpdateCustomization],
+  )
+
+  const handleSpawnWallPhotoFrame = useCallback(
+    (imageUrl: string, label: string) => {
+      const entry = getCatalogEntry('wall-poster')
+      const newId = `furn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+      roomUpdateCustomization((prev) => {
+        const sizeSpec =
+          ROOM_SIZE_SPECS[prev.architecture.sizePreset] ?? ROOM_SIZE_SPECS.classic
+        const halfW = sizeSpec.width / 2
+        const wallItemsCount = prev.furniture.filter(
+          (f) => getCatalogEntry(f.type).placementSurface === 'wall',
+        ).length
+        const mountLeft = wallItemsCount % 2 === 0
+        const wallX = mountLeft ? -(halfW - 0.1) : halfW - 0.1
+        const wallOffsetZ = ((Math.floor(wallItemsCount / 2) % 5) - 2) * 1.65
+        const wallZ = Number(
+          Math.max(
+            sizeSpec.frontZ + 2.2,
+            Math.min(sizeSpec.backZ - 2.2, activeSeat.position[2] - 0.8 + wallOffsetZ),
+          ).toFixed(2),
+        )
+        const newItem: PlacedFurnitureItem = {
+          id: newId,
+          type: 'wall-poster',
+          position: [Number(wallX.toFixed(2)), 2.75, wallZ],
+          rotationY: mountLeft ? Math.PI / 2 : -Math.PI / 2,
+          scale: 1,
+          color: entry.defaultColor,
+          imageUrl,
+          label,
+        }
+        return {
+          ...prev,
+          furniture: [...prev.furniture, newItem],
+        }
+      })
+    },
+    [activeSeat.position, roomUpdateCustomization],
   )
 
   const handleUpdateFurnitureItem = useCallback(
@@ -2228,6 +2355,8 @@ export function App() {
   useEffect(() => {
     const handleWake = () => {
       if (document.visibilityState !== 'visible') return
+      resumeAllVoiceAudioOutputs()
+      resumeSoundboardAudio()
       fireplaceAudio.resumeIfNeeded()
       getNesEmulator().wakeAudioAndTexture()
     }
@@ -2250,12 +2379,18 @@ export function App() {
           media.videoTexture.needsUpdate = true
         }
         getNesEmulator().wakeAudioAndTexture()
+        getCinemaQuestCanvas().texture.needsUpdate = true
       }
       dom.addEventListener('webglcontextlost', onContextLost, false)
       dom.addEventListener('webglcontextrestored', onContextRestored, false)
     },
     [media.videoTexture],
   )
+
+  const isScreenVisibleInCurrentWing =
+    activeLoungeWing === 'main-lounge' ||
+    activeLoungeWing === 'hallway' ||
+    activeLoungeWing === 'game-room'
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#080a0d]">
@@ -2281,8 +2416,8 @@ export function App() {
         <color attach="background" args={[skyBgColor]} />
         <fog attach="fog" args={[skyBgColor, 34, 125]} />
 
-        <CanvasRootBoundary>
-          <XR store={xrStore}>
+        <XR store={xrStore}>
+          <CanvasRootBoundary resetKey={room.roomCode}>
             <PointerEvents batchEvents={false} />
 
             {/* Keep XROrigin & core CinemaRoom outside Suspense so VR renders on Frame 0 */}
@@ -2303,7 +2438,8 @@ export function App() {
               buildMode={buildMode}
               nesActiveOnScreen={
                 room.presenterState.screenMode === 'url-sync' &&
-                isNesMediaUrl(room.presenterState.mediaUrl)
+                isNesMediaUrl(room.presenterState.mediaUrl) &&
+                isScreenVisibleInCurrentWing
               }
               nesControllerEngaged={engagedNesSlot !== null}
               onDisengageNesController={() => {
@@ -2329,7 +2465,7 @@ export function App() {
             >
               {room.joined && (
                 <>
-                  <SceneSectionBoundary>
+                  <SceneSectionBoundary resetKey={room.roomCode}>
                     <YouTubeBrowser3D
                       visible={youtubeBrowserOpen}
                       keyboardOpenForSearch={keyboardMode === 'youtube'}
@@ -2349,7 +2485,7 @@ export function App() {
                     />
                   </SceneSectionBoundary>
 
-                  <SceneSectionBoundary>
+                  <SceneSectionBoundary resetKey={room.roomCode}>
                     <NesLibraryBrowser3D
                       visible={nesLibraryOpen}
                       activeMediaUrl={room.presenterState.mediaUrl}
@@ -2365,7 +2501,7 @@ export function App() {
                     />
                   </SceneSectionBoundary>
 
-                  <SceneSectionBoundary>
+                  <SceneSectionBoundary resetKey={room.roomCode}>
                     <BuildModePanel3D
                       visible={buildMode && inVRSession}
                       customization={roomCustomization}
@@ -2383,7 +2519,7 @@ export function App() {
                     />
                   </SceneSectionBoundary>
 
-                  <SceneSectionBoundary>
+                  <SceneSectionBoundary resetKey={room.roomCode}>
                     <WardrobeMirror3D
                       open={wardrobeOpen && inVRSession}
                       inVR={true}
@@ -2401,7 +2537,7 @@ export function App() {
                         activeSeat.roomWing === 'main-lounge') &&
                       (!activeSeat?.stationKind ||
                         activeSeat.stationKind === 'seat'))) && (
-                    <SceneSectionBoundary>
+                    <SceneSectionBoundary resetKey={room.roomCode}>
                       <SpatialControlDock
                         presenterState={room.presenterState}
                         isLocalPresenter={room.isLocalPresenter}
@@ -2480,48 +2616,51 @@ export function App() {
               )}
             </SeatCameraAndOriginRig>
 
-            <group
-              name="main-cinema-lounge-root"
-              visible={
-                activeLoungeWing === 'main-lounge' ||
-                activeLoungeWing === 'hallway'
-              }
-            >
-              <CinemaRoom
-                roomCode={room.roomCode}
-                presenterState={room.presenterState}
-                roomCustomization={roomCustomization}
-                computedSeats={computedSeats}
-                videoTexture={media.videoTexture}
-                hasVideoFrames={media.hasVideoFrames}
-                isResolvingMedia={media.isResolvingMedia}
-                activeStreamQuality={media.activeStreamQuality}
-                mediaError={media.mediaError}
-                needsAudioUnlock={media.needsAudioUnlock}
-                localSeatId={room.localProfile.seatId}
-                localSeatIndex={room.localProfile.seatIndex}
-                participants={room.participants}
-                canTakeControl={room.canTakeControl}
-                buildMode={buildMode}
-                selectedFurnitureId={selectedFurnitureId}
-                onTakeControl={() => room.takeControl()}
-                onOpenYouTubeBrowser={room.joined ? handleOpenYouTubeBrowser : undefined}
-                onStartStoryQuest={room.joined ? () => handleStartStoryQuest() : undefined}
-                onQuestScreenAction={room.joined ? handleQuestScreenAction : undefined}
-                onQuestHoverCard={room.joined ? barGames.hoverAdventureCard : undefined}
-                onUnlockAudio={media.unlockAudio}
-                onSelectSeat={handleSelectSeat}
-                onTeleportToFloor={room.joined ? handleTeleportToFloor : undefined}
-                onSelectFurniture={setSelectedFurnitureId}
-                onUpdateFurnitureItem={handleUpdateFurnitureItem}
-                onDuplicateFurnitureItem={handleDuplicateFurnitureItem}
-                onDeleteFurnitureItem={handleDeleteFurnitureItem}
-                onEditFurnitureMedia={handleEditFurnitureMediaInVR}
-              />
-            </group>
+            <SceneSectionBoundary resetKey={room.roomCode}>
+              <group
+                name="main-cinema-lounge-root"
+                visible={
+                  activeLoungeWing === 'main-lounge' ||
+                  activeLoungeWing === 'hallway'
+                }
+              >
+                <CinemaRoom
+                  roomCode={room.roomCode}
+                  presenterState={room.presenterState}
+                  roomCustomization={roomCustomization}
+                  computedSeats={computedSeats}
+                  videoTexture={media.videoTexture}
+                  hasVideoFrames={media.hasVideoFrames}
+                  isResolvingMedia={media.isResolvingMedia}
+                  activeStreamQuality={media.activeStreamQuality}
+                  mediaError={media.mediaError}
+                  needsAudioUnlock={media.needsAudioUnlock}
+                  localSeatId={room.localProfile.seatId}
+                  localSeatIndex={room.localProfile.seatIndex}
+                  participants={room.participants}
+                  canTakeControl={room.canTakeControl}
+                  buildMode={buildMode}
+                  selectedFurnitureId={selectedFurnitureId}
+                  onTakeControl={() => room.takeControl()}
+                  onOpenYouTubeBrowser={room.joined ? handleOpenYouTubeBrowser : undefined}
+                  onStartStoryQuest={room.joined ? () => handleStartStoryQuest() : undefined}
+                  onQuestScreenAction={room.joined ? handleQuestScreenAction : undefined}
+                  onQuestHoverCard={room.joined ? barGames.hoverAdventureCard : undefined}
+                  onUnlockAudio={media.unlockAudio}
+                  onSelectSeat={handleSelectSeat}
+                  onTeleportToFloor={room.joined ? handleTeleportToFloor : undefined}
+                  onSelectFurniture={setSelectedFurnitureId}
+                  onUpdateFurnitureItem={handleUpdateFurnitureItem}
+                  onDuplicateFurnitureItem={handleDuplicateFurnitureItem}
+                  onDeleteFurnitureItem={handleDeleteFurnitureItem}
+                  onEditFurnitureMedia={handleEditFurnitureMediaInVR}
+                />
+              </group>
+            </SceneSectionBoundary>
 
-            <SceneSectionBoundary>
+            <SceneSectionBoundary resetKey={room.roomCode}>
               <ExpansionWing3D
+                roomCode={room.roomCode}
                 roomCustomization={roomCustomization}
                 presenterState={room.presenterState}
                 mainVideoTexture={media.videoTexture}
@@ -2540,6 +2679,7 @@ export function App() {
                 }
                 onRecordCornholeThrow={barGames.recordCornholeThrow}
                 onResetCornhole={barGames.resetCornhole}
+                onSetHolotableGameMode={barGames.setHolotableGameMode}
                 onSetHolotableTerrain={barGames.setHolotableTerrain}
                 onSelectHolotableMini={barGames.selectHolotableMini}
                 onSpawnHolotableMini={barGames.spawnHolotableMini}
@@ -2550,6 +2690,14 @@ export function App() {
                 onToggleHolotableFogCell={barGames.toggleHolotableFogCell}
                 onRevealAllHolotableFog={barGames.revealAllHolotableFog}
                 onShroudAllHolotableFog={barGames.shroudAllHolotableFog}
+                onRollRpgCombatAction={barGames.rollRpgCombatAction}
+                onAdjustHolotableMiniHp={barGames.adjustHolotableMiniHp}
+                onClickCheckersCell={barGames.clickCheckersCell}
+                onResetCheckersBoard={barGames.resetCheckersBoard}
+                onClickChessCell={barGames.clickChessCell}
+                onResetChessBoard={barGames.resetChessBoard}
+                onDropConnect4Column={barGames.dropConnect4Column}
+                onResetConnect4Grid={barGames.resetConnect4Grid}
                 onRecordArcadeScore={barGames.recordArcadeStationScore}
                 onSelectSeat={handleSelectSeat}
                 onTeleportToFloor={room.joined ? handleTeleportToFloor : undefined}
@@ -2565,7 +2713,7 @@ export function App() {
               />
             </SceneSectionBoundary>
 
-            <SceneSectionBoundary>
+            <SceneSectionBoundary resetKey={room.roomCode}>
               <group
                 name="bar-games-corner-root"
                 visible={activeLoungeWing === 'main-lounge'}
@@ -2668,7 +2816,7 @@ export function App() {
               />
             </SceneSectionBoundary>
 
-            <SceneSectionBoundary>
+            <SceneSectionBoundary resetKey={room.roomCode}>
               <SpatialChatPanel
                 visible={room.joined && spatialChatOpen}
                 messages={room.messages}
@@ -2682,8 +2830,8 @@ export function App() {
                 onClosePanel={() => setSpatialChatOpen(false)}
               />
             </SceneSectionBoundary>
-          </XR>
-        </CanvasRootBoundary>
+          </CanvasRootBoundary>
+        </XR>
       </Canvas>
 
       {/* Secret Passcode Gate (blocks unauthenticated visitors before Lobby while keeping Canvas alive) */}
@@ -2737,11 +2885,18 @@ export function App() {
           onEnterVR={handleEnterVR}
           onLeaveRoom={async () => {
             webrtc.stopTabShare()
+            fireplaceAudio.stop()
+            getNesEmulator().releaseAllUiButtons()
+            resetAllSpatialInteractionLocks()
             setFlyMode(false)
             setBuildMode(false)
             setBarGamesOpen(false)
             setWardrobeOpen(false)
             setClubhouseOpen(false)
+            setYoutubeBrowserOpen(false)
+            setNesLibraryOpen(false)
+            setKeyboardMode(null)
+            setEditingPosterItemId(null)
             setSelectedFurnitureId(null)
             await room.leaveRoom()
           }}
@@ -2854,6 +3009,7 @@ export function App() {
             onLoadStreamUrl={(url, title) => handleLoadStreamUrl(url, title, false)}
             onTriggerSoundboard={barGames.triggerSoundboardEffect}
             onSpawnFurniture={handleSpawnFurniture}
+            onSpawnWallPhoto={handleSpawnWallPhotoFrame}
             onUpdateFurnitureItem={handleUpdateFurnitureItem}
             adventureState={barGames.adventureState}
             onStartStoryQuest={handleStartStoryQuest}

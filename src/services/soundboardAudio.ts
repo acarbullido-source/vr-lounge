@@ -78,6 +78,23 @@ function getSoundboardContext(): AudioContext | null {
   return sharedCtx
 }
 
+export function resumeSoundboardAudio(): void {
+  if (sharedCtx && sharedCtx.state === 'suspended') {
+    void sharedCtx.resume().catch(() => undefined)
+  }
+}
+
+function scheduleMasterDisconnect(master: GainNode, delayMs: number): void {
+  if (typeof window === 'undefined') return
+  window.setTimeout(() => {
+    try {
+      master.disconnect()
+    } catch {
+      // Ignore already disconnected node
+    }
+  }, delayMs)
+}
+
 /**
  * Synthesizes zero-latency procedural Web Audio soundboard effects so mobile,
  * desktop, and VR users hear crisp clubhouse stingers without external audio files.
@@ -93,6 +110,7 @@ export function playSoundboardEffect(
   const master = ctx.createGain()
   master.gain.setValueAtTime(Math.max(0.05, Math.min(1, volume)), now)
   master.connect(ctx.destination)
+  scheduleMasterDisconnect(master, 1500)
 
   if (effectId === 'airhorn') {
     // Triple stadium airhorn blasts (detuned sawtooth stack)
@@ -278,6 +296,7 @@ export function playSpatialUiFeedback(
   const master = ctx.createGain()
   master.gain.setValueAtTime(Math.max(0.02, Math.min(0.6, volume)), now)
   master.connect(ctx.destination)
+  scheduleMasterDisconnect(master, 400)
 
   if (kind === 'ui-hover') {
     const osc = ctx.createOscillator()

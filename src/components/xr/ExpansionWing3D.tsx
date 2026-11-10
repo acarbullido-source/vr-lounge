@@ -409,6 +409,11 @@ function DoorwaySign3D({
   onClick?: () => void
 }) {
   const [hovered, setHovered] = useState(false)
+  useEffect(() => {
+    return () => {
+      setSpatialUiHovered(false, `door-sign-${label}`)
+    }
+  }, [label])
   return (
     <group
       position={position}
@@ -435,6 +440,8 @@ function DoorwaySign3D({
         onClick
           ? (e) => {
               e.stopPropagation()
+              setHovered(false)
+              setSpatialUiHovered(false, `door-sign-${label}`)
               playSpatialUiFeedback('teleport')
               onClick()
             }
@@ -474,6 +481,7 @@ function DoorwaySign3D({
 }
 
 export interface ExpansionWing3DProps {
+  roomCode?: string
   roomCustomization: RoomCustomizationState
   presenterState: PresenterState
   mainVideoTexture: THREE.VideoTexture
@@ -490,6 +498,9 @@ export interface ExpansionWing3DProps {
   onToggleGameRoomStreamMute: () => void
   onRecordCornholeThrow: (bag: CornholeBagRecord) => void
   onResetCornhole: () => void
+  onSetHolotableGameMode?: (
+    gameMode: 'adventure-rpg' | 'checkers' | 'chess' | 'connect4',
+  ) => void
   onSetHolotableTerrain: (preset: HolotableTerrainPresetId) => void
   onSelectHolotableMini: (id: string | null) => void
   onSpawnHolotableMini: (
@@ -507,6 +518,14 @@ export interface ExpansionWing3DProps {
   onToggleHolotableFogCell: (cellKey: string) => void
   onRevealAllHolotableFog: () => void
   onShroudAllHolotableFog: () => void
+  onRollRpgCombatAction?: (actionKind: 'melee' | 'spell' | 'heal') => void
+  onAdjustHolotableMiniHp?: (miniId: string, delta: number) => void
+  onClickCheckersCell?: (cellIdx: number) => void
+  onResetCheckersBoard?: () => void
+  onClickChessCell?: (cellIdx: number) => void
+  onResetChessBoard?: () => void
+  onDropConnect4Column?: (col: number) => void
+  onResetConnect4Grid?: () => void
   onRecordArcadeScore: (
     game: 'arcade-hoops' | 'arcade-skeeball' | 'arcade-retro',
     score: number,
@@ -522,6 +541,7 @@ export interface ExpansionWing3DProps {
 }
 
 export function ExpansionWing3D({
+  roomCode,
   roomCustomization,
   presenterState,
   mainVideoTexture,
@@ -538,6 +558,7 @@ export function ExpansionWing3D({
   onToggleGameRoomStreamMute,
   onRecordCornholeThrow,
   onResetCornhole,
+  onSetHolotableGameMode,
   onSetHolotableTerrain,
   onSelectHolotableMini,
   onSpawnHolotableMini,
@@ -548,6 +569,14 @@ export function ExpansionWing3D({
   onToggleHolotableFogCell,
   onRevealAllHolotableFog,
   onShroudAllHolotableFog,
+  onRollRpgCombatAction,
+  onAdjustHolotableMiniHp,
+  onClickCheckersCell,
+  onResetCheckersBoard,
+  onClickChessCell,
+  onResetChessBoard,
+  onDropConnect4Column,
+  onResetConnect4Grid,
   onRecordArcadeScore,
   onSelectSeat,
   onTeleportToFloor,
@@ -564,8 +593,8 @@ export function ExpansionWing3D({
     [sizeSpec.backZ],
   )
   const wingState = useMemo(
-    () => resolveExpansionWingState(roomCustomization.expansionWing),
-    [roomCustomization.expansionWing],
+    () => resolveExpansionWingState(roomCustomization.expansionWing, roomCode),
+    [roomCode, roomCustomization.expansionWing],
   )
 
   const [crackleAudioOn, setCrackleAudioOn] = useState(() => fireplaceAudio.isPlaying())
@@ -1592,6 +1621,8 @@ export function ExpansionWing3D({
           surfaceId="boardroom-south-wall-whiteboard"
           wingState={wingState}
           localDisplayName={localDisplayName}
+          roomCode={roomCode}
+          visible={isBoardroomVisible}
           isStandingAtBoard={localSeatId === 'wing:boardroom-whiteboard'}
           onStandAtBoard={() => onSelectSeat('wing:boardroom-whiteboard')}
           onUpdateWingState={onUpdateWingState}
@@ -1770,6 +1801,8 @@ export function ExpansionWing3D({
               surfaceId="boardroom-west-screen-whiteboard"
               wingState={wingState}
               localDisplayName={localDisplayName}
+              roomCode={roomCode}
+              visible={isBoardroomVisible}
               isStandingAtBoard={localSeatId === 'wing:boardroom-whiteboard'}
               onStandAtBoard={() => onSelectSeat('wing:boardroom-whiteboard')}
               onUpdateWingState={onUpdateWingState}
@@ -2466,6 +2499,7 @@ export function ExpansionWing3D({
                 onToggleGameRoomStreamMute={onToggleGameRoomStreamMute}
                 onSelectSeat={onSelectSeat}
                 onTeleportToFloor={onTeleportToFloor}
+                onSetHolotableGameMode={onSetHolotableGameMode}
                 onSetHolotableTerrain={onSetHolotableTerrain}
                 onSelectHolotableMini={onSelectHolotableMini}
                 onSpawnHolotableMini={onSpawnHolotableMini}
@@ -2476,6 +2510,14 @@ export function ExpansionWing3D({
                 onToggleHolotableFogCell={onToggleHolotableFogCell}
                 onRevealAllHolotableFog={onRevealAllHolotableFog}
                 onShroudAllHolotableFog={onShroudAllHolotableFog}
+                onRollRpgCombatAction={onRollRpgCombatAction}
+                onAdjustHolotableMiniHp={onAdjustHolotableMiniHp}
+                onClickCheckersCell={onClickCheckersCell}
+                onResetCheckersBoard={onResetCheckersBoard}
+                onClickChessCell={onClickChessCell}
+                onResetChessBoard={onResetChessBoard}
+                onDropConnect4Column={onDropConnect4Column}
+                onResetConnect4Grid={onResetConnect4Grid}
                 onRecordArcadeScore={onRecordArcadeScore}
               />
             </Suspense>

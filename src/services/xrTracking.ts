@@ -112,7 +112,8 @@ export function isControllerButtonPressed(
   return false
 }
 
-let activeSpatialUiHoverId: string | null = null
+const spatialUiHoverMap = new Map<string, number>()
+const SPATIAL_UI_HOVER_TTL_MS = 12_000
 
 /**
  * Tracks whether a 3D UI button/control is currently hovered by the user's pointer ray
@@ -121,18 +122,44 @@ let activeSpatialUiHoverId: string | null = null
  */
 export function setSpatialUiHovered(hovered: boolean, sourceId = 'ui'): void {
   if (hovered) {
-    activeSpatialUiHoverId = sourceId
-  } else if (!activeSpatialUiHoverId || activeSpatialUiHoverId === sourceId) {
-    activeSpatialUiHoverId = null
+    spatialUiHoverMap.set(sourceId, Date.now())
+  } else {
+    spatialUiHoverMap.delete(sourceId)
+  }
+}
+
+export function clearSpatialUiHoverPrefix(prefix: string): void {
+  if (!prefix) return
+  for (const key of spatialUiHoverMap.keys()) {
+    if (key.startsWith(prefix)) {
+      spatialUiHoverMap.delete(key)
+    }
   }
 }
 
 export function isSpatialUiHovered(): boolean {
-  return activeSpatialUiHoverId !== null
+  if (spatialUiHoverMap.size === 0) return false
+  const now = Date.now()
+  for (const [key, ts] of spatialUiHoverMap.entries()) {
+    if (now - ts > SPATIAL_UI_HOVER_TTL_MS) {
+      spatialUiHoverMap.delete(key)
+    }
+  }
+  return spatialUiHoverMap.size > 0
 }
 
-let activeSpatialDrawingSurfaceId: string | null = null
+const spatialDrawingSurfaceSet = new Set<string>()
 const spatialDrawingListeners = new Set<(active: boolean) => void>()
+
+function notifySpatialDrawingListeners(next: boolean): void {
+  for (const listener of spatialDrawingListeners) {
+    try {
+      listener(next)
+    } catch {
+      // Ignore listener error
+    }
+  }
+}
 
 /**
  * Tracks when the user's pointer is hovering or actively drawing on a 3D whiteboard
@@ -142,29 +169,29 @@ export function setSpatialDrawingSurfaceActive(
   active: boolean,
   sourceId = 'whiteboard',
 ): void {
-  const prev = activeSpatialDrawingSurfaceId !== null
+  const prev = spatialDrawingSurfaceSet.size > 0
   if (active) {
-    activeSpatialDrawingSurfaceId = sourceId
-  } else if (
-    !activeSpatialDrawingSurfaceId ||
-    activeSpatialDrawingSurfaceId === sourceId
-  ) {
-    activeSpatialDrawingSurfaceId = null
+    spatialDrawingSurfaceSet.add(sourceId)
+  } else {
+    spatialDrawingSurfaceSet.delete(sourceId)
   }
-  const next = activeSpatialDrawingSurfaceId !== null
+  const next = spatialDrawingSurfaceSet.size > 0
   if (prev !== next) {
-    for (const listener of spatialDrawingListeners) {
-      try {
-        listener(next)
-      } catch {
-        // Ignore listener error
-      }
-    }
+    notifySpatialDrawingListeners(next)
   }
 }
 
 export function isSpatialDrawingSurfaceActive(): boolean {
-  return activeSpatialDrawingSurfaceId !== null
+  return spatialDrawingSurfaceSet.size > 0
+}
+
+export function resetAllSpatialInteractionLocks(): void {
+  spatialUiHoverMap.clear()
+  const hadDrawing = spatialDrawingSurfaceSet.size > 0
+  spatialDrawingSurfaceSet.clear()
+  if (hadDrawing) {
+    notifySpatialDrawingListeners(false)
+  }
 }
 
 export function onSpatialDrawingSurfaceChange(

@@ -124,6 +124,7 @@ export interface ArcadeCabinetEngine {
   getScore: () => number
   getHighScore: () => number
   isPlaying: () => boolean
+  ensureBooted: () => void
   sendInput: (action: ArcadeInputAction) => void
   setButtonHeld: (btn: NesButtonId, pressed: boolean) => void
   cycleArcadeRom: () => ArcadeRomOption
@@ -133,8 +134,9 @@ export interface ArcadeCabinetEngine {
 
 export function createArcadeCabinetEngine(
   id: ClassicArcadeGameId,
-  onGameOverScore?: (score: number, label: string) => void,
+  _onGameOverScore?: (score: number, label: string) => void,
 ): ArcadeCabinetEngine {
+  void _onGameOverScore
   let romIndex = DEFAULT_SLOT_ROM_INDEX[id] ?? 0
   let currentRom = ARCADE_CABINET_ROMS[romIndex]
 
@@ -154,10 +156,11 @@ export function createArcadeCabinetEngine(
 
   let nesCore: NES | null = null
   let romReady = false
+  let bootStarted = false
   let disposed = false
   let frameAccum = 0
   let attractAccum = 0
-  let scoreEstimate = 1200 + romIndex * 350
+  let scoreEstimate = 0
   let highScore = 2400 + romIndex * 400
 
   const renderLoadingScreen = (msg: string) => {
@@ -182,7 +185,9 @@ export function createArcadeCabinetEngine(
 
   const bootCurrentRom = () => {
     if (disposed) return
+    bootStarted = true
     romReady = false
+    scoreEstimate = 0
     const targetRom = currentRom
     renderLoadingScreen('LOADING REAL ARCADE ROM...')
     void fetchRomBinaryString(targetRom.romFile)
@@ -202,7 +207,7 @@ export function createArcadeCabinetEngine(
         nes.loadROM(binStr)
         nesCore = nes
         romReady = true
-        for (let i = 0; i < 60; i++) {
+        for (let i = 0; i < 30; i++) {
           nes.frame()
         }
         texture.needsUpdate = true
@@ -214,9 +219,16 @@ export function createArcadeCabinetEngine(
       })
   }
 
-  bootCurrentRom()
+  renderLoadingScreen('ENTER GAME ROOM OR PRESS START')
+
+  const ensureBooted = () => {
+    if (!bootStarted && !disposed) {
+      bootCurrentRom()
+    }
+  }
 
   const setButtonHeld = (btn: NesButtonId, pressed: boolean) => {
+    ensureBooted()
     if (disposed || !romReady || !nesCore) return
     const code = JSNES_BTN_CODE[btn]
     if (pressed) {
@@ -231,11 +243,13 @@ export function createArcadeCabinetEngine(
   }
 
   const tapNesButton = (btn: NesButtonId, holdMs = 120) => {
+    ensureBooted()
     setButtonHeld(btn, true)
     window.setTimeout(() => setButtonHeld(btn, false), holdMs)
   }
 
   const sendInput = (action: ArcadeInputAction) => {
+    ensureBooted()
     if (action === 'up') tapNesButton('up', 140)
     else if (action === 'down') tapNesButton('down', 140)
     else if (action === 'left') tapNesButton('left', 140)
@@ -245,9 +259,6 @@ export function createArcadeCabinetEngine(
     else if (action === 'select') tapNesButton('select', 130)
     else if (action === 'start') {
       tapNesButton('start', 150)
-      if (onGameOverScore && scoreEstimate > 0) {
-        onGameOverScore(scoreEstimate, currentRom.title)
-      }
     }
   }
 
@@ -301,6 +312,7 @@ export function createArcadeCabinetEngine(
     getScore: () => scoreEstimate,
     getHighScore: () => highScore,
     isPlaying: () => romReady,
+    ensureBooted,
     sendInput,
     setButtonHeld,
     cycleArcadeRom,

@@ -17,7 +17,7 @@ import {
   parseNesCartridgeIdFromUrl,
 } from '../../services/nesEmulator'
 import { playSpatialUiFeedback } from '../../services/soundboardAudio'
-import { setSpatialUiHovered } from '../../services/xrTracking'
+import { clearSpatialUiHoverPrefix, setSpatialUiHovered } from '../../services/xrTracking'
 import type {
   LightingPresetId,
   LoungeWingId,
@@ -68,10 +68,20 @@ function DockButton({
 }: DockButtonProps) {
   const [hovered, setHovered] = useState(false)
   const sourceId = `dock-btn-${label}`
+  const isPressedRef = useRef(false)
+  const onPointerUpRef = useRef(onPointerUp)
+
+  useEffect(() => {
+    onPointerUpRef.current = onPointerUp
+  }, [onPointerUp])
 
   useEffect(() => {
     return () => {
       setSpatialUiHovered(false, sourceId)
+      if (isPressedRef.current) {
+        isPressedRef.current = false
+        onPointerUpRef.current?.()
+      }
     }
   }, [sourceId])
 
@@ -113,16 +123,29 @@ function DockButton({
       onPointerOut={() => {
         setHovered(false)
         setSpatialUiHovered(false, sourceId)
-        onPointerUp?.()
+        if (isPressedRef.current) {
+          isPressedRef.current = false
+          onPointerUp?.()
+        }
+      }}
+      onPointerCancel={() => {
+        setHovered(false)
+        setSpatialUiHovered(false, sourceId)
+        if (isPressedRef.current) {
+          isPressedRef.current = false
+          onPointerUp?.()
+        }
       }}
       onPointerDown={(e) => {
         if (disabled || !onPointerDown) return
         e.stopPropagation()
+        isPressedRef.current = true
         onPointerDown()
       }}
       onPointerUp={(e) => {
         if (disabled || !onPointerUp) return
         e.stopPropagation()
+        isPressedRef.current = false
         onPointerUp()
       }}
       onClick={(e) => {
@@ -333,6 +356,26 @@ export function SpatialControlDock({
       setMinimized((v) => !v)
     }
   }, [dockSummonToggleVersion])
+
+  useEffect(() => {
+    clearSpatialUiHoverPrefix('dock-btn-')
+    if (minimized || !isNesMediaUrl(presenterState.mediaUrl)) {
+      const emu = getNesEmulator()
+      emu.setButtonState('start', false)
+      emu.setButtonState('a', false)
+      emu.setButtonState('b', false)
+    }
+  }, [activeTab, minimized, presenterState.mediaUrl])
+
+  useEffect(() => {
+    return () => {
+      clearSpatialUiHoverPrefix('dock-btn-')
+      const emu = getNesEmulator()
+      emu.setButtonState('start', false)
+      emu.setButtonState('a', false)
+      emu.setButtonState('b', false)
+    }
+  }, [])
 
   const progressRatio =
     localDuration > 0 ? Math.max(0, Math.min(1, localCurrentTime / localDuration)) : 0
@@ -652,7 +695,7 @@ export function SpatialControlDock({
                 variant="primary"
                 onPointerDown={() => getNesEmulator().setButtonState('start', true)}
                 onPointerUp={() => getNesEmulator().setButtonState('start', false)}
-                onClick={() => getNesEmulator().tapButton('start')}
+                onClick={() => {}}
               />
 
               <DockButton
@@ -664,7 +707,7 @@ export function SpatialControlDock({
                 variant="danger"
                 onPointerDown={() => getNesEmulator().setButtonState('b', true)}
                 onPointerUp={() => getNesEmulator().setButtonState('b', false)}
-                onClick={() => getNesEmulator().tapButton('b')}
+                onClick={() => {}}
               />
               <DockButton
                 label="A"
@@ -675,7 +718,7 @@ export function SpatialControlDock({
                 variant="danger"
                 onPointerDown={() => getNesEmulator().setButtonState('a', true)}
                 onPointerUp={() => getNesEmulator().setButtonState('a', false)}
-                onClick={() => getNesEmulator().tapButton('a')}
+                onClick={() => {}}
               />
 
               <DockButton

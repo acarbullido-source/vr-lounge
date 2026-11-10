@@ -720,6 +720,13 @@ export async function fetchSportsScoreboard(
     // Graceful fallback below
   }
 
+  if (cached && cached.isLiveData) {
+    return {
+      ...cached,
+      fetchedAt: Date.now(),
+    }
+  }
+
   const fallbackSnapshot: SportsScoreboardSnapshot = {
     league: spec.id,
     leagueLabel: spec.label,

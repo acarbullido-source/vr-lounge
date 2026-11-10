@@ -659,24 +659,42 @@ export function BarGamesDrawer({
                 )}
 
                 {/* Roll D20 & Advance Scene Buttons */}
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    id="btn-quest-roll-d20"
-                    type="button"
-                    onClick={() => onRollAdventureD20?.()}
-                    className="rounded-xl bg-amber-500 py-2.5 text-xs font-extrabold text-slate-950 shadow-lg transition hover:bg-amber-400"
-                  >
-                    {myHero?.isGhost ? '👻 Roll Spectral D20' : '🎲 Roll Adventure D20'}
-                  </button>
-                  <button
-                    id="btn-quest-advance-scene"
-                    type="button"
-                    onClick={() => onAdvanceAdventureScene?.()}
-                    className="rounded-xl border border-emerald-400/50 bg-emerald-500/20 py-2.5 text-xs font-extrabold text-emerald-200 transition hover:bg-emerald-500/30"
-                  >
-                    ▶ Advance Scene
-                  </button>
-                </div>
+                {(() => {
+                  const hasRolledThisScene = myHero?.isGhost
+                    ? myHero.spectralRoll !== null
+                    : Boolean(myHero && myHero.d20Roll !== null)
+                  return (
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        id="btn-quest-roll-d20"
+                        type="button"
+                        disabled={hasRolledThisScene}
+                        onClick={() => onRollAdventureD20?.()}
+                        className={`rounded-xl py-2.5 text-xs font-extrabold shadow-lg transition ${
+                          hasRolledThisScene
+                            ? 'cursor-not-allowed border border-emerald-400/30 bg-emerald-500/15 text-emerald-200 opacity-75'
+                            : 'bg-amber-500 text-slate-950 hover:bg-amber-400'
+                        }`}
+                      >
+                        {hasRolledThisScene
+                          ? myHero?.isGhost
+                            ? `👻 Rolled (${myHero.spectralRoll})`
+                            : `✓ Rolled (${myHero?.d20Roll})`
+                          : myHero?.isGhost
+                            ? '👻 Roll Spectral D20'
+                            : '🎲 Roll Adventure D20'}
+                      </button>
+                      <button
+                        id="btn-quest-advance-scene"
+                        type="button"
+                        onClick={() => onAdvanceAdventureScene?.()}
+                        className="rounded-xl border border-emerald-400/50 bg-emerald-500/20 py-2.5 text-xs font-extrabold text-emerald-200 transition hover:bg-emerald-500/30"
+                      >
+                        ▶ Advance Scene
+                      </button>
+                    </div>
+                  )
+                })()}
 
                 {/* Consequence Log */}
                 <div className="rounded-xl border border-white/10 bg-black/40 p-2.5 text-[11px] text-amber-200">

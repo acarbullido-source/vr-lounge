@@ -81,6 +81,7 @@ export interface LivePuttShotPacket {
   localOrigin: [number, number] // [x, z] in putting strip local space
   localVelocity: [number, number] // [vx, vz] in putting strip local space
   rampEnabled: boolean
+  courseHole?: 'straight' | 'breaking-ridge' | 'bunker-island'
   timestamp: number
 }
 
@@ -93,6 +94,7 @@ export interface PuttShotSettlePacket {
   restLocalPos: [number, number, number]
   distanceMeters: number
   rampEnabled: boolean
+  courseHole?: 'straight' | 'breaking-ridge' | 'bunker-island'
   timestamp: number
 }
 
@@ -109,6 +111,7 @@ export interface PuttingPlayerSlot {
 export interface PuttingMatchState {
   mode: PuttingGameMode
   rampEnabled: boolean
+  courseHole?: 'straight' | 'breaking-ridge' | 'bunker-island'
   players: PuttingPlayerSlot[]
   activePlayerIndex: number
   round: number
@@ -413,14 +416,14 @@ export interface HolotableState {
   checkersBoard?: number[]
   checkersTurn?: 'red' | 'black'
   checkersSelectedIdx?: number | null
-  checkersWinner?: 'red' | 'black' | null
+  checkersWinner?: 'red' | 'black' | 'draw' | null
   chessBoard?: string[]
   chessTurn?: 'w' | 'b'
   chessSelectedIdx?: number | null
   chessWinner?: 'w' | 'b' | null
   connect4Grid?: number[]
   connect4Turn?: 1 | 2
-  connect4Winner?: 1 | 2 | null
+  connect4Winner?: 1 | 2 | 'draw' | null
 }
 
 // ============================================================================

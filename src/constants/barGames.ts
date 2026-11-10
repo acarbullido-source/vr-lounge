@@ -267,7 +267,20 @@ export function applyDartHitToMatch(
       players.push(createDartPlayerSlot(dart.shooterId, dart.shooterName, dart.color))
       playerIdx = players.length - 1
     } else {
-      playerIdx = Math.min(prev.activePlayerIndex, Math.max(0, players.length - 1))
+      // Roster full (4/4): record cosmetic stuck dart without mutating an active player's score!
+      const now = Date.now()
+      return {
+        nextMatch: {
+          ...prev,
+          stuckDarts: [...prev.stuckDarts.slice(-5), dart],
+          lastTurnSummary: `${dart.shooterName} threw practice ${dart.hit.label} (Match roster full 4/4)`,
+          revision: Math.max(prev.revision + 1, now),
+          updatedAt: now,
+        },
+        completedRecord: null,
+        checkoutAchieved: 0,
+        hitBullseye: false,
+      }
     }
   }
 
@@ -415,6 +428,7 @@ export function applyDartHitToMatch(
     }
   }
 
+  const nowDart = Date.now()
   return {
     nextMatch: {
       ...prev,
@@ -426,8 +440,8 @@ export function applyDartHitToMatch(
       winnerId,
       winnerName,
       stuckDarts: nextStuck,
-      revision: prev.revision + 1,
-      updatedAt: Date.now(),
+      revision: Math.max(prev.revision + 1, nowDart),
+      updatedAt: nowDart,
     },
     completedRecord,
     checkoutAchieved,
@@ -471,6 +485,7 @@ export function createInitialPuttingMatchState(): PuttingMatchState {
   return {
     mode: 'streak',
     rampEnabled: false,
+    courseHole: 'straight',
     players: [],
     activePlayerIndex: 0,
     round: 1,
@@ -577,9 +592,11 @@ export function applyPuttSettleToMatch(
     nextActiveIdx = pIdx
   }
 
+  const nowPutt = Date.now()
   return {
     nextMatch: {
       ...prev,
+      courseHole: settle.courseHole ?? prev.courseHole ?? 'straight',
       players,
       activePlayerIndex: nextActiveIdx,
       round,
@@ -589,8 +606,8 @@ export function applyPuttSettleToMatch(
       lastOutcomeText: outcomeText,
       winnerId,
       winnerName,
-      revision: prev.revision + 1,
-      updatedAt: Date.now(),
+      revision: Math.max(prev.revision + 1, nowPutt),
+      updatedAt: nowPutt,
     },
     completedRecord,
     newStreakRecord,
@@ -961,7 +978,7 @@ export function createInitialConnect4Grid(): number[] {
   return new Array<number>(42).fill(0)
 }
 
-export function checkConnect4Winner(grid: number[]): 1 | 2 | null {
+export function checkConnect4Winner(grid: number[]): 1 | 2 | 'draw' | null {
   const dirs = [
     [0, 1],
     [1, 0],
@@ -985,6 +1002,9 @@ export function checkConnect4Winner(grid: number[]): 1 | 2 | null {
         if (match) return p
       }
     }
+  }
+  if (grid.length >= 42 && grid.every((cell) => cell === 1 || cell === 2)) {
+    return 'draw'
   }
   return null
 }

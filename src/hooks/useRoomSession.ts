@@ -626,6 +626,8 @@ export function useRoomSession(
 
       let seatSettled = false
       let announcedSavedLayout = false
+      let lastPeerStateReplyAt = 0
+      let backupStateReplyTimer: ReturnType<typeof setTimeout> | null = null
 
       const service = new RoomRealtimeService(normalizedCode, initialProfile, {
         onConnectionStatus: (isOnline) => {
@@ -749,6 +751,7 @@ export function useRoomSession(
           const currentPresenter = presenterStateRef.current.activePresenterId
           if (pastJoinGrace && currentPresenter && !activeIds.has(currentPresenter)) {
             setPresenterState((prev) => {
+              const perfNow = typeof performance !== 'undefined' ? performance.now() : 0
               const isNesUrl =
                 prev.screenMode === 'url-sync' && isNesMediaUrl(prev.mediaUrl)
               if (isNesUrl) {
@@ -764,21 +767,27 @@ export function useRoomSession(
                 const fallbackPeer = fallbackId
                   ? hydrated.find((p) => p.userId === fallbackId)
                   : undefined
-                return {
+                const handedOff: PresenterState = {
                   ...prev,
                   activePresenterId: fallbackId,
                   presenterName: fallbackPeer?.displayName ?? null,
                   updatedAt: Date.now(),
+                  receivedAtPerfMs: perfNow,
                 }
+                presenterStateRef.current = handedOff
+                return handedOff
               }
-              return {
+              const released: PresenterState = {
                 ...prev,
                 activePresenterId: null,
                 presenterName: null,
                 screenMode: prev.screenMode === 'tab-stream' ? 'idle' : prev.screenMode,
                 isPlaying: prev.screenMode === 'tab-stream' ? false : prev.isPlaying,
                 updatedAt: Date.now(),
+                receivedAtPerfMs: perfNow,
               }
+              presenterStateRef.current = released
+              return released
             })
           }
 
@@ -793,19 +802,24 @@ export function useRoomSession(
           if (p1Gone || p2Gone) {
             if (p1Gone) getNesEmulator().setRemotePlayerMask(1, 0)
             if (p2Gone) getNesEmulator().setRemotePlayerMask(2, 0)
-            setNesMultiplayerState((prev) => {
-              const next: NesMultiplayerState = {
-                ...prev,
-                player1Id: p1Gone ? null : prev.player1Id,
-                player1Name: p1Gone ? null : prev.player1Name,
-                player2Id: p2Gone ? null : prev.player2Id,
-                player2Name: p2Gone ? null : prev.player2Name,
-                revision: prev.revision + 1,
-                updatedAt: Date.now(),
-              }
-              nesMultiplayerStateRef.current = next
-              return next
-            })
+            const now = Date.now()
+            const nextNes: NesMultiplayerState = {
+              ...curNes,
+              player1Id: p1Gone ? null : curNes.player1Id,
+              player1Name: p1Gone ? null : curNes.player1Name,
+              player2Id: p2Gone ? null : curNes.player2Id,
+              player2Name: p2Gone ? null : curNes.player2Name,
+              revision: Math.max(curNes.revision + 1, now),
+              updatedAt: now,
+            }
+            nesMultiplayerStateRef.current = nextNes
+            setNesMultiplayerState(nextNes)
+            if (hostId === activeLocalId) {
+              service.broadcastNesEvent({
+                kind: 'nes-multiplayer-state',
+                state: nextNes,
+              })
+            }
           }
         },
         onPoseUpdate: (pose) => {
@@ -814,21 +828,57 @@ export function useRoomSession(
           }
         },
         onPresenterState: (incoming) => {
+          lastPeerStateReplyAt = Date.now()
+          const perfNow = typeof performance !== 'undefined' ? performance.now() : 0
+          const stampedIncoming: PresenterState = {
+            ...incoming,
+            receivedAtPerfMs: perfNow,
+          }
           setPresenterState((prev) => {
-            if (!prev.activePresenterId && incoming.activePresenterId) {
-              return incoming
+            if (!prev.activePresenterId && stampedIncoming.activePresenterId) {
+              presenterStateRef.current = stampedIncoming
+            } else {
+              if (stampedIncoming.revision < prev.revision) return prev
+              if (
+                stampedIncoming.revision === prev.revision &&
+                stampedIncoming.updatedAt < prev.updatedAt
+              ) {
+                return prev
+              }
+              presenterStateRef.current = stampedIncoming
             }
-            if (incoming.revision < prev.revision) return prev
-            if (
-              incoming.revision === prev.revision &&
-              incoming.updatedAt < prev.updatedAt
-            ) {
-              return prev
+
+            // Automatically disengage NES controller hijack when the screen leaves nes://
+            const isIncomingNes =
+              stampedIncoming.screenMode === 'url-sync' &&
+              isNesMediaUrl(stampedIncoming.mediaUrl)
+            if (!isIncomingNes) {
+              const emu = getNesEmulator()
+              if (emu.getEngagedPlayerSlot() !== null) {
+                emu.setEngagedPlayerSlot(null)
+              }
+              emu.setRemotePlayerMask(1, 0)
+              emu.setRemotePlayerMask(2, 0)
+              const curMp = nesMultiplayerStateRef.current
+              if (curMp.player1Id || curMp.player2Id) {
+                const clearedMp: NesMultiplayerState = {
+                  ...curMp,
+                  player1Id: null,
+                  player1Name: null,
+                  player2Id: null,
+                  player2Name: null,
+                  updatedAt: Date.now(),
+                }
+                nesMultiplayerStateRef.current = clearedMp
+                setNesMultiplayerState(clearedMp)
+              }
             }
-            return incoming
+
+            return stampedIncoming
           })
         },
         onRoomCustomization: (incomingRaw) => {
+          lastPeerStateReplyAt = Date.now()
           const incoming = sanitizeRoomCustomization(incomingRaw)
           if (!incoming) return
           setRoomCustomization((prev) => {
@@ -844,6 +894,7 @@ export function useRoomSession(
         onNesEvent: (event: NesWireEvent) => {
           const emu = getNesEmulator()
           if (event.kind === 'nes-multiplayer-state') {
+            lastPeerStateReplyAt = Date.now()
             setNesMultiplayerState((prev) => {
               if (event.state.revision < prev.revision) return prev
               const next = event.state
@@ -917,20 +968,30 @@ export function useRoomSession(
         onRoomStateRequest: (requesterId) => {
           const current = presenterStateRef.current
           const me = localProfileRef.current
+          const requestArrivedAt = Date.now()
+
+          const broadcastLivePresenterSnapshot = () => {
+            const snap = presenterStateRef.current
+            if (snap.revision <= 0) return
+            const perfNow = typeof performance !== 'undefined' ? performance.now() : 0
+            const elapsed =
+              snap.isPlaying && snap.screenMode === 'url-sync'
+                ? snap.receivedAtPerfMs !== undefined && perfNow >= snap.receivedAtPerfMs
+                  ? Math.max(0, (perfNow - snap.receivedAtPerfMs) / 1000)
+                  : Math.max(0, (Date.now() - snap.updatedAt) / 1000)
+                : 0
+            service.broadcastPresenterState({
+              ...snap,
+              currentTime: snap.currentTime + elapsed,
+              updatedAt: Date.now(),
+            })
+          }
+
           if (
             current.revision > 0 &&
             (current.activePresenterId === activeLocalId || me.isHost)
           ) {
-            // Include live playback progress when answering a late joiner
-            const elapsed =
-              current.isPlaying && current.screenMode === 'url-sync'
-                ? (Date.now() - current.updatedAt) / 1000
-                : 0
-            service.broadcastPresenterState({
-              ...current,
-              currentTime: current.currentTime + elapsed,
-              updatedAt: Date.now(),
-            })
+            broadcastLivePresenterSnapshot()
           }
 
           const currentCustom = roomCustomizationRef.current
@@ -957,6 +1018,41 @@ export function useRoomSession(
             resolveAuthoritativeNesDriverId() === activeLocalId
           ) {
             void broadcastLiveNesCheckpoint()
+          }
+
+          // Non-host backup responder: if the room host's browser tab is backgrounded or mid-disconnect,
+          // answer after a jittered 450-700ms window unless another peer already answered.
+          if (!me.isHost) {
+            if (backupStateReplyTimer !== null) {
+              clearTimeout(backupStateReplyTimer)
+            }
+            const delayMs = 450 + Math.floor(Math.random() * 250)
+            backupStateReplyTimer = setTimeout(() => {
+              backupStateReplyTimer = null
+              if (serviceRef.current !== service) return
+              if (lastPeerStateReplyAt >= requestArrivedAt) return
+
+              if (
+                presenterStateRef.current.revision > 0 &&
+                presenterStateRef.current.activePresenterId !== activeLocalId
+              ) {
+                broadcastLivePresenterSnapshot()
+              }
+              if (roomCustomizationRef.current.revision > 0) {
+                service.broadcastRoomCustomization(roomCustomizationRef.current)
+              }
+              const nesMpNow = nesMultiplayerStateRef.current
+              if (
+                nesMpNow.revision > 0 &&
+                nesMpNow.player1Id !== activeLocalId &&
+                nesMpNow.player2Id !== activeLocalId
+              ) {
+                service.broadcastNesEvent({
+                  kind: 'nes-multiplayer-state',
+                  state: nesMpNow,
+                })
+              }
+            }, delayMs)
           }
 
           barGamesBridgeRef.current?.onStateRequest(requesterId, me.isHost, (ev) =>
@@ -1028,14 +1124,15 @@ export function useRoomSession(
   const leaveRoom = useCallback(async () => {
     const curNes = nesMultiplayerStateRef.current
     if (curNes.player1Id === localUserId || curNes.player2Id === localUserId) {
+      const now = Date.now()
       const nextState: NesMultiplayerState = {
         ...curNes,
         player1Id: curNes.player1Id === localUserId ? null : curNes.player1Id,
         player1Name: curNes.player1Id === localUserId ? null : curNes.player1Name,
         player2Id: curNes.player2Id === localUserId ? null : curNes.player2Id,
         player2Name: curNes.player2Id === localUserId ? null : curNes.player2Name,
-        revision: curNes.revision + 1,
-        updatedAt: Date.now(),
+        revision: Math.max(curNes.revision + 1, now),
+        updatedAt: now,
       }
       nesMultiplayerStateRef.current = nextState
       setNesMultiplayerState(nextState)
@@ -1196,10 +1293,45 @@ export function useRoomSession(
     [appendSystemMessage],
   )
 
+  const clearAllNesControllerSlots = useCallback(() => {
+    const emu = getNesEmulator()
+    if (emu.getEngagedPlayerSlot() !== null) {
+      emu.setEngagedPlayerSlot(null)
+    }
+    emu.setRemotePlayerMask(1, 0)
+    emu.setRemotePlayerMask(2, 0)
+    const curMp = nesMultiplayerStateRef.current
+    if (curMp.player1Id || curMp.player2Id) {
+      const now = Date.now()
+      const clearedMp: NesMultiplayerState = {
+        ...curMp,
+        player1Id: null,
+        player1Name: null,
+        player2Id: null,
+        player2Name: null,
+        revision: Math.max(curMp.revision + 1, now),
+        updatedAt: now,
+      }
+      nesMultiplayerStateRef.current = clearedMp
+      setNesMultiplayerState(clearedMp)
+      serviceRef.current?.broadcastNesEvent({
+        kind: 'nes-multiplayer-state',
+        state: clearedMp,
+      })
+    }
+  }, [])
+
   const publishPresenterState = useCallback((next: PresenterState) => {
-    presenterStateRef.current = next
-    setPresenterState(next)
-    serviceRef.current?.broadcastPresenterState(next)
+    const perfNow = typeof performance !== 'undefined' ? performance.now() : 0
+    const stamped: PresenterState = {
+      ...next,
+      receivedAtPerfMs: perfNow,
+    }
+    presenterStateRef.current = stamped
+    setPresenterState(stamped)
+    const wireCopy: PresenterState = { ...next }
+    delete wireCopy.receivedAtPerfMs
+    serviceRef.current?.broadcastPresenterState(wireCopy)
   }, [])
 
   const canTakeControl = useMemo(() => {
@@ -1224,6 +1356,7 @@ export function useRoomSession(
 
       const nextMode: ScreenMode =
         preferredMode ?? (current.screenMode === 'idle' ? 'url-sync' : current.screenMode)
+      const now = Date.now()
 
       const nextState: PresenterState = {
         ...current,
@@ -1231,15 +1364,18 @@ export function useRoomSession(
         presenterName: me.displayName,
         screenMode: nextMode,
         isPlaying: nextMode === 'url-sync' ? current.isPlaying : false,
-        updatedAt: Date.now(),
-        revision: current.revision + 1,
+        updatedAt: now,
+        revision: Math.max(current.revision + 1, now),
       }
 
       publishPresenterState(nextState)
+      if (nextMode !== 'url-sync' || !isNesMediaUrl(nextState.mediaUrl)) {
+        clearAllNesControllerSlots()
+      }
       appendSystemMessage(`${me.displayName} took control of the cinema screen.`)
       return true
     },
-    [appendSystemMessage, localUserId, publishPresenterState],
+    [appendSystemMessage, clearAllNesControllerSlots, localUserId, publishPresenterState],
   )
 
   const releaseControl = useCallback(() => {
@@ -1247,30 +1383,33 @@ export function useRoomSession(
     if (current.activePresenterId !== localUserId && !localProfileRef.current.isHost) {
       return
     }
+    const now = Date.now()
     const nextState: PresenterState = {
       ...current,
       activePresenterId: null,
       presenterName: null,
       screenMode: 'idle',
       isPlaying: false,
-      updatedAt: Date.now(),
-      revision: current.revision + 1,
+      updatedAt: now,
+      revision: Math.max(current.revision + 1, now),
     }
     publishPresenterState(nextState)
-  }, [localUserId, publishPresenterState])
+    clearAllNesControllerSlots()
+  }, [clearAllNesControllerSlots, localUserId, publishPresenterState])
 
   const toggleHostLock = useCallback(() => {
     const me = localProfileRef.current
     if (!me.isHost) return
     const current = presenterStateRef.current
     const locking = !current.lockedByHostId
+    const now = Date.now()
     const nextState: PresenterState = {
       ...current,
       lockedByHostId: locking ? localUserId : null,
       activePresenterId: locking ? localUserId : current.activePresenterId,
       presenterName: locking ? me.displayName : current.presenterName,
-      updatedAt: Date.now(),
-      revision: current.revision + 1,
+      updatedAt: now,
+      revision: Math.max(current.revision + 1, now),
     }
     publishPresenterState(nextState)
     appendSystemMessage(
@@ -1284,13 +1423,17 @@ export function useRoomSession(
     (patch: Partial<Omit<PresenterState, 'revision' | 'updatedAt'>>, bumpRevision = true) => {
       const current = presenterStateRef.current
       if (current.activePresenterId !== localUserId) return
+      const now = Date.now()
       const nextState: PresenterState = {
         ...current,
         ...patch,
-        updatedAt: Date.now(),
-        revision: bumpRevision ? current.revision + 1 : current.revision,
+        updatedAt: now,
+        revision: bumpRevision ? Math.max(current.revision + 1, now) : current.revision,
       }
       publishPresenterState(nextState)
+
+      const nextIsNes =
+        nextState.screenMode === 'url-sync' && isNesMediaUrl(nextState.mediaUrl)
 
       if (patch.mediaUrl && isNesMediaUrl(patch.mediaUrl)) {
         const cartId = parseNesCartridgeIdFromUrl(patch.mediaUrl)
@@ -1316,8 +1459,8 @@ export function useRoomSession(
             curMp.player2Id === localUserId && !otherActiveP1
               ? null
               : curMp.player2Name,
-          revision: curMp.revision + 1,
-          updatedAt: Date.now(),
+          revision: Math.max(curMp.revision + 1, now),
+          updatedAt: now,
         }
         nesMultiplayerStateRef.current = nextMp
         setNesMultiplayerState(nextMp)
@@ -1325,9 +1468,11 @@ export function useRoomSession(
           kind: 'nes-multiplayer-state',
           state: nextMp,
         })
+      } else if (!nextIsNes) {
+        clearAllNesControllerSlots()
       }
     },
-    [localUserId, publishPresenterState],
+    [clearAllNesControllerSlots, localUserId, publishPresenterState],
   )
 
   const sendChatMessage = useCallback(
@@ -1492,6 +1637,7 @@ export function useRoomSession(
         }
       }
 
+      const now = Date.now()
       const nextState: NesMultiplayerState = {
         cartridgeId: activeCart.id,
         cartridgeTitle: activeCart.title,
@@ -1499,8 +1645,8 @@ export function useRoomSession(
         player1Name: nextP1Name,
         player2Id: nextP2Id,
         player2Name: nextP2Name,
-        revision: cur.revision + 1,
-        updatedAt: Date.now(),
+        revision: Math.max(cur.revision + 1, now),
+        updatedAt: now,
       }
       nesMultiplayerStateRef.current = nextState
       setNesMultiplayerState(nextState)

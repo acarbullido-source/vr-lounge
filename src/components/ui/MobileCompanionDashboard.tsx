@@ -75,6 +75,7 @@ export interface MobileCompanionDashboardProps {
   onLoadStreamUrl: (url: string, title?: string) => void
   onTriggerSoundboard: (effectId: SoundboardEffectId) => void
   onSpawnFurniture: (type: FurnitureCatalogId) => void
+  onSpawnWallPhoto?: (imageUrl: string, label: string) => void
   onUpdateFurnitureItem: (id: string, patch: Partial<PlacedFurnitureItem>) => void
   onStartStoryQuest?: (campaignId: AdventureCampaignId) => void
   onSelectAdventureArchetype?: (archetype: AdventureArchetypeId) => void
@@ -118,6 +119,7 @@ export function MobileCompanionDashboard({
   onLoadStreamUrl,
   onTriggerSoundboard,
   onSpawnFurniture,
+  onSpawnWallPhoto,
   onUpdateFurnitureItem,
   onStartStoryQuest,
   onSelectAdventureArchetype,
@@ -225,8 +227,10 @@ export function MobileCompanionDashboard({
           label,
         })
         setPhotoStatus(`✓ Updated wall frame "${label}" in the 3D Lounge!`)
-      } else if (wallFrames.length > 0 && targetFrameId === 'new') {
-        // Update the most recent wall frame if one was just spawned, or spawn a new wall-poster and update
+      } else if (onSpawnWallPhoto) {
+        onSpawnWallPhoto(dataUrl, label)
+        setPhotoStatus(`✓ Mounted new Wall Frame "${label}" in the 3D Lounge!`)
+      } else if (wallFrames.length > 0) {
         const target = wallFrames[wallFrames.length - 1]
         onUpdateFurnitureItem(target.id, {
           imageUrl: dataUrl,
@@ -235,19 +239,7 @@ export function MobileCompanionDashboard({
         setPhotoStatus(`✓ Mounted "${label}" onto Clubhouse Wall Frame!`)
       } else {
         onSpawnFurniture('wall-poster')
-        window.setTimeout(() => {
-          const latestFrames = roomCustomization.furniture.filter(
-            (f) => f.type === 'wall-poster',
-          )
-          const newest = latestFrames[latestFrames.length - 1]
-          if (newest) {
-            onUpdateFurnitureItem(newest.id, {
-              imageUrl: dataUrl,
-              label,
-            })
-          }
-        }, 120)
-        setPhotoStatus(`✓ Spawned new Wall Frame with "${label}"!`)
+        setPhotoStatus(`✓ Spawned new Wall Frame!`)
       }
       onSendChat(`📸 Uploaded a new photo "${label}" to the Clubhouse Wall Frame!`)
     } catch (err) {

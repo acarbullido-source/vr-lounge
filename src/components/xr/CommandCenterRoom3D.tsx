@@ -22,7 +22,10 @@ import {
   type SportsScoreboardSnapshot,
 } from '../../services/sportsScoreboard'
 import { playSpatialUiFeedback } from '../../services/soundboardAudio'
-import { setSpatialUiHovered } from '../../services/xrTracking'
+import {
+  clearSpatialUiHoverPrefix,
+  setSpatialUiHovered,
+} from '../../services/xrTracking'
 import type {
   CommandNewsCategoryId,
   ComputedSeat,
@@ -67,6 +70,11 @@ function OpsButton3D({
   onClick,
 }: OpsButton3DProps) {
   const [hovered, setHovered] = useState(false)
+  useEffect(() => {
+    return () => {
+      setSpatialUiHovered(false, `ops-btn-${label}`)
+    }
+  }, [label])
   const bg = active
     ? accent
     : hovered
@@ -323,9 +331,16 @@ export function CommandCenterRoom3D({
   const [sportsLoading, setSportsLoading] = useState(false)
   const [sportsNonce, setSportsNonce] = useState(0)
   const [sportsAutoCycle, setSportsAutoCycle] = useState(false)
+  const [localAutoLeagueIdx, setLocalAutoLeagueIdx] = useState(0)
+
+  const effectiveSportsLeague: SportsLeagueId = sportsAutoCycle
+    ? (SPORTS_LEAGUE_SPECS[localAutoLeagueIdx % SPORTS_LEAGUE_SPECS.length]?.id ??
+      activeSportsLeague)
+    : activeSportsLeague
 
   const [opsAudioUnmuted, setOpsAudioUnmuted] = useState(false)
   const [hasOpsFrames, setHasOpsFrames] = useState(false)
+  const [opsStreamError, setOpsStreamError] = useState<string | null>(null)
   const [preferRoomCam, setPreferRoomCam] = useState(false)
   const [hoveredCamId, setHoveredCamId] = useState<LoungeMirrorCamPreset | null>(
     null,
@@ -365,31 +380,51 @@ export function CommandCenterRoom3D({
 
   useEffect(() => {
     const { videoEl } = opsMedia
-    videoEl.muted = !opsAudioUnmuted
+    videoEl.muted = !visible || !isActiveRoom || !opsAudioUnmuted
     videoEl.volume = Math.max(0, Math.min(1, cinemaVolume))
-  }, [cinemaVolume, opsAudioUnmuted, opsMedia])
+  }, [cinemaVolume, isActiveRoom, opsAudioUnmuted, opsMedia, visible])
+
+  useEffect(() => {
+    if (!visible) {
+      clearSpatialUiHoverPrefix('ops-btn-')
+      for (const preset of ['wide', 'screen', 'games', 'gameroom'] as const) {
+        setSpatialUiHovered(false, `cmd-cam-${preset}`)
+      }
+      setHoveredCamId(null)
+    }
+  }, [visible])
 
   useEffect(() => {
     const { videoEl, texture } = opsMedia
-    if (wingState.commandScreenMode !== 'ops-stream') {
+    if (!visible || wingState.commandScreenMode !== 'ops-stream') {
       videoEl.pause()
       setHasOpsFrames(false)
+      setOpsStreamError(null)
       return
     }
 
     let hlsInstance: Hls | null = null
     let cancelled = false
     setHasOpsFrames(false)
+    setOpsStreamError(null)
 
     const markReady = () => {
       if (!cancelled) {
         setHasOpsFrames(true)
+        setOpsStreamError(null)
         texture.needsUpdate = true
+      }
+    }
+
+    const markError = () => {
+      if (!cancelled) {
+        setOpsStreamError('Stream unavailable or blocked by CORS — click Next Channel.')
       }
     }
 
     videoEl.addEventListener('loadeddata', markReady)
     videoEl.addEventListener('playing', markReady)
+    videoEl.addEventListener('error', markError)
 
     const startPlayback = async () => {
       if (isHlsStream(effectiveOpsUrl) && !videoEl.canPlayType('application/vnd.apple.mpegurl')) {
@@ -403,6 +438,16 @@ export function CommandCenterRoom3D({
             hlsInstance.on(HlsCtor.Events.MANIFEST_PARSED, () => {
               if (!cancelled) {
                 void videoEl.play().catch(() => undefined)
+              }
+            })
+            hlsInstance.on(HlsCtor.Events.ERROR, (_ev, data) => {
+              if (cancelled || !data?.fatal) return
+              if (data.type === HlsCtor.ErrorTypes.NETWORK_ERROR) {
+                hlsInstance?.startLoad()
+              } else if (data.type === HlsCtor.ErrorTypes.MEDIA_ERROR) {
+                hlsInstance?.recoverMediaError()
+              } else {
+                markError()
               }
             })
             return
@@ -422,12 +467,13 @@ export function CommandCenterRoom3D({
       cancelled = true
       videoEl.removeEventListener('loadeddata', markReady)
       videoEl.removeEventListener('playing', markReady)
+      videoEl.removeEventListener('error', markError)
       if (hlsInstance) {
         hlsInstance.destroy()
       }
       videoEl.pause()
     }
-  }, [effectiveOpsUrl, opsMedia, wingState.commandScreenMode])
+  }, [effectiveOpsUrl, opsMedia, visible, wingState.commandScreenMode])
 
   useEffect(() => {
     return () => {
@@ -437,8 +483,9 @@ export function CommandCenterRoom3D({
     }
   }, [opsMedia])
 
-  // Live Weather Fetcher + 3-minute auto-refresh
+  // Live Weather Fetcher + 3-minute auto-refresh (gated on room visibility)
   useEffect(() => {
+    if (!visible) return
     let cancelled = false
     setWeatherLoading(true)
     const run = async (force: boolean) => {
@@ -459,13 +506,15 @@ export function CommandCenterRoom3D({
       window.clearInterval(timer)
     }
   }, [
+    visible,
     weatherNonce,
     wingState.commandCustomCityQuery,
     wingState.commandWeatherCityId,
   ])
 
-  // Live News / Space / Markets Fetcher + 2.5-minute auto-refresh
+  // Live News / Space / Markets Fetcher + 2.5-minute auto-refresh (gated on room visibility)
   useEffect(() => {
+    if (!visible) return
     let cancelled = false
     setNewsLoading(true)
     const run = async (force: boolean) => {
@@ -481,14 +530,15 @@ export function CommandCenterRoom3D({
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [newsNonce, wingState.commandNewsCategory])
+  }, [newsNonce, visible, wingState.commandNewsCategory])
 
-  // Live ESPN US Sports Scoreboard Fetcher + 60-second automatic refresh
+  // Live ESPN US Sports Scoreboard Fetcher + 60-second automatic refresh (gated on room visibility)
   useEffect(() => {
+    if (!visible) return
     let cancelled = false
     setSportsLoading(true)
     const run = async (force: boolean) => {
-      const snap = await fetchSportsScoreboard(activeSportsLeague, force)
+      const snap = await fetchSportsScoreboard(effectiveSportsLeague, force)
       if (!cancelled) {
         setSportsSnapshot(snap)
         setSportsLoading(false)
@@ -500,18 +550,21 @@ export function CommandCenterRoom3D({
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [activeSportsLeague, sportsNonce])
+  }, [effectiveSportsLeague, sportsNonce, visible])
 
-  // Optional League Auto-Cycle every 12 seconds when enabled on the Control Room Scoreboard
+  // Optional League Auto-Cycle every 12 seconds locally (without spamming RoomCustomization broadcasts)
   useEffect(() => {
-    if (!sportsAutoCycle) return
+    if (!sportsAutoCycle || !visible) return
+    const startIdx = Math.max(
+      0,
+      SPORTS_LEAGUE_SPECS.findIndex((s) => s.id === activeSportsLeague),
+    )
+    setLocalAutoLeagueIdx(startIdx)
     const timer = window.setInterval(() => {
-      const idx = SPORTS_LEAGUE_SPECS.findIndex((s) => s.id === activeSportsLeague)
-      const next = SPORTS_LEAGUE_SPECS[(idx + 1) % SPORTS_LEAGUE_SPECS.length]
-      onUpdateWingState({ commandSportsLeague: next.id })
+      setLocalAutoLeagueIdx((prev) => (prev + 1) % SPORTS_LEAGUE_SPECS.length)
     }, 12_000)
     return () => window.clearInterval(timer)
-  }, [activeSportsLeague, onUpdateWingState, sportsAutoCycle])
+  }, [activeSportsLeague, sportsAutoCycle, visible])
 
   // Rotating 3D Holographic Tactical Globe (zero per-frame allocations)
   const globeRef = useRef<THREE.Group>(null)
@@ -772,17 +825,17 @@ export function CommandCenterRoom3D({
           </group>
         )}
 
-        {/* Loading Overlay only when Ops Stream is still buffering frames */}
+        {/* Loading / Error Overlay only when Ops Stream is buffering or errored */}
         {!isMirrorMode && !showingOpsVideo && (
           <group position={[0, 0.08, 0.035]}>
             <Text
               position={[0, 0.24, 0]}
               fontSize={0.12}
-              color="#38BDF8"
+              color={opsStreamError ? '#F87171' : '#38BDF8'}
               anchorX="center"
               anchorY="middle"
             >
-              CONNECTING TACTICAL STREAM…
+              {opsStreamError ? 'OPS FEED INTERRUPTED' : 'CONNECTING TACTICAL STREAM…'}
             </Text>
             <Text
               position={[0, -0.02, 0]}
@@ -793,7 +846,7 @@ export function CommandCenterRoom3D({
               anchorX="center"
               anchorY="middle"
             >
-              {`Loading ${effectiveOpsTitle}…`}
+              {opsStreamError ?? `Loading ${effectiveOpsTitle}…`}
             </Text>
           </group>
         )}
@@ -830,7 +883,15 @@ export function CommandCenterRoom3D({
           <OpsButton3D
             label={
               isMirrorMode
-                ? `🎥 Cam: ${loungeCamPreset === 'wide' ? 'Wide' : loungeCamPreset === 'screen' ? 'Screen' : 'Games'}`
+                ? `🎥 Cam: ${
+                    loungeCamPreset === 'wide'
+                      ? 'Wide'
+                      : loungeCamPreset === 'screen'
+                        ? 'Screen'
+                        : loungeCamPreset === 'games'
+                          ? 'Games'
+                          : 'Game Room'
+                  }`
                 : '⏭ Next Channel'
             }
             position={[0.84, 0, 0]}
@@ -1181,7 +1242,7 @@ export function CommandCenterRoom3D({
             width={0.68}
             height={0.13}
             fontSize={0.05}
-            active={activeSportsLeague === lg.id}
+            active={effectiveSportsLeague === lg.id}
             accent={lg.accentColor}
             onClick={() => {
               setSportsAutoCycle(false)

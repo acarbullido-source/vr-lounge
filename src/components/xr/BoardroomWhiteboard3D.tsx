@@ -15,6 +15,7 @@ import {
 } from '../../constants/expansionRooms'
 import { playSpatialUiFeedback } from '../../services/soundboardAudio'
 import {
+  clearSpatialUiHoverPrefix,
   setSpatialDrawingSurfaceActive,
   setSpatialUiHovered,
 } from '../../services/xrTracking'
@@ -267,6 +268,8 @@ export interface BoardroomWhiteboard3DProps {
   surfaceId?: string
   wingState: ExpansionWingSyncedState
   localDisplayName: string
+  roomCode?: string
+  visible?: boolean
   isStandingAtBoard?: boolean
   onStandAtBoard?: () => void
   onUpdateWingState: (patch: Partial<ExpansionWingSyncedState>) => void
@@ -279,6 +282,8 @@ export function BoardroomWhiteboard3D({
   surfaceId = 'boardroom-south-whiteboard',
   wingState,
   localDisplayName,
+  roomCode,
+  visible = true,
   isStandingAtBoard = false,
   onStandAtBoard,
   onUpdateWingState,
@@ -309,12 +314,14 @@ export function BoardroomWhiteboard3D({
   const activeStrokeRef = useRef<BoardroomWhiteboardStroke | null>(null)
   const isPointerOverBoardRef = useRef(false)
   const localStrokesRef = useRef<BoardroomWhiteboardStroke[]>(localStrokes)
+  const syncedStrokesRef = useRef<BoardroomWhiteboardStroke[]>(syncedStrokes)
 
   useEffect(() => {
     localStrokesRef.current = localStrokes
   }, [localStrokes])
 
   useEffect(() => {
+    syncedStrokesRef.current = syncedStrokes
     if (!activeStrokeRef.current) {
       setLocalStrokes(syncedStrokes)
     }
@@ -364,6 +371,8 @@ export function BoardroomWhiteboard3D({
     return () => {
       setSpatialDrawingSurfaceActive(false, surfaceId)
       setSpatialUiHovered(false, surfaceId)
+      clearSpatialUiHoverPrefix('wb-btn-')
+      clearSpatialUiHoverPrefix('wb-color-')
       texture.dispose()
     }
   }, [surfaceId, texture])
@@ -376,17 +385,20 @@ export function BoardroomWhiteboard3D({
     ) => {
       const sanitized = sanitizeBoardroomWhiteboardStrokes(nextStrokes)
       const nextClearedAt =
-        clearedAtOverride ?? ( wingState.boardroomWhiteboardClearedAt ?? 0 )
+        clearedAtOverride ?? (wingState.boardroomWhiteboardClearedAt ?? 0)
       const nextGrid = gridOverride ?? showGrid
       localStrokesRef.current = sanitized
       setLocalStrokes(sanitized)
 
-      savePersistedBoardroomWhiteboard({
-        strokes: sanitized,
-        grid: nextGrid,
-        clearedAt: nextClearedAt,
-        updatedAt: Date.now(),
-      })
+      savePersistedBoardroomWhiteboard(
+        {
+          strokes: sanitized,
+          grid: nextGrid,
+          clearedAt: nextClearedAt,
+          updatedAt: Date.now(),
+        },
+        roomCode,
+      )
 
       onUpdateWingState({
         boardroomWhiteboardStrokes: sanitized,
@@ -396,6 +408,7 @@ export function BoardroomWhiteboard3D({
     },
     [
       onUpdateWingState,
+      roomCode,
       showGrid,
       wingState.boardroomWhiteboardClearedAt,
     ],
@@ -411,14 +424,53 @@ export function BoardroomWhiteboard3D({
       setSpatialUiHovered(false, surfaceId)
     }
 
+    const clearedAt = wingState.boardroomWhiteboardClearedAt ?? 0
+    if (clearedAt > finished.createdAt) {
+      localStrokesRef.current = syncedStrokesRef.current
+      setLocalStrokes(syncedStrokesRef.current)
+      redrawCanvas(syncedStrokesRef.current, null, showGrid)
+      return
+    }
+
     if (finished.points.length >= 2) {
       lastClearedStrokesBackupRef.current = null
-      const next = [...localStrokesRef.current.slice(-319), finished]
+      const mergedById = new Map<string, BoardroomWhiteboardStroke>()
+      for (const s of localStrokesRef.current) {
+        if (s.createdAt >= clearedAt) mergedById.set(s.id, s)
+      }
+      for (const s of syncedStrokesRef.current) {
+        if (s.createdAt >= clearedAt) mergedById.set(s.id, s)
+      }
+      mergedById.set(finished.id, finished)
+      const next = Array.from(mergedById.values())
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .slice(-320)
       commitStrokes(next)
     } else {
       redrawCanvas(localStrokesRef.current, null, showGrid)
     }
-  }, [commitStrokes, redrawCanvas, showGrid, surfaceId])
+  }, [
+    commitStrokes,
+    redrawCanvas,
+    showGrid,
+    surfaceId,
+    wingState.boardroomWhiteboardClearedAt,
+  ])
+
+  useEffect(() => {
+    if (!visible) {
+      isPointerOverBoardRef.current = false
+      if (activeStrokeRef.current) {
+        finishActiveStroke()
+      }
+      setCursorUv(null)
+      setHoveredColorId(null)
+      setSpatialDrawingSurfaceActive(false, surfaceId)
+      setSpatialUiHovered(false, surfaceId)
+      clearSpatialUiHoverPrefix('wb-btn-')
+      clearSpatialUiHoverPrefix('wb-color-')
+    }
+  }, [finishActiveStroke, surfaceId, visible])
 
   useEffect(() => {
     if (!isDrawing) return
@@ -427,9 +479,11 @@ export function BoardroomWhiteboard3D({
     }
     window.addEventListener('pointerup', handleGlobalPointerUp)
     window.addEventListener('pointercancel', handleGlobalPointerUp)
+    window.addEventListener('blur', handleGlobalPointerUp)
     return () => {
       window.removeEventListener('pointerup', handleGlobalPointerUp)
       window.removeEventListener('pointercancel', handleGlobalPointerUp)
+      window.removeEventListener('blur', handleGlobalPointerUp)
     }
   }, [finishActiveStroke, isDrawing])
 

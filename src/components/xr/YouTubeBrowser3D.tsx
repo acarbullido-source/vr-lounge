@@ -607,8 +607,23 @@ export function YouTubeBrowser3D({
   }, [listeningVoice, onOpenSearchKeyboard, onVoiceSearchQuery])
 
   useEffect(() => {
+    if (!visible && recognitionRef.current) {
+      try {
+        recognitionRef.current.stop()
+      } catch {
+        // Ignore stop errors
+      }
+      setListeningVoice(false)
+    }
+  }, [visible])
+
+  useEffect(() => {
     return () => {
-      recognitionRef.current?.stop()
+      try {
+        recognitionRef.current?.stop()
+      } catch {
+        // Ignore stop errors
+      }
     }
   }, [])
 

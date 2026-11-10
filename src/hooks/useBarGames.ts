@@ -95,6 +95,10 @@ import type {
 import type { ParticipantProfile } from '../types/lounge'
 import type { BarGamesTransportBridge } from './useRoomSession'
 
+function nextLamportRevision(prevRevision: number, candidateRevision = 0): number {
+  return Math.max(prevRevision + 1, candidateRevision, Date.now())
+}
+
 function isNewerState<T extends { revision: number; updatedAt: number }>(
   incoming: T,
   current: T,
@@ -111,6 +115,7 @@ export interface UseBarGamesOptions {
   joined: boolean
   localUserId: string
   localProfile: ParticipantProfile
+  participants?: ParticipantProfile[]
   barGamesBridgeRef: React.RefObject<BarGamesTransportBridge | null>
   broadcastBarGamesEvent: (event: BarGamesWireEvent) => void
   appendSystemMessage: (text: string) => void
@@ -118,8 +123,10 @@ export interface UseBarGamesOptions {
 
 export function useBarGames({
   roomCode,
+  joined,
   localUserId,
   localProfile,
+  participants,
   barGamesBridgeRef,
   broadcastBarGamesEvent,
   appendSystemMessage,
@@ -161,8 +168,11 @@ export function useBarGames({
   const holotableRef = useRef<HolotableState>(holotableState)
   const adventureRef = useRef<AdventureQuestState>(adventureState)
   const localProfileRef = useRef<ParticipantProfile>(localProfile)
+  const participantsRef = useRef<ParticipantProfile[]>(participants ?? [])
   const roomCodeRef = useRef<string>(roomCode)
   const announcedClubhouseRef = useRef<boolean>(false)
+  const stateReqBackupTimerRef = useRef<number | null>(null)
+  const missingPeerSinceRef = useRef<Map<string, number>>(new Map())
 
   useEffect(() => {
     dartsRef.current = dartsState
@@ -202,19 +212,28 @@ export function useBarGames({
   }, [localProfile])
 
   useEffect(() => {
+    participantsRef.current = participants ?? []
+  }, [participants])
+
+  useEffect(() => {
     roomCodeRef.current = roomCode
   }, [roomCode])
 
   const persistAndBroadcastClubhouse = useCallback(
     (next: ClubhousePersistentState) => {
-      clubhouseRef.current = next
-      setClubhouseState(next)
+      const stamped: ClubhousePersistentState = {
+        ...next,
+        revision: nextLamportRevision(clubhouseRef.current.revision, next.revision),
+        updatedAt: Date.now(),
+      }
+      clubhouseRef.current = stamped
+      setClubhouseState(stamped)
       const activeRoom = roomCodeRef.current
       if (activeRoom) {
-        saveLocalClubhouseState(activeRoom, next)
-        scheduleCloudClubhouseSave(activeRoom, next)
+        saveLocalClubhouseState(activeRoom, stamped)
+        scheduleCloudClubhouseSave(activeRoom, stamped)
       }
-      broadcastBarGamesEvent({ kind: 'clubhouse-state', payload: next })
+      broadcastBarGamesEvent({ kind: 'clubhouse-state', payload: stamped })
     },
     [broadcastBarGamesEvent],
   )
@@ -236,95 +255,267 @@ export function useBarGames({
     return () => window.clearTimeout(timer)
   }, [activePuttShot])
 
+  // Prune disconnected players after a 10s grace window so Darts turns, Putt-Off rounds, and Story Quest tallies never stall
+  useEffect(() => {
+    if (!joined) {
+      missingPeerSinceRef.current.clear()
+      return
+    }
+    const interval = window.setInterval(() => {
+      const roster = participantsRef.current
+      if (!roster || roster.length === 0) return
+      const activeIds = new Set<string>([localUserId, ...roster.map((p) => p.userId)])
+      const now = Date.now()
+
+      // Clear grace timers for any peer who reconnected
+      for (const trackedId of Array.from(missingPeerSinceRef.current.keys())) {
+        if (activeIds.has(trackedId)) {
+          missingPeerSinceRef.current.delete(trackedId)
+        }
+      }
+
+      // Only the room host (or lowest lexical userId if host is offline) broadcasts cleanup to avoid multi-peer storms
+      const hostPeer = roster.find((p) => p.isHost)
+      const leaderId =
+        hostPeer?.userId ??
+        [...activeIds].sort()[0] ??
+        localUserId
+      if (leaderId !== localUserId) return
+
+      const isExpiredMissing = (uid: string): boolean => {
+        if (activeIds.has(uid)) return false
+        const since = missingPeerSinceRef.current.get(uid)
+        if (since === undefined) {
+          missingPeerSinceRef.current.set(uid, now)
+          return false
+        }
+        return now - since >= 10_000
+      }
+
+      // 1. Darts roster cleanup
+      const curDarts = dartsRef.current
+      if (!curDarts.winnerId && curDarts.players.some((p) => isExpiredMissing(p.userId))) {
+        const activeThrowerId = curDarts.players[curDarts.activePlayerIndex]?.userId
+        const remaining = curDarts.players.filter((p) => !isExpiredMissing(p.userId))
+        const activeThrowerLeft = activeThrowerId ? !remaining.some((p) => p.userId === activeThrowerId) : false
+        const nextIdx =
+          remaining.length > 0 ? curDarts.activePlayerIndex % remaining.length : 0
+        const nextDarts: DartsMatchState = {
+          ...curDarts,
+          players: remaining,
+          activePlayerIndex: nextIdx,
+          dartsThrownInTurn: activeThrowerLeft ? 0 : curDarts.dartsThrownInTurn,
+          turnStartScore501:
+            activeThrowerLeft
+              ? (remaining[nextIdx]?.score501 ?? 501)
+              : curDarts.turnStartScore501,
+          lastTurnSummary:
+            remaining.length > 0
+              ? `Updated Darts turn order — ${remaining[nextIdx]?.displayName} to throw!`
+              : 'Open Oche — Throw a dart or click + Join Match to start!',
+          revision: nextLamportRevision(curDarts.revision),
+          updatedAt: now,
+        }
+        dartsRef.current = nextDarts
+        setDartsState(nextDarts)
+        broadcastBarGamesEvent({ kind: 'darts-state', payload: nextDarts })
+      }
+
+      // 2. Putting Putt-Off / Streak roster cleanup
+      const curPutt = puttingRef.current
+      if (!curPutt.winnerId && curPutt.players.some((p) => isExpiredMissing(p.userId))) {
+        const remaining = curPutt.players.filter((p) => !isExpiredMissing(p.userId))
+        let nextRound = curPutt.round
+        let winnerId: string | null = null
+        let winnerName: string | null = null
+        let outcome = curPutt.lastOutcomeText
+
+        if (
+          curPutt.mode === 'puttoff' &&
+          remaining.length >= 1 &&
+          remaining.every((p) => p.puttsTaken >= nextRound)
+        ) {
+          if (nextRound >= curPutt.maxRounds) {
+            const sorted = [...remaining].sort((a, b) => b.puttOffScore - a.puttOffScore)
+            const top = sorted[0]
+            const tied = sorted.length > 1 && sorted[0].puttOffScore === sorted[1].puttOffScore
+            if (!tied && top) {
+              winnerId = top.userId
+              winnerName = top.displayName
+              outcome = `🏆 ${top.displayName} wins the ${curPutt.maxRounds}-Round Putt-Off (${top.puttOffScore} pts)!`
+            } else {
+              nextRound += 1
+            }
+          } else {
+            nextRound += 1
+          }
+        }
+
+        const nextPutt: PuttingMatchState = {
+          ...curPutt,
+          players: remaining,
+          activePlayerIndex:
+            remaining.length > 0 ? curPutt.activePlayerIndex % remaining.length : 0,
+          round: nextRound,
+          winnerId,
+          winnerName,
+          lastOutcomeText: outcome,
+          revision: nextLamportRevision(curPutt.revision),
+          updatedAt: now,
+        }
+        puttingRef.current = nextPutt
+        setPuttingState(nextPutt)
+        broadcastBarGamesEvent({ kind: 'putting-state', payload: nextPutt })
+      }
+
+      // 3. Story Quest Adventure party roster cleanup
+      const curAdv = adventureRef.current
+      const advUids = Object.keys(curAdv.players)
+      if (
+        curAdv.phase !== 'victory' &&
+        curAdv.phase !== 'defeat' &&
+        advUids.some((uid) => isExpiredMissing(uid))
+      ) {
+        const nextPlayers: typeof curAdv.players = {}
+        for (const [uid, pl] of Object.entries(curAdv.players)) {
+          if (isExpiredMissing(uid)) continue
+          nextPlayers[uid] = {
+            ...pl,
+            tetheredToUserId:
+              pl.tetheredToUserId && !isExpiredMissing(pl.tetheredToUserId)
+                ? pl.tetheredToUserId
+                : null,
+          }
+        }
+        const livingCount = Object.values(nextPlayers).filter(
+          (p) => !p.isGhost && p.hp > 0,
+        ).length
+        const nextRequired = livingCount <= 0 ? 1 : Math.max(1, Math.ceil(livingCount / 2))
+        const nextAdv: AdventureQuestState = {
+          ...curAdv,
+          players: nextPlayers,
+          requiredSuccessPoints: nextRequired,
+          revision: nextLamportRevision(curAdv.revision),
+          updatedAt: now,
+        }
+        adventureRef.current = nextAdv
+        setAdventureState(nextAdv)
+        broadcastBarGamesEvent({ kind: 'adventure-state', payload: nextAdv })
+      }
+    }, 3000)
+
+    return () => window.clearInterval(interval)
+  }, [broadcastBarGamesEvent, joined, localUserId])
+
   // Register bridge handlers in useEffect so React Compiler remains 100% pure during render
   useEffect(() => {
     barGamesBridgeRef.current = {
       onRoomJoined: (normalizedRoomCode, sendEvent) => {
         roomCodeRef.current = normalizedRoomCode
         announcedClubhouseRef.current = false
-
-      const freshDarts = createInitialDartsMatchState()
-      const freshPutting = createInitialPuttingMatchState()
-      const freshTabletop = createInitialTabletopState()
-      const freshShuffleboard = createInitialShuffleboardState()
-      const freshCornhole = createInitialCornholeState()
-      const freshHolotable = createInitialHolotableState()
-      const freshAdventure = createInitialAdventureState('sunken-reliquary')
-      const savedClubhouse =
-        loadLocalClubhouseState(normalizedRoomCode) ?? createInitialClubhouseState()
-
-      dartsRef.current = freshDarts
-      puttingRef.current = freshPutting
-      tabletopRef.current = freshTabletop
-      shuffleboardRef.current = freshShuffleboard
-      cornholeRef.current = freshCornhole
-      holotableRef.current = freshHolotable
-      adventureRef.current = freshAdventure
-      clubhouseRef.current = savedClubhouse
-
-      setDartsState(freshDarts)
-      setPuttingState(freshPutting)
-      setTabletopState(freshTabletop)
-      setShuffleboardState(freshShuffleboard)
-      setCornholeState(freshCornhole)
-      setHolotableState(freshHolotable)
-      setAdventureState(freshAdventure)
-      setClubhouseState(savedClubhouse)
-      setActiveDartShot(null)
-      setActivePuttShot(null)
-
-      // Hydrate optional Supabase `public.clubhouse_stats` row in background
-      void fetchCloudClubhouseState(normalizedRoomCode).then((cloudClubhouse) => {
-        if (!cloudClubhouse || roomCodeRef.current !== normalizedRoomCode) return
-        setClubhouseState((prev) => {
-          if (!isNewerState(cloudClubhouse, prev)) return prev
-          clubhouseRef.current = cloudClubhouse
-          saveLocalClubhouseState(normalizedRoomCode, cloudClubhouse)
-          sendEvent({ kind: 'clubhouse-state', payload: cloudClubhouse })
-          return cloudClubhouse
-        })
-      })
-    },
-
-    onRoomConnected: (sendEvent) => {
-      if (!announcedClubhouseRef.current && clubhouseRef.current.revision > 0) {
-        announcedClubhouseRef.current = true
-        sendEvent({ kind: 'clubhouse-state', payload: clubhouseRef.current })
-      }
-    },
-
-    onStateRequest: (_requesterId, isHost, sendEvent) => {
-      if (!isHost) return
-      const hasAnyActivity =
-        dartsRef.current.revision > 0 ||
-        puttingRef.current.revision > 0 ||
-        tabletopRef.current.revision > 0 ||
-        shuffleboardRef.current.revision > 0 ||
-        cornholeRef.current.revision > 0 ||
-        holotableRef.current.revision > 0 ||
-        adventureRef.current.revision > 0 ||
-        clubhouseRef.current.revision > 0
-      if (!hasAnyActivity) return
-
-      sendEvent({
-        kind: 'bar-games-full-sync',
-        darts: dartsRef.current,
-        putting: puttingRef.current,
-        tabletop: tabletopRef.current,
-        clubhouse: clubhouseRef.current,
-        shuffleboard: shuffleboardRef.current,
-        cornhole: cornholeRef.current,
-        holotable: holotableRef.current,
-        adventure: adventureRef.current,
-      })
-    },
-
-    onEvent: (event) => {
-      switch (event.kind) {
-        case 'dart-launch': {
-          setActiveDartShot(event.payload)
-          break
+        if (stateReqBackupTimerRef.current !== null) {
+          window.clearTimeout(stateReqBackupTimerRef.current)
+          stateReqBackupTimerRef.current = null
         }
+
+        const freshDarts = createInitialDartsMatchState()
+        const freshPutting = createInitialPuttingMatchState()
+        const freshTabletop = createInitialTabletopState()
+        const freshShuffleboard = createInitialShuffleboardState()
+        const freshCornhole = createInitialCornholeState()
+        const freshHolotable = createInitialHolotableState()
+        const freshAdventure = createInitialAdventureState('sunken-reliquary')
+        const savedClubhouse =
+          loadLocalClubhouseState(normalizedRoomCode) ?? createInitialClubhouseState()
+
+        dartsRef.current = freshDarts
+        puttingRef.current = freshPutting
+        tabletopRef.current = freshTabletop
+        shuffleboardRef.current = freshShuffleboard
+        cornholeRef.current = freshCornhole
+        holotableRef.current = freshHolotable
+        adventureRef.current = freshAdventure
+        clubhouseRef.current = savedClubhouse
+
+        setDartsState(freshDarts)
+        setPuttingState(freshPutting)
+        setTabletopState(freshTabletop)
+        setShuffleboardState(freshShuffleboard)
+        setCornholeState(freshCornhole)
+        setHolotableState(freshHolotable)
+        setAdventureState(freshAdventure)
+        setClubhouseState(savedClubhouse)
+        setActiveDartShot(null)
+        setActivePuttShot(null)
+
+        // Hydrate optional Supabase `public.clubhouse_stats` row in background
+        void fetchCloudClubhouseState(normalizedRoomCode).then((cloudClubhouse) => {
+          if (!cloudClubhouse || roomCodeRef.current !== normalizedRoomCode) return
+          setClubhouseState((prev) => {
+            if (!isNewerState(cloudClubhouse, prev)) return prev
+            clubhouseRef.current = cloudClubhouse
+            saveLocalClubhouseState(normalizedRoomCode, cloudClubhouse)
+            sendEvent({ kind: 'clubhouse-state', payload: cloudClubhouse })
+            return cloudClubhouse
+          })
+        })
+      },
+
+      onRoomConnected: (sendEvent) => {
+        if (!announcedClubhouseRef.current && clubhouseRef.current.revision > 0) {
+          announcedClubhouseRef.current = true
+          sendEvent({ kind: 'clubhouse-state', payload: clubhouseRef.current })
+        }
+      },
+
+      onStateRequest: (_requesterId, isHost, sendEvent) => {
+        const sendSnapshot = () => {
+          const hasAnyActivity =
+            dartsRef.current.revision > 0 ||
+            puttingRef.current.revision > 0 ||
+            tabletopRef.current.revision > 0 ||
+            shuffleboardRef.current.revision > 0 ||
+            cornholeRef.current.revision > 0 ||
+            holotableRef.current.revision > 0 ||
+            adventureRef.current.revision > 0 ||
+            clubhouseRef.current.revision > 0
+          if (!hasAnyActivity) return
+
+          sendEvent({
+            kind: 'bar-games-full-sync',
+            darts: dartsRef.current,
+            putting: puttingRef.current,
+            tabletop: tabletopRef.current,
+            clubhouse: clubhouseRef.current,
+            shuffleboard: shuffleboardRef.current,
+            cornhole: cornholeRef.current,
+            holotable: holotableRef.current,
+            adventure: adventureRef.current,
+          })
+        }
+
+        if (isHost) {
+          sendSnapshot()
+          return
+        }
+
+        // Jittered non-host backup responder if host tab is backgrounded or disconnected
+        if (stateReqBackupTimerRef.current !== null) {
+          window.clearTimeout(stateReqBackupTimerRef.current)
+        }
+        const delayMs = 450 + Math.floor(Math.random() * 250)
+        stateReqBackupTimerRef.current = window.setTimeout(() => {
+          stateReqBackupTimerRef.current = null
+          sendSnapshot()
+        }, delayMs)
+      },
+
+      onEvent: (event) => {
+        switch (event.kind) {
+          case 'dart-launch': {
+            setActiveDartShot(event.payload)
+            break
+          }
         case 'dart-settle': {
           setActiveDartShot((curr) =>
             curr?.shotId === event.payload.shotId ? null : curr,
@@ -444,6 +635,10 @@ export function useBarGames({
           break
         }
         case 'bar-games-full-sync': {
+          if (stateReqBackupTimerRef.current !== null) {
+            window.clearTimeout(stateReqBackupTimerRef.current)
+            stateReqBackupTimerRef.current = null
+          }
           setDartsState((prev) => {
             if (!isNewerState(event.darts, prev)) return prev
             dartsRef.current = event.darts
@@ -524,6 +719,10 @@ export function useBarGames({
     },
 
       onRoomLeft: () => {
+        if (stateReqBackupTimerRef.current !== null) {
+          window.clearTimeout(stateReqBackupTimerRef.current)
+          stateReqBackupTimerRef.current = null
+        }
         setActiveDartShot(null)
         setActivePuttShot(null)
       },
@@ -534,9 +733,14 @@ export function useBarGames({
     (next: AdventureQuestState) => {
       const prev = adventureRef.current
       if (next === prev) return
-      adventureRef.current = next
-      setAdventureState(next)
-      broadcastBarGamesEvent({ kind: 'adventure-state', payload: next })
+      const stamped: AdventureQuestState = {
+        ...next,
+        revision: nextLamportRevision(prev.revision, next.revision),
+        updatedAt: Date.now(),
+      }
+      adventureRef.current = stamped
+      setAdventureState(stamped)
+      broadcastBarGamesEvent({ kind: 'adventure-state', payload: stamped })
     },
     [broadcastBarGamesEvent],
   )
@@ -666,7 +870,7 @@ export function useBarGames({
       ...prev,
       players: nextPlayers,
       lastTurnSummary: `${me.displayName} joined ${prev.mode.toUpperCase()} Darts!`,
-      revision: prev.revision + 1,
+      revision: nextLamportRevision(prev.revision),
       updatedAt: Date.now(),
     }
     dartsRef.current = next
@@ -704,7 +908,7 @@ export function useBarGames({
         lastTurnSummary: `Switched Darts to ${nextMode.toUpperCase()}${
           nextMode === '501' ? (nextDoubleOut ? ' (Double-Out)' : ' (Straight-Out)') : ''
         }.`,
-        revision: prev.revision + 1,
+        revision: nextLamportRevision(prev.revision),
         updatedAt: Date.now(),
       }
       dartsRef.current = next
@@ -737,7 +941,7 @@ export function useBarGames({
       winnerName: null,
       stuckDarts: [],
       lastTurnSummary: `New ${prev.mode.toUpperCase()} leg started — ${basePlayers[0]?.displayName ?? me.displayName} to throw!`,
-      revision: prev.revision + 1,
+      revision: nextLamportRevision(prev.revision),
       updatedAt: Date.now(),
     }
     dartsRef.current = next
@@ -755,6 +959,8 @@ export function useBarGames({
       localVelocity: [number, number],
     ): LivePuttShotPacket => {
       const me = localProfileRef.current
+      const curPutting = puttingRef.current
+      const hole = curPutting.courseHole ?? 'straight'
       const packet: LivePuttShotPacket = {
         shotId: `putt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
         shooterId: localUserId,
@@ -762,7 +968,8 @@ export function useBarGames({
         color: me.avatarColor,
         localOrigin,
         localVelocity,
-        rampEnabled: puttingRef.current.rampEnabled,
+        rampEnabled: curPutting.rampEnabled || hole === 'bunker-island',
+        courseHole: hole,
         timestamp: Date.now(),
       }
       setActivePuttShot(packet)
@@ -861,7 +1068,7 @@ export function useBarGames({
         createPuttingPlayerSlot(localUserId, me.displayName, me.avatarColor),
       ],
       lastOutcomeText: `${me.displayName} stepped up to the Putting Green!`,
-      revision: prev.revision + 1,
+      revision: nextLamportRevision(prev.revision),
       updatedAt: Date.now(),
     }
     puttingRef.current = next
@@ -870,16 +1077,29 @@ export function useBarGames({
   }, [broadcastBarGamesEvent, localUserId])
 
   const configurePuttingMatch = useCallback(
-    (patch: { mode?: PuttingGameMode; rampEnabled?: boolean }) => {
+    (patch: {
+      mode?: PuttingGameMode
+      rampEnabled?: boolean
+      courseHole?: 'straight' | 'breaking-ridge' | 'bunker-island'
+    }) => {
       const prev = puttingRef.current
       const nextMode = patch.mode ?? prev.mode
       const nextRamp = patch.rampEnabled ?? prev.rampEnabled
+      const nextCourseHole = patch.courseHole ?? prev.courseHole ?? 'straight'
       const modeChanged = nextMode !== prev.mode
+
+      const holeLabel =
+        nextCourseHole === 'breaking-ridge'
+          ? 'Hole 2 (Break)'
+          : nextCourseHole === 'bunker-island'
+            ? 'Hole 3 (Hazard)'
+            : 'Hole 1 (Flat)'
 
       const next: PuttingMatchState = {
         ...prev,
         mode: nextMode,
         rampEnabled: nextRamp,
+        courseHole: nextCourseHole,
         round: modeChanged ? 1 : prev.round,
         winnerId: modeChanged ? null : prev.winnerId,
         winnerName: modeChanged ? null : prev.winnerName,
@@ -889,8 +1109,8 @@ export function useBarGames({
         ballRestLocal: [0, PUTTING_STRIP_SPECS.ballRadius, PUTTING_STRIP_SPECS.teeLocalZ],
         lastOutcomeText: `Putting Green: ${
           nextMode === 'puttoff' ? '5-Round Putt-Off' : 'Streak Mode'
-        } · ${nextRamp ? 'Obstacle Ramp ON' : 'Flat Turf'}`,
-        revision: prev.revision + 1,
+        } · ${holeLabel} · ${nextRamp || nextCourseHole === 'bunker-island' ? 'Obstacle Ramp ON' : 'Flat Turf'}`,
+        revision: nextLamportRevision(prev.revision),
         updatedAt: Date.now(),
       }
       puttingRef.current = next
@@ -905,7 +1125,7 @@ export function useBarGames({
     const next: PuttingMatchState = {
       ...prev,
       ballRestLocal: [0, PUTTING_STRIP_SPECS.ballRadius, PUTTING_STRIP_SPECS.teeLocalZ],
-      revision: prev.revision + 1,
+      revision: nextLamportRevision(prev.revision),
       updatedAt: Date.now(),
     }
     puttingRef.current = next
@@ -937,7 +1157,7 @@ export function useBarGames({
       lastOutcomeText: `Fresh ${
         prev.mode === 'puttoff' ? 'Putt-Off' : 'Putting Streak'
       } session ready!`,
-      revision: prev.revision + 1,
+      revision: nextLamportRevision(prev.revision),
       updatedAt: Date.now(),
     }
     puttingRef.current = next
@@ -951,8 +1171,11 @@ export function useBarGames({
 
   const commitTabletop = useCallback(
     (next: TabletopState) => {
+      const prev = tabletopRef.current
       const bounded: TabletopState = {
         ...next,
+        revision: nextLamportRevision(prev.revision, next.revision),
+        updatedAt: Date.now(),
         dice: (next.dice ?? []).slice(-16),
         tokens: (next.tokens ?? []).slice(-24),
         tableCards: (next.tableCards ?? []).slice(-20),
@@ -1492,7 +1715,7 @@ export function useBarGames({
         : `🥌 ${me.displayName} (${puck.team.toUpperCase()}) slid ${zoneDesc}`
 
       const next: ShuffleboardState = {
-        revision: prev.revision + 1,
+        revision: nextLamportRevision(prev.revision),
         updatedAt: now,
         redScore: nextRed,
         blueScore: nextBlue,
@@ -1539,7 +1762,7 @@ export function useBarGames({
   const resetShuffleboard = useCallback(() => {
     const prev = shuffleboardRef.current
     const next: ShuffleboardState = {
-      revision: prev.revision + 1,
+      revision: nextLamportRevision(prev.revision),
       updatedAt: Date.now(),
       redScore: 0,
       blueScore: 0,
@@ -1577,7 +1800,7 @@ export function useBarGames({
         : `${me.displayName} (${bag.team.toUpperCase()}) tossed ${shotLabel}`
 
       const next: CornholeState = {
-        revision: prev.revision + 1,
+        revision: nextLamportRevision(prev.revision),
         updatedAt: now,
         goldScore: nextGold,
         cyanScore: nextCyan,
@@ -1624,7 +1847,7 @@ export function useBarGames({
   const resetCornhole = useCallback(() => {
     const prev = cornholeRef.current
     const next: CornholeState = {
-      revision: prev.revision + 1,
+      revision: nextLamportRevision(prev.revision),
       updatedAt: Date.now(),
       goldScore: 0,
       cyanScore: 0,
@@ -1640,8 +1863,11 @@ export function useBarGames({
 
   const commitHolotable = useCallback(
     (next: HolotableState) => {
+      const prev = holotableRef.current
       const bounded: HolotableState = {
         ...next,
+        revision: nextLamportRevision(prev.revision, next.revision),
+        updatedAt: Date.now(),
         miniatures: (next.miniatures ?? []).slice(-24),
         revealedFogCells: (next.revealedFogCells ?? []).slice(0, 36),
       }
@@ -1900,6 +2126,15 @@ export function useBarGames({
   const dealBlackjackRound = useCallback(() => {
     const me = localProfileRef.current
     const prev = tabletopRef.current
+    // Prevent clobbering another active player's mid-turn hand unless settled or stale (>25s)
+    if (
+      prev.blackjackPhase === 'player-turn' &&
+      !prev.hands[localUserId] &&
+      Object.keys(prev.hands).length > 0 &&
+      Date.now() - prev.updatedAt < 25_000
+    ) {
+      return
+    }
     const freshDeck =
       prev.deck.length < 15 ? shuffleCards(createOrderedDeck52()) : [...prev.deck]
     const p1 = freshDeck.shift()!
@@ -1980,10 +2215,11 @@ export function useBarGames({
     const me = localProfileRef.current
     const prev = tabletopRef.current
     if (prev.blackjackPhase !== 'player-turn') return
+    const existing = prev.hands[localUserId]?.cards ?? []
+    if (existing.length === 0) return
     const freshDeck =
       prev.deck.length < 5 ? shuffleCards(createOrderedDeck52()) : [...prev.deck]
     const drawn = freshDeck.shift()!
-    const existing = prev.hands[localUserId]?.cards ?? []
     const nextCards = [...existing, drawn]
     const pScore = scoreBlackjackHand(nextCards)
 
@@ -2070,6 +2306,7 @@ export function useBarGames({
   const standBlackjack = useCallback(() => {
     const me = localProfileRef.current
     const prev = tabletopRef.current
+    if (prev.blackjackPhase !== 'player-turn') return
     const freshDeck =
       prev.deck.length < 8 ? shuffleCards(createOrderedDeck52()) : [...prev.deck]
     const playerCards = prev.hands[localUserId]?.cards ?? []
@@ -2423,12 +2660,26 @@ export function useBarGames({
 
           const redLeft = board.some((p) => p === 1 || p === 3)
           const blackLeft = board.some((p) => p === 2 || p === 4)
-          const winner: 'red' | 'black' | null = !blackLeft
+          const nextTurn = turn === 'red' ? 'black' : 'red'
+          const sideHasAnyMove = (side: 'red' | 'black'): boolean => {
+            for (let i = 0; i < 64; i++) {
+              const p = board[i]
+              const isSide =
+                side === 'red' ? p === 1 || p === 3 : p === 2 || p === 4
+              if (isSide && getCheckersLegalMoves(board, i, side).length > 0) {
+                return true
+              }
+            }
+            return false
+          }
+          let winner: 'red' | 'black' | 'draw' | null = !blackLeft
             ? 'red'
             : !redLeft
               ? 'black'
               : null
-          const nextTurn = turn === 'red' ? 'black' : 'red'
+          if (!winner && !sideHasAnyMove(nextTurn)) {
+            winner = sideHasAnyMove(turn) ? turn : 'draw'
+          }
 
           commitHolotable({
             ...prev,
@@ -2438,9 +2689,12 @@ export function useBarGames({
             checkersTurn: nextTurn,
             checkersSelectedIdx: null,
             checkersWinner: winner,
-            lastActionSummary: winner
-              ? `🏆 ${winner.toUpperCase()} WINS Checkers on the Game Room Table!`
-              : `🔴 ${me.displayName} moved ${turn.toUpperCase()}${move.jumpedIdx !== null ? ' (JUMP CAPTURE!)' : ''} · ${nextTurn.toUpperCase()}'s turn.`,
+            lastActionSummary:
+              winner === 'draw'
+                ? '🤝 Checkers ends in a DRAW (no legal moves remaining)!'
+                : winner
+                  ? `🏆 ${winner.toUpperCase()} WINS Checkers on the Game Room Table!`
+                  : `🔴 ${me.displayName} moved ${turn.toUpperCase()}${move.jumpedIdx !== null ? ' (JUMP CAPTURE!)' : ''} · ${nextTurn.toUpperCase()}'s turn.`,
           })
         }
       }
@@ -2561,9 +2815,12 @@ export function useBarGames({
         connect4Grid: grid,
         connect4Turn: nextTurn,
         connect4Winner: winner,
-        lastActionSummary: winner
-          ? `🏆 ${winner === 1 ? 'GOLD' : 'CYAN'} connects 4 in a row and wins!`
-          : `🟡 ${me.displayName} dropped ${turn === 1 ? 'GOLD' : 'CYAN'} disc in Column ${col + 1} · ${nextTurn === 1 ? 'GOLD' : 'CYAN'}'s turn.`,
+        lastActionSummary:
+          winner === 'draw'
+            ? '🤝 Connect-4 ends in a FULL-GRID DRAW! Click Reset Grid for a rematch.'
+            : winner
+              ? `🏆 ${winner === 1 ? 'GOLD' : 'CYAN'} connects 4 in a row and wins!`
+              : `🟡 ${me.displayName} dropped ${turn === 1 ? 'GOLD' : 'CYAN'} disc in Column ${col + 1} · ${nextTurn === 1 ? 'GOLD' : 'CYAN'}'s turn.`,
       })
     },
     [commitHolotable],
@@ -2968,11 +3225,24 @@ export function useBarGames({
   )
 
   // 60-second Spotlight Countdown Auto-Fallback for Crucial Lounge Skill Checks
+  // Staggered so the designated hero (or room leader) rolls at 60.0s, and backup peers wait until 62.5s
   useEffect(() => {
     const crucial = adventureState.crucialCheck
     if (!crucial || crucial.resolved) return
+    const roster = participantsRef.current ?? []
+    const hostPeer = roster.find((p) => p.isHost)
+    const leaderId =
+      hostPeer?.userId ??
+      [localUserId, ...roster.map((p) => p.userId)].sort()[0] ??
+      localUserId
+    const isPrimaryRoller =
+      crucial.designatedUserId === localUserId ||
+      (!crucial.designatedUserId && leaderId === localUserId) ||
+      (!roster.some((p) => p.userId === crucial.designatedUserId) &&
+        leaderId === localUserId)
+    const targetDurationMs = isPrimaryRoller ? 60_000 : 62_500
     const elapsedMs = Date.now() - crucial.startedAt
-    const remainingMs = Math.max(1200, 60000 - elapsedMs)
+    const remainingMs = Math.max(1200, targetDurationMs - elapsedMs)
     const timer = window.setTimeout(() => {
       const curr = adventureRef.current.crucialCheck
       if (!curr || curr.resolved) return

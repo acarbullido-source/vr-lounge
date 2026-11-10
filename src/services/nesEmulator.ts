@@ -616,6 +616,7 @@ class NesEmulatorSingleton {
     (player: 1 | 2, mask: number, seq: number) => void
   >()
   private saveStateListeners = new Set<(cartridgeId: string) => void>()
+  private engagedSlotListeners = new Set<(slot: 1 | 2 | null) => void>()
 
   constructor() {
     // Native 256x240 canvas: eliminates offscreen canvas + CPU drawImage upscale and cuts GPU texture upload bandwidth by 75%
@@ -1221,6 +1222,9 @@ class NesEmulatorSingleton {
       if (!snap || !snap.cpu || !snap.ppu) return false
 
       const targetCartridgeId = expectedCartridgeId || snap.cartridgeId
+      if (targetCartridgeId === 'custom-rom' && !this.customRomName) {
+        return false
+      }
       if (
         targetCartridgeId &&
         targetCartridgeId !== 'custom-rom' &&
@@ -1480,6 +1484,19 @@ class NesEmulatorSingleton {
     }
   }
 
+  public onEngagedSlotChange(listener: (slot: 1 | 2 | null) => void): () => void {
+    this.engagedSlotListeners.add(listener)
+    return () => {
+      this.engagedSlotListeners.delete(listener)
+    }
+  }
+
+  public releaseAllUiButtons(): void {
+    if (this.uiHeldMask === 0) return
+    this.uiHeldMask = 0
+    this.syncControllerStateToCore()
+  }
+
   /**
    * Explicitly engages (`1` or `2`) or disengages (`null`) the local user's Quest controllers & keyboard
    * as the active Nintendo controller for Player 1 or Player 2.
@@ -1498,6 +1515,13 @@ class NesEmulatorSingleton {
     }
     this.lastBroadcastLocalMask = -1
     this.syncControllerStateToCore()
+    for (const listener of this.engagedSlotListeners) {
+      try {
+        listener(slot)
+      } catch {
+        // Ignore listener error
+      }
+    }
     this.notifySaveStateListeners(this.activeCartridge.id)
   }
 

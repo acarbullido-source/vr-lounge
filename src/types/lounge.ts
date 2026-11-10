@@ -115,6 +115,8 @@ export interface PresenterState {
   duration: number
   updatedAt: number
   revision: number
+  /** Local monotonic performance.now() timestamp stamped on receipt/mutation (never relies on peer wall-clock) */
+  receivedAtPerfMs?: number
 }
 
 export interface ChatMessage {

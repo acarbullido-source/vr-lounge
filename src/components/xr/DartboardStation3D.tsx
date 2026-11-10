@@ -361,6 +361,22 @@ export function DartboardStation3D({
     }
   }, [activeDartShot])
 
+  useEffect(() => {
+    if (!pointerDragging) return
+    const resetDrag = () => {
+      setPointerDragging(false)
+      dragStartWorldRef.current = null
+    }
+    window.addEventListener('pointerup', resetDrag)
+    window.addEventListener('pointercancel', resetDrag)
+    window.addEventListener('blur', resetDrag)
+    return () => {
+      window.removeEventListener('pointerup', resetDrag)
+      window.removeEventListener('pointercancel', resetDrag)
+      window.removeEventListener('blur', resetDrag)
+    }
+  }, [pointerDragging])
+
   // Step flying dart CCD & VR controller trigger-release throwing at 72Hz/90Hz
   useFrame((_, delta) => {
     // 1. Flying dart CCD physics step
@@ -400,6 +416,7 @@ export function DartboardStation3D({
     if (!xrSession || buildMode || activeDartShot || isSpatialUiHovered()) {
       if (vrTriggerWasPressedRef.current) {
         vrTriggerWasPressedRef.current = false
+        vrHandHistoryRef.current = []
         setVrTriggerAimArc(null)
       }
       return
@@ -417,7 +434,14 @@ export function DartboardStation3D({
         }
       }
     }
-    if (!chosenSource?.targetRaySpace || !chosenSource.gamepad) return
+    if (!chosenSource?.targetRaySpace || !chosenSource.gamepad) {
+      if (vrTriggerWasPressedRef.current) {
+        vrTriggerWasPressedRef.current = false
+        vrHandHistoryRef.current = []
+        setVrTriggerAimArc(null)
+      }
+      return
+    }
 
     const hasPose = readXRSpaceWorldPose(
       xrFrame,
@@ -427,7 +451,14 @@ export function DartboardStation3D({
       scratchOriginVec,
       scratchRotQuat,
     )
-    if (!hasPose) return
+    if (!hasPose) {
+      if (vrTriggerWasPressedRef.current) {
+        vrTriggerWasPressedRef.current = false
+        vrHandHistoryRef.current = []
+        setVrTriggerAimArc(null)
+      }
+      return
+    }
 
     scratchRayForward.set(0, 0, -1).applyQuaternion(scratchRotQuat).normalize()
 

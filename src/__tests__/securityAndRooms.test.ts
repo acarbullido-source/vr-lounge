@@ -3,17 +3,31 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { beforeEach, describe, it } from 'node:test'
 import {
+  MAX_WHITEBOARD_TOTAL_COORDS,
   computeExpansionWingLayout,
   detectActiveLoungeWing,
   loadPersistedBoardroomWhiteboard,
   resolveExpansionWingState,
+  sanitizeBoardroomWhiteboardStrokes,
   savePersistedBoardroomWhiteboard,
 } from '../constants/expansionRooms'
+import {
+  PUTTING_STRIP_SPECS,
+  applyDartHitToMatch,
+  checkConnect4Winner,
+  createDartPlayerSlot,
+  createInitialDartsMatchState,
+} from '../constants/barGames'
 import {
   createDefaultRoomCustomization,
   resolveFlyablePosition,
   resolveWalkablePosition,
 } from '../constants/hangout'
+import {
+  getPuttingSurfaceHeight,
+  stepPuttingBallCCD,
+  type ActivePuttSim,
+} from '../services/barGamesPhysics'
 import {
   decryptRoomPayload,
   encryptRoomPayload,
@@ -37,6 +51,14 @@ import {
   lockDevicePasscode,
   verifyAndUnlockPasscode,
 } from '../services/passcode'
+import {
+  clearSpatialUiHoverPrefix,
+  isSpatialDrawingSurfaceActive,
+  isSpatialUiHovered,
+  resetAllSpatialInteractionLocks,
+  setSpatialDrawingSurfaceActive,
+  setSpatialUiHovered,
+} from '../services/xrTracking'
 import {
   generateAndStoreOAuthStateNonce,
   openYouTubeWebLoginPopup,
@@ -761,6 +783,208 @@ describe('VR Lounge Security, E2EE, Anti-Impersonation & Physics Regression Suit
     }
     assert.equal(emu.isRomLoaded(), true)
     emu.setConsumerActive('screen', false)
+  })
+
+  it('11. clears spatial UI hover prefixes and drawing locks cleanly so VR locomotion never deadlocks', () => {
+    resetAllSpatialInteractionLocks()
+    assert.equal(isSpatialUiHovered(), false)
+    assert.equal(isSpatialDrawingSurfaceActive(), false)
+
+    setSpatialUiHovered(true, 'wrist-chip-mic')
+    setSpatialUiHovered(true, 'dock-btn-play')
+    setSpatialDrawingSurfaceActive(true, 'boardroom-south-wall-whiteboard')
+    assert.equal(isSpatialUiHovered(), true)
+    assert.equal(isSpatialDrawingSurfaceActive(), true)
+
+    clearSpatialUiHoverPrefix('wrist-chip-')
+    assert.equal(
+      isSpatialUiHovered(),
+      true,
+      'Clearing wrist-chip prefix must preserve unrelated dock-btn hover lock',
+    )
+
+    clearSpatialUiHoverPrefix('dock-btn-')
+    assert.equal(
+      isSpatialUiHovered(),
+      false,
+      'Clearing remaining prefix must release spatial UI hover lock',
+    )
+
+    resetAllSpatialInteractionLocks()
+    assert.equal(isSpatialDrawingSurfaceActive(), false)
+  })
+
+  it('12. notifies NES engaged slot subscribers immediately and releases all held buttons on focus loss', () => {
+    const emu = getNesEmulator()
+    emu.setEngagedPlayerSlot(null)
+    const observedSlots: Array<1 | 2 | null> = []
+    const unsubscribe = emu.onEngagedSlotChange((slot) => {
+      observedSlots.push(slot)
+    })
+
+    emu.setEngagedPlayerSlot(1)
+    emu.setEngagedPlayerSlot(2)
+    emu.setButtonState('right', true, 2)
+    emu.releaseAllUiButtons()
+    emu.setEngagedPlayerSlot(null)
+    unsubscribe()
+
+    assert.deepEqual(observedSlots, [1, 2, null])
+  })
+
+  it('13. prevents repeat D20 rolls in the same Adventure scene and transitions non-finale total party wipes to defeat', () => {
+    const uAlice = { userId: 'u_alice', displayName: 'Alice', avatarColor: '#38BDF8' }
+    let state = createInitialAdventureState()
+    state = selectPlayerArchetype(state, uAlice, 'vanguard')
+
+    const afterFirstRoll = rollPlayerAdventureD20(state, uAlice, 14)
+    const firstRollVal = afterFirstRoll.players.u_alice?.d20Roll
+    assert.equal(firstRollVal, 14)
+
+    // Repeat roll in the exact same scene must be ignored
+    const afterDuplicateRoll = rollPlayerAdventureD20(afterFirstRoll, uAlice, 20)
+    assert.equal(afterDuplicateRoll, afterFirstRoll)
+
+    // Force hero to 1 HP before rolling a natural 1 on a non-finale node so the party wipes
+    const node = getActiveSceneNode(state)
+    const card = node.choices[0]
+    let wipeState = lockActionCard(state, uAlice, card.id)
+    wipeState = {
+      ...wipeState,
+      players: {
+        ...wipeState.players,
+        u_alice: {
+          ...wipeState.players.u_alice,
+          hp: 1,
+        },
+      },
+    }
+    wipeState = rollPlayerAdventureD20(wipeState, uAlice, 1)
+    assert.equal(wipeState.players.u_alice?.hp, 0)
+    assert.equal(wipeState.players.u_alice?.isGhost, true)
+
+    const afterAdvance = advanceAdventureScene(wipeState)
+    assert.equal(
+      afterAdvance.phase,
+      'defeat',
+      'Total party wipe on a non-finale node must transition phase to defeat instead of stranding dead players',
+    )
+  })
+
+  it('14. settles soft Putting shots on the bridge ramp slope instead of freezing mid-incline', () => {
+    const startZ = PUTTING_STRIP_SPECS.rampCenterZ + PUTTING_STRIP_SPECS.rampHalfLength * 0.65
+    const { height } = getPuttingSurfaceHeight(startZ, true, 0, 'bunker-island')
+    const sim: ActivePuttSim = {
+      localPos: [0, height + PUTTING_STRIP_SPECS.ballRadius, startZ],
+      localVel: [0, -0.35],
+      settled: false,
+      holed: false,
+      lipOut: false,
+    }
+
+    for (let step = 0; step < 300 && !sim.settled; step++) {
+      stepPuttingBallCCD(sim, 1 / 60, true, 'bunker-island')
+    }
+    assert.equal(
+      sim.settled,
+      true,
+      'Golf ball rolling onto the bridge ramp must roll back down and settle cleanly within 5 seconds',
+    )
+  })
+
+  it('15. detects full-grid Connect-4 draws and blocks unrostered 5th-player Darts throws when roster is full', () => {
+    // Pattern with no 4-in-a-row horizontally, vertically, or diagonally across 6x7:
+    // Every 2 rows alternate [1,1,2,1,1,2,1] / [2,2,1,2,2,1,2] shifted after row 2
+    const drawGrid = [
+      1, 2, 1, 2, 1, 2, 1,
+      1, 2, 1, 2, 1, 2, 1,
+      2, 1, 2, 1, 2, 1, 2,
+      2, 1, 2, 1, 2, 1, 2,
+      1, 2, 1, 2, 1, 2, 1,
+      1, 2, 1, 2, 1, 2, 1,
+    ]
+    assert.equal(checkConnect4Winner(drawGrid), 'draw')
+
+    const darts = {
+      ...createInitialDartsMatchState(),
+      players: [
+        createDartPlayerSlot('p1', 'P1', '#38BDF8'),
+        createDartPlayerSlot('p2', 'P2', '#F59E0B'),
+        createDartPlayerSlot('p3', 'P3', '#10B981'),
+        createDartPlayerSlot('p4', 'P4', '#EF4444'),
+      ],
+      activePlayerIndex: 0,
+      dartsThrownInTurn: 0,
+    }
+    const fifthAttempt = applyDartHitToMatch(darts, {
+      id: 'dart-outsider-1',
+      shooterId: 'p5_outsider',
+      shooterName: 'Outsider',
+      color: '#A855F7',
+      boardLocalPos: [0, 0.12, 0],
+      hit: {
+        points: 60,
+        sector: 20,
+        multiplier: 3,
+        ring: 'triple',
+        label: 'T20',
+        localX: 0,
+        localY: 0.12,
+      },
+      createdAt: 5000,
+    })
+    assert.equal(
+      fifthAttempt.nextMatch.players[0]?.score501,
+      501,
+      '5th unrostered player must not mutate active player score501 when roster is full (4/4)',
+    )
+    assert.equal(
+      fifthAttempt.nextMatch.dartsThrownInTurn,
+      0,
+      '5th unrostered player must not increment active player dartsThrownInTurn when roster is full (4/4)',
+    )
+    assert.equal(fifthAttempt.nextMatch.players.length, 4)
+  })
+
+  it('16. caps Boardroom Whiteboard total coordinate budget and isolates storage per roomCode', () => {
+    const denseStrokes = Array.from({ length: 80 }, (_, idx) => ({
+      id: `dense-${idx}`,
+      tool: 'pen' as const,
+      color: '#0F172A',
+      size: 2 as const,
+      // Alternating zig-zag points so collinear decimation keeps them
+      points: Array.from({ length: 440 }, (__, cIdx) =>
+        cIdx % 2 === 0 ? (cIdx / 440) : ((cIdx / 2) % 2 === 0 ? 0.2 : 0.8),
+      ),
+      createdAt: 1000 + idx,
+    }))
+    const compacted = sanitizeBoardroomWhiteboardStrokes(denseStrokes)
+    const totalCoords = compacted.reduce((sum, s) => sum + s.points.length, 0)
+    assert.ok(
+      totalCoords <= MAX_WHITEBOARD_TOTAL_COORDS,
+      `Sanitized whiteboard coordinates (${totalCoords}) must stay <= ${MAX_WHITEBOARD_TOTAL_COORDS}`,
+    )
+
+    savePersistedBoardroomWhiteboard(
+      {
+        strokes: [
+          {
+            id: 'room-a-stroke',
+            tool: 'pen',
+            color: '#DC2626',
+            size: 2,
+            points: [0.1, 0.1, 0.9, 0.9],
+            createdAt: 2000,
+          },
+        ],
+        grid: true,
+        clearedAt: 0,
+        updatedAt: 2100,
+      },
+      'ROOM-ALPHA',
+    )
+    assert.equal(loadPersistedBoardroomWhiteboard('ROOM-ALPHA')?.strokes.length, 1)
+    assert.equal(loadPersistedBoardroomWhiteboard('ROOM-BETA'), null)
   })
 })
 

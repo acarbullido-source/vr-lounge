@@ -37,26 +37,33 @@ const activeVoiceAudioElements = new Set<HTMLAudioElement>()
 const activeAudioContexts = new Set<AudioContext>()
 let globalVoiceUnlockInstalled = false
 
+export function resumeAllVoiceAudioOutputs(): void {
+  for (const audioEl of activeVoiceAudioElements) {
+    if (audioEl.paused && audioEl.srcObject) {
+      void audioEl.play().catch(() => undefined)
+    }
+  }
+  for (const ctx of activeAudioContexts) {
+    if (ctx.state === 'suspended' || (ctx.state as string) === 'interrupted') {
+      void ctx.resume().catch(() => undefined)
+    }
+  }
+}
+
 function ensureGlobalVoiceUnlockListener(): void {
   if (globalVoiceUnlockInstalled || typeof window === 'undefined') return
   globalVoiceUnlockInstalled = true
 
-  const resumeAllVoiceOutputs = () => {
-    for (const audioEl of activeVoiceAudioElements) {
-      if (audioEl.paused && audioEl.srcObject) {
-        void audioEl.play().catch(() => undefined)
+  window.addEventListener('pointerdown', resumeAllVoiceAudioOutputs, { passive: true })
+  window.addEventListener('keydown', resumeAllVoiceAudioOutputs, { passive: true })
+  window.addEventListener('touchstart', resumeAllVoiceAudioOutputs, { passive: true })
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        resumeAllVoiceAudioOutputs()
       }
-    }
-    for (const ctx of activeAudioContexts) {
-      if (ctx.state === 'suspended') {
-        void ctx.resume().catch(() => undefined)
-      }
-    }
+    })
   }
-
-  window.addEventListener('pointerdown', resumeAllVoiceOutputs, { passive: true })
-  window.addEventListener('keydown', resumeAllVoiceOutputs, { passive: true })
-  window.addEventListener('touchstart', resumeAllVoiceOutputs, { passive: true })
 }
 
 function resolveParticipantSeat(
@@ -255,10 +262,10 @@ function RemoteAvatar({
     }
   }, [participant.isMuted, voiceVolume])
 
-  // Dynamically switch audio output device (setSinkId) when selectedSpeakerId changes
+  // Dynamically switch audio output device (setSinkId) when selectedSpeakerId changes (including '' for Default)
   useEffect(() => {
     const audioEl = voiceAudioRef.current
-    if (!audioEl || !selectedSpeakerId) return
+    if (!audioEl || selectedSpeakerId === undefined) return
     const sinkCapable = audioEl as HTMLAudioElement & {
       setSinkId?: (sinkId: string) => Promise<void>
     }

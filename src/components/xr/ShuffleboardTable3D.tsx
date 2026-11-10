@@ -156,7 +156,7 @@ export function ShuffleboardTable3D({
           const relX = Math.max(-0.16, Math.min(0.16, localPt.x - origin[0]))
           const relZ = localPt.z - origin[2]
           const zone: 1 | 2 | 3 | 4 =
-            relZ <= -1.04 ? 4 : relZ <= -0.8 ? 3 : relZ <= -0.56 ? 2 : 3
+            relZ <= -1.04 ? 4 : relZ <= -0.8 ? 3 : relZ <= -0.56 ? 2 : 1
           launchPuck(relX, zone)
         }}
       >

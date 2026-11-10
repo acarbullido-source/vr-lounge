@@ -334,6 +334,15 @@ export interface GameRoom3DProps {
   onToggleHolotableFogCell: (cellKey: string) => void
   onRevealAllHolotableFog: () => void
   onShroudAllHolotableFog: () => void
+  onSetHolotableGameMode?: (gameMode: HolotableGameMode) => void
+  onRollRpgCombatAction?: (actionKind: 'melee' | 'spell' | 'heal') => void
+  onAdjustHolotableMiniHp?: (miniId: string, delta: number) => void
+  onClickCheckersCell?: (cellIdx: number) => void
+  onResetCheckersBoard?: () => void
+  onClickChessCell?: (cellIdx: number) => void
+  onResetChessBoard?: () => void
+  onDropConnect4Column?: (col: number) => void
+  onResetConnect4Grid?: () => void
   onRecordArcadeScore: (
     game: 'arcade-hoops' | 'arcade-skeeball' | 'arcade-retro',
     score: number,
@@ -442,8 +451,19 @@ export function GameRoom3D({
   onToggleHolotableFogCell,
   onRevealAllHolotableFog,
   onShroudAllHolotableFog,
+  onSetHolotableGameMode,
+  onRollRpgCombatAction,
+  onAdjustHolotableMiniHp,
+  onClickCheckersCell,
+  onResetCheckersBoard,
+  onClickChessCell,
+  onResetChessBoard,
+  onDropConnect4Column,
+  onResetConnect4Grid,
   onRecordArcadeScore,
 }: GameRoom3DProps) {
+  void presenterState
+  void onAdjustHolotableMiniHp
   const z0 = wingLayout.hallStartZ
   const gameRoomZ = wingLayout.gameRoomCenter[2] // z0 + 15.1
   // Expanded Grand Game Room dimensions: 15.2m wide x 11.2m deep (x in [1.65..16.85], z in [z0+9.5..z0+20.7])
@@ -456,45 +476,123 @@ export function GameRoom3D({
   // =========================================================================
   // CENTERPIECE TABLE: 4 PLAYABLE MODES (RPG / CHECKERS / CHESS / CONNECT-4)
   // =========================================================================
-  const [tableMode, setTableMode] = useState<HolotableGameMode>(
+  const [localTableMode, setLocalTableMode] = useState<HolotableGameMode>(
     holotableState.gameMode ?? 'adventure-rpg',
   )
-  const [rpgRound, setRpgRound] = useState(1)
-  const [rpgCombatLog, setRpgCombatLog] = useState<string[]>([
+  const tableMode: HolotableGameMode = onSetHolotableGameMode
+    ? (holotableState.gameMode ?? 'adventure-rpg')
+    : localTableMode
+
+  const selectTableMode = (nextMode: HolotableGameMode) => {
+    setLocalTableMode(nextMode)
+    onSetHolotableGameMode?.(nextMode)
+  }
+
+  const [localRpgRound, setLocalRpgRound] = useState(1)
+  const [localRpgCombatLog, setLocalRpgCombatLog] = useState<string[]>([
     '⚔️ Round 1: Party enters the Elder Dragon Sanctum!',
     '🛡️ Select any Hero and click Melee Attack, Cast Spell, or Heal!',
   ])
   const [miniHpMap, setMiniHpMap] = useState<Record<string, number>>({})
 
+  const rpgRound = onRollRpgCombatAction
+    ? (holotableState.rpgRound ?? 1)
+    : localRpgRound
+  const rpgCombatLog =
+    onRollRpgCombatAction && holotableState.rpgCombatLog?.length
+      ? holotableState.rpgCombatLog
+      : localRpgCombatLog
+
   // Checkers 8x8 State
-  const [checkersBoard, setCheckersBoard] = useState<number[]>(() =>
+  const [localCheckersBoard, setLocalCheckersBoard] = useState<number[]>(() =>
     createInitialCheckersBoard(),
   )
-  const [checkersTurn, setCheckersTurn] = useState<'red' | 'black'>('red')
-  const [checkersSelected, setCheckersSelected] = useState<number | null>(null)
-  const [checkersWinner, setCheckersWinner] = useState<'red' | 'black' | null>(null)
-  const [checkersBanner, setCheckersBanner] = useState(
+  const [localCheckersTurn, setLocalCheckersTurn] = useState<'red' | 'black'>('red')
+  const [localCheckersSelected, setLocalCheckersSelected] = useState<number | null>(null)
+  const [localCheckersWinner, setLocalCheckersWinner] = useState<
+    'red' | 'black' | 'draw' | null
+  >(null)
+  const [localCheckersBanner, setLocalCheckersBanner] = useState(
     '🔴 RED moves first — click a Red checker, then click a highlighted diagonal square!',
   )
 
+  const checkersBoard = onClickCheckersCell
+    ? (holotableState.checkersBoard ?? localCheckersBoard)
+    : localCheckersBoard
+  const checkersTurn = onClickCheckersCell
+    ? (holotableState.checkersTurn ?? 'red')
+    : localCheckersTurn
+  const checkersSelected = onClickCheckersCell
+    ? (holotableState.checkersSelectedIdx ?? null)
+    : localCheckersSelected
+  const checkersWinner = onClickCheckersCell
+    ? (holotableState.checkersWinner ?? null)
+    : localCheckersWinner
+  const checkersBanner = onClickCheckersCell
+    ? checkersWinner === 'draw'
+      ? '🤝 CHECKERS DRAW — no legal moves remaining! Click Reset Checkers!'
+      : checkersWinner
+        ? `🏆 ${checkersWinner.toUpperCase()} WINS CHECKERS! Click Reset Checkers!`
+        : `${checkersTurn.toUpperCase()}'s turn · ${holotableState.lastActionSummary || 'Select a checker to move!'}`
+    : localCheckersBanner
+
   // Chess 8x8 State
-  const [chessBoard, setChessBoard] = useState<string[]>(() => createInitialChessBoard())
-  const [chessTurn, setChessTurn] = useState<'w' | 'b'>('w')
-  const [chessSelected, setChessSelected] = useState<number | null>(null)
-  const [chessWinner, setChessWinner] = useState<'w' | 'b' | null>(null)
-  const [chessBanner, setChessBanner] = useState(
+  const [localChessBoard, setLocalChessBoard] = useState<string[]>(() =>
+    createInitialChessBoard(),
+  )
+  const [localChessTurn, setLocalChessTurn] = useState<'w' | 'b'>('w')
+  const [localChessSelected, setLocalChessSelected] = useState<number | null>(null)
+  const [localChessWinner, setLocalChessWinner] = useState<'w' | 'b' | null>(null)
+  const [localChessBanner, setLocalChessBanner] = useState(
     '♟️ GOLD (White) moves first — click any Gold piece to highlight legal squares!',
   )
 
+  const chessBoard = onClickChessCell
+    ? (holotableState.chessBoard ?? localChessBoard)
+    : localChessBoard
+  const chessTurn = onClickChessCell
+    ? (holotableState.chessTurn ?? 'w')
+    : localChessTurn
+  const chessSelected = onClickChessCell
+    ? (holotableState.chessSelectedIdx ?? null)
+    : localChessSelected
+  const chessWinner = onClickChessCell
+    ? (holotableState.chessWinner ?? null)
+    : localChessWinner
+  const chessBanner = onClickChessCell
+    ? chessWinner
+      ? `🏆 CHECKMATE! ${chessWinner === 'w' ? 'GOLD' : 'OBSIDIAN'} WINS CHESS!`
+      : `${chessTurn === 'w' ? 'GOLD' : 'OBSIDIAN'}'s turn · ${holotableState.lastActionSummary || 'Click any piece to move!'}`
+    : localChessBanner
+
   // Connect-4 6x7 State
-  const [connect4Grid, setConnect4Grid] = useState<number[]>(() =>
+  const [localConnect4Grid, setLocalConnect4Grid] = useState<number[]>(() =>
     createInitialConnect4Grid(),
   )
-  const [connect4Turn, setConnect4Turn] = useState<1 | 2>(1)
-  const [connect4Winner, setConnect4Winner] = useState<1 | 2 | null>(null)
-  const [connect4Banner, setConnect4Banner] = useState(
+  const [localConnect4Turn, setLocalConnect4Turn] = useState<1 | 2>(1)
+  const [localConnect4Winner, setLocalConnect4Winner] = useState<
+    1 | 2 | 'draw' | null
+  >(null)
+  const [localConnect4Banner, setLocalConnect4Banner] = useState(
     '🟡 GOLD drops first — click any Column 1–7 to drop a disc!',
   )
+
+  const connect4Grid = onDropConnect4Column
+    ? (holotableState.connect4Grid ?? localConnect4Grid)
+    : localConnect4Grid
+  const connect4Turn = onDropConnect4Column
+    ? (holotableState.connect4Turn ?? 1)
+    : localConnect4Turn
+  const connect4Winner = onDropConnect4Column
+    ? (holotableState.connect4Winner ?? null)
+    : localConnect4Winner
+  const connect4Banner = onDropConnect4Column
+    ? connect4Winner === 'draw'
+      ? '🤝 CONNECT-4 FULL-GRID DRAW! Click Reset Connect-4 for a rematch!'
+      : connect4Winner
+        ? `🏆 ${connect4Winner === 1 ? 'GOLD' : 'CYAN'} CONNECTS 4 IN A ROW & WINS!`
+        : `${connect4Turn === 1 ? 'GOLD' : 'CYAN'}'s turn — click any Column 1–7 to drop a disc!`
+    : localConnect4Banner
 
   // =========================================================================
   // PERIMETER ARCADE: 4 LIVE 60FPS CLASSIC CRT ENGINES + 3D HOOPS & SKEE-BALL
@@ -518,6 +616,15 @@ export function GameRoom3D({
     }
     return map
   }, [onRecordArcadeScore])
+
+  // Boot arcade ROMs lazily only when Game Room becomes visible (avoids 4x ROM fetches when in Main Lounge)
+  useEffect(() => {
+    if (!visible) return
+    arcadeEngines['pac-maze'].ensureBooted()
+    arcadeEngines.galaxia.ensureBooted()
+    arcadeEngines.frogger.ensureBooted()
+    arcadeEngines.arkanoid.ensureBooted()
+  }, [arcadeEngines, visible])
 
   // Dispose dynamic arcade cabinet CanvasTextures and jsnes instances on unmount
   useEffect(() => {
@@ -723,6 +830,10 @@ export function GameRoom3D({
   }, [chessBoard, chessSelected, chessTurn])
 
   const handleCheckersSquareClick = (idx: number) => {
+    if (onClickCheckersCell) {
+      onClickCheckersCell(idx)
+      return
+    }
     if (checkersWinner) return
     const piece = checkersBoard[idx] ?? 0
     const isOwn =
@@ -730,8 +841,8 @@ export function GameRoom3D({
       (checkersTurn === 'black' && (piece === 2 || piece === 4))
 
     if (isOwn) {
-      setCheckersSelected(idx)
-      setCheckersBanner(
+      setLocalCheckersSelected(idx)
+      setLocalCheckersBanner(
         `Selected ${checkersTurn.toUpperCase()} checker — click a glowing green target square!`,
       )
       return
@@ -750,31 +861,48 @@ export function GameRoom3D({
 
       const redRemaining = next.some((p) => p === 1 || p === 3)
       const blackRemaining = next.some((p) => p === 2 || p === 4)
-      const win: 'red' | 'black' | null = !blackRemaining
+      const nextTurn = checkersTurn === 'red' ? 'black' : 'red'
+      const sideHasAnyMove = (side: 'red' | 'black'): boolean => {
+        for (let i = 0; i < 64; i++) {
+          const p = next[i]
+          const isSide = side === 'red' ? p === 1 || p === 3 : p === 2 || p === 4
+          if (isSide && getCheckersLegalMoves(next, i, side).length > 0) return true
+        }
+        return false
+      }
+      let win: 'red' | 'black' | 'draw' | null = !blackRemaining
         ? 'red'
         : !redRemaining
           ? 'black'
           : null
-      const nextTurn = checkersTurn === 'red' ? 'black' : 'red'
+      if (!win && !sideHasAnyMove(nextTurn)) {
+        win = sideHasAnyMove(checkersTurn) ? checkersTurn : 'draw'
+      }
 
-      setCheckersBoard(next)
-      setCheckersSelected(null)
-      setCheckersTurn(nextTurn)
-      setCheckersWinner(win)
-      setCheckersBanner(
-        win
-          ? `🏆 ${win.toUpperCase()} WINS CHECKERS! Click Reset Board for a rematch!`
-          : `${checkersTurn.toUpperCase()} moved${jumpedIdx !== null ? ' (JUMP CAPTURE!)' : ''} · ${nextTurn.toUpperCase()}'s turn!`,
+      setLocalCheckersBoard(next)
+      setLocalCheckersSelected(null)
+      setLocalCheckersTurn(nextTurn)
+      setLocalCheckersWinner(win)
+      setLocalCheckersBanner(
+        win === 'draw'
+          ? '🤝 CHECKERS DRAW — no legal moves left! Click Reset Checkers!'
+          : win
+            ? `🏆 ${win.toUpperCase()} WINS CHECKERS! Click Reset Checkers for a rematch!`
+            : `${checkersTurn.toUpperCase()} moved${jumpedIdx !== null ? ' (JUMP CAPTURE!)' : ''} · ${nextTurn.toUpperCase()}'s turn!`,
       )
     }
   }
 
   const handleChessSquareClick = (idx: number) => {
+    if (onClickChessCell) {
+      onClickChessCell(idx)
+      return
+    }
     if (chessWinner) return
     const piece = chessBoard[idx] || ''
     if (piece && piece[0] === chessTurn) {
-      setChessSelected(idx)
-      setChessBanner(
+      setLocalChessSelected(idx)
+      setLocalChessBanner(
         `Selected ${chessTurn === 'w' ? 'Gold' : 'Obsidian'} ${piece[1]} — click a highlighted square to move!`,
       )
       return
@@ -794,11 +922,11 @@ export function GameRoom3D({
         captured === 'bK' ? 'w' : captured === 'wK' ? 'b' : null
       const nextTurn = chessTurn === 'w' ? 'b' : 'w'
 
-      setChessBoard(next)
-      setChessSelected(null)
-      setChessTurn(nextTurn)
-      setChessWinner(win)
-      setChessBanner(
+      setLocalChessBoard(next)
+      setLocalChessSelected(null)
+      setLocalChessTurn(nextTurn)
+      setLocalChessWinner(win)
+      setLocalChessBanner(
         win
           ? `🏆 CHECKMATE! ${win === 'w' ? 'GOLD' : 'OBSIDIAN'} WINS CHESS!`
           : `♟️ Moved ${moving}${captured ? ` (captured ${captured})` : ''} · ${nextTurn === 'w' ? 'GOLD' : 'OBSIDIAN'}'s turn!`,
@@ -807,6 +935,10 @@ export function GameRoom3D({
   }
 
   const handleConnect4Drop = (col: number) => {
+    if (onDropConnect4Column) {
+      onDropConnect4Column(col)
+      return
+    }
     if (connect4Winner || col < 0 || col >= 7) return
     const next = [...connect4Grid]
     let placedRow = -1
@@ -820,17 +952,23 @@ export function GameRoom3D({
     if (placedRow === -1) return
     const win = checkConnect4Winner(next)
     const nextTurn: 1 | 2 = connect4Turn === 1 ? 2 : 1
-    setConnect4Grid(next)
-    setConnect4Turn(nextTurn)
-    setConnect4Winner(win)
-    setConnect4Banner(
-      win
-        ? `🏆 ${win === 1 ? 'GOLD' : 'CYAN'} CONNECTS 4 IN A ROW & WINS!`
-        : `Dropped ${connect4Turn === 1 ? 'GOLD' : 'CYAN'} disc in Col ${col + 1} · ${nextTurn === 1 ? 'GOLD' : 'CYAN'}'s turn!`,
+    setLocalConnect4Grid(next)
+    setLocalConnect4Turn(nextTurn)
+    setLocalConnect4Winner(win)
+    setLocalConnect4Banner(
+      win === 'draw'
+        ? '🤝 CONNECT-4 FULL-GRID DRAW! Click Reset Connect-4 for a rematch!'
+        : win
+          ? `🏆 ${win === 1 ? 'GOLD' : 'CYAN'} CONNECTS 4 IN A ROW & WINS!`
+          : `Dropped ${connect4Turn === 1 ? 'GOLD' : 'CYAN'} disc in Col ${col + 1} · ${nextTurn === 1 ? 'GOLD' : 'CYAN'}'s turn!`,
     )
   }
 
   const handleRpgAction = (kind: 'melee' | 'spell' | 'heal') => {
+    if (onRollRpgCombatAction) {
+      onRollRpgCombatAction(kind)
+      return
+    }
     const d20 = Math.floor(Math.random() * 20) + 1
     const dmg =
       kind === 'melee'
@@ -850,7 +988,7 @@ export function GameRoom3D({
         const cur = prev[selectedMini.id] ?? selectedMini.hp ?? max
         return { ...prev, [selectedMini.id]: Math.min(max, cur + dmg) }
       })
-      setRpgCombatLog((prev) => [
+      setLocalRpgCombatLog((prev) => [
         `✨ ${actor} cast Divine Heal (+${dmg} HP)!`,
         ...prev.slice(0, 4),
       ])
@@ -869,8 +1007,8 @@ export function GameRoom3D({
           : hit
             ? `⚔️ ${actor} rolled D20(${d20}) HIT ${boss.label} for ${dmg} DMG!`
             : `🛡️ ${actor} rolled D20(${d20}) — ${boss.label} parried!`
-      setRpgCombatLog((prev) => [line, ...prev.slice(0, 4)])
-      setRpgRound((r) => r + 1)
+      setLocalRpgCombatLog((prev) => [line, ...prev.slice(0, 4)])
+      setLocalRpgRound((r) => r + 1)
     }
   }
 
@@ -1559,7 +1697,7 @@ export function GameRoom3D({
             fontSize={0.025}
             active={tableMode === 'adventure-rpg'}
             accent="#F59E0B"
-            onClick={() => setTableMode('adventure-rpg')}
+            onClick={() => selectTableMode('adventure-rpg')}
           />
           <HoloButton3D
             name="btn-holo-mode-checkers"
@@ -1570,7 +1708,7 @@ export function GameRoom3D({
             fontSize={0.025}
             active={tableMode === 'checkers'}
             accent="#EF4444"
-            onClick={() => setTableMode('checkers')}
+            onClick={() => selectTableMode('checkers')}
           />
           <HoloButton3D
             name="btn-holo-mode-chess"
@@ -1581,7 +1719,7 @@ export function GameRoom3D({
             fontSize={0.025}
             active={tableMode === 'chess'}
             accent="#38BDF8"
-            onClick={() => setTableMode('chess')}
+            onClick={() => selectTableMode('chess')}
           />
           <HoloButton3D
             name="btn-holo-mode-connect4"
@@ -1592,7 +1730,7 @@ export function GameRoom3D({
             fontSize={0.025}
             active={tableMode === 'connect4'}
             accent="#EAB308"
-            onClick={() => setTableMode('connect4')}
+            onClick={() => selectTableMode('connect4')}
           />
         </group>
 
@@ -1732,7 +1870,7 @@ export function GameRoom3D({
               <MiniatureMesh3D
                 key={mini.id}
                 mini={mini}
-                hpOverride={miniHpMap[mini.id]}
+                hpOverride={onRollRpgCombatAction ? undefined : miniHpMap[mini.id]}
                 isSelected={selectedMini?.id === mini.id}
                 onSelect={() => onSelectHolotableMini(mini.id)}
               />
@@ -1849,11 +1987,15 @@ export function GameRoom3D({
                 fontSize={0.026}
                 accent="#EF4444"
                 onClick={() => {
-                  setCheckersBoard(createInitialCheckersBoard())
-                  setCheckersTurn('red')
-                  setCheckersSelected(null)
-                  setCheckersWinner(null)
-                  setCheckersBanner('Fresh Checkers match — RED moves first!')
+                  if (onResetCheckersBoard) {
+                    onResetCheckersBoard()
+                    return
+                  }
+                  setLocalCheckersBoard(createInitialCheckersBoard())
+                  setLocalCheckersTurn('red')
+                  setLocalCheckersSelected(null)
+                  setLocalCheckersWinner(null)
+                  setLocalCheckersBanner('Fresh Checkers match — RED moves first!')
                 }}
               />
             </group>
@@ -1944,11 +2086,15 @@ export function GameRoom3D({
                 fontSize={0.026}
                 accent="#38BDF8"
                 onClick={() => {
-                  setChessBoard(createInitialChessBoard())
-                  setChessTurn('w')
-                  setChessSelected(null)
-                  setChessWinner(null)
-                  setChessBanner('Fresh Chess match — GOLD (White) moves first!')
+                  if (onResetChessBoard) {
+                    onResetChessBoard()
+                    return
+                  }
+                  setLocalChessBoard(createInitialChessBoard())
+                  setLocalChessTurn('w')
+                  setLocalChessSelected(null)
+                  setLocalChessWinner(null)
+                  setLocalChessBanner('Fresh Chess match — GOLD (White) moves first!')
                 }}
               />
             </group>
@@ -2026,10 +2172,14 @@ export function GameRoom3D({
                 fontSize={0.025}
                 accent="#FACC15"
                 onClick={() => {
-                  setConnect4Grid(createInitialConnect4Grid())
-                  setConnect4Turn(1)
-                  setConnect4Winner(null)
-                  setConnect4Banner('Fresh Connect-4 match — GOLD drops first!')
+                  if (onResetConnect4Grid) {
+                    onResetConnect4Grid()
+                    return
+                  }
+                  setLocalConnect4Grid(createInitialConnect4Grid())
+                  setLocalConnect4Turn(1)
+                  setLocalConnect4Winner(null)
+                  setLocalConnect4Banner('Fresh Connect-4 match — GOLD drops first!')
                 }}
               />
             </group>
@@ -2073,7 +2223,7 @@ export function GameRoom3D({
                   fontSize={0.022}
                   accent={sp.color}
                   onClick={() => {
-                    setTableMode('adventure-rpg')
+                    selectTableMode('adventure-rpg')
                     onSpawnHolotableMini(sp.kind, sp.label.replace('+', ''), sp.color)
                   }}
                 />
@@ -2225,7 +2375,7 @@ export function GameRoom3D({
                   active={holotableState.terrain === t.id}
                   accent={t.accentColor}
                   onClick={() => {
-                    setTableMode('adventure-rpg')
+                    selectTableMode('adventure-rpg')
                     onSetHolotableTerrain(t.id)
                   }}
                 />

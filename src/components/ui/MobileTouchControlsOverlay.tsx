@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getShareableMobileUrl } from '../../services/mobileMode'
 import type { LoungeWingId } from '../../types/lounge'
 
@@ -80,6 +80,32 @@ export function MobileTouchControlsOverlay({
     touchInputRef.current.moveX = 0
     touchInputRef.current.moveY = 0
   }
+
+  useEffect(() => {
+    if (!flyMode) {
+      touchInputRef.current.vertY = 0
+    }
+  }, [flyMode, touchInputRef])
+
+  useEffect(() => {
+    const touchRef = touchInputRef
+    const clearAllTouchInputs = () => {
+      activePointerIdRef.current = null
+      setKnobOffset({ x: 0, y: 0 })
+      touchRef.current.moveX = 0
+      touchRef.current.moveY = 0
+      touchRef.current.vertY = 0
+    }
+    window.addEventListener('blur', clearAllTouchInputs)
+    document.addEventListener('visibilitychange', clearAllTouchInputs)
+    return () => {
+      window.removeEventListener('blur', clearAllTouchInputs)
+      document.removeEventListener('visibilitychange', clearAllTouchInputs)
+      touchRef.current.moveX = 0
+      touchRef.current.moveY = 0
+      touchRef.current.vertY = 0
+    }
+  }, [touchInputRef])
 
   const handleCopyMobileLink = () => {
     const url = getShareableMobileUrl()
@@ -171,7 +197,11 @@ export function MobileTouchControlsOverlay({
             ref={stickBaseRef}
             onPointerDown={(e) => {
               e.stopPropagation()
-              e.currentTarget.setPointerCapture(e.pointerId)
+              try {
+                e.currentTarget.setPointerCapture(e.pointerId)
+              } catch {
+                // Ignore synthetic pointer events
+              }
               activePointerIdRef.current = e.pointerId
               updateStickFromPoint(e.clientX, e.clientY)
             }}
@@ -179,8 +209,24 @@ export function MobileTouchControlsOverlay({
               if (activePointerIdRef.current !== e.pointerId) return
               updateStickFromPoint(e.clientX, e.clientY)
             }}
-            onPointerUp={resetStick}
-            onPointerCancel={resetStick}
+            onPointerUp={(e) => {
+              if (activePointerIdRef.current !== null && activePointerIdRef.current !== e.pointerId) {
+                return
+              }
+              resetStick()
+            }}
+            onPointerCancel={(e) => {
+              if (activePointerIdRef.current !== null && activePointerIdRef.current !== e.pointerId) {
+                return
+              }
+              resetStick()
+            }}
+            onLostPointerCapture={(e) => {
+              if (activePointerIdRef.current !== null && activePointerIdRef.current !== e.pointerId) {
+                return
+              }
+              resetStick()
+            }}
             style={{ touchAction: 'none' }}
             className="relative flex h-28 w-28 items-center justify-center rounded-full border border-white/15 bg-slate-900/80 shadow-2xl backdrop-blur-xl"
           >

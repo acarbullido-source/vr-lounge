@@ -40,7 +40,11 @@ export interface PuttingGreen3DProps {
   ) => void
   onSettlePuttShot: (packet: PuttShotSettlePacket) => void
   onJoinPutting: () => void
-  onConfigurePutting: (patch: { mode?: PuttingGameMode; rampEnabled?: boolean }) => void
+  onConfigurePutting: (patch: {
+    mode?: PuttingGameMode
+    rampEnabled?: boolean
+    courseHole?: PuttingCourseHoleId
+  }) => void
   onResetBallToTee: () => void
   onResetPutting: () => void
 }
@@ -236,7 +240,9 @@ export function PuttingGreen3D({
     }
   }, [rampGeometry])
 
-  const [courseHole, setCourseHole] = useState<PuttingCourseHoleId>('straight')
+  const [courseHole, setCourseHole] = useState<PuttingCourseHoleId>(
+    puttingState.courseHole ?? 'straight',
+  )
   const [aimAngleDeg, setAimAngleDeg] = useState<number>(0)
   const [puttPowerPct, setPuttPowerPct] = useState<number>(58)
   const [swingMeterActive, setSwingMeterActive] = useState<boolean>(false)
@@ -254,6 +260,7 @@ export function PuttingGreen3D({
   const vrPutterGroupRef = useRef<THREE.Group>(null)
   const isHoldingVrPutterRef = useRef(false)
   const simRef = useRef<ActivePuttSim | null>(null)
+  const simStartedAtMsRef = useRef<number>(0)
   const activeShotIdRef = useRef<string | null>(null)
   const settledShotIdRef = useRef<string | null>(null)
   const prevBladeLocalRef = useRef<{ x: number; z: number; t: number }>({
@@ -263,6 +270,28 @@ export function PuttingGreen3D({
   })
   const hasPrevBladeSampleRef = useRef(false)
   const lastVrStrikeAtRef = useRef<number>(0)
+
+  useEffect(() => {
+    const syncedHole = puttingState.courseHole ?? 'straight'
+    setCourseHole((prev) => (prev === syncedHole ? prev : syncedHole))
+  }, [puttingState.courseHole])
+
+  useEffect(() => {
+    if (!isDraggingPutt) return
+    const clearDrag = () => {
+      setIsDraggingPutt(false)
+      setDragAimLocal(null)
+      dragStartLocalRef.current = null
+    }
+    window.addEventListener('pointerup', clearDrag)
+    window.addEventListener('pointercancel', clearDrag)
+    window.addEventListener('blur', clearDrag)
+    return () => {
+      window.removeEventListener('pointerup', clearDrag)
+      window.removeEventListener('pointercancel', clearDrag)
+      window.removeEventListener('blur', clearDrag)
+    }
+  }, [isDraggingPutt])
 
   // Pre-allocated scratch math vectors/quaternions (zero per-frame heap allocations)
   const scratchHeadWorld = useMemo(() => new THREE.Vector3(), [])
@@ -292,11 +321,14 @@ export function PuttingGreen3D({
     if (!activePuttShot) return
     if (activeShotIdRef.current === activePuttShot.shotId) return
     activeShotIdRef.current = activePuttShot.shotId
+    simStartedAtMsRef.current = performance.now()
+    const shotHole: PuttingCourseHoleId = activePuttShot.courseHole ?? courseHole
+    const shotRamp = activePuttShot.rampEnabled || shotHole === 'bunker-island'
     const { height } = getPuttingSurfaceHeight(
       activePuttShot.localOrigin[1],
-      activePuttShot.rampEnabled || courseHole === 'bunker-island',
+      shotRamp,
       activePuttShot.localOrigin[0],
-      courseHole,
+      shotHole,
     )
     simRef.current = {
       localPos: [
@@ -324,12 +356,13 @@ export function PuttingGreen3D({
 
     const sim = simRef.current
     if (sim && activePuttShot && !sim.settled) {
-      stepPuttingBallCCD(
-        sim,
-        delta,
-        activePuttShot.rampEnabled || courseHole === 'bunker-island',
-        courseHole,
-      )
+      const shotHole: PuttingCourseHoleId = activePuttShot.courseHole ?? courseHole
+      const shotRamp = activePuttShot.rampEnabled || shotHole === 'bunker-island'
+      stepPuttingBallCCD(sim, delta, shotRamp, shotHole)
+      if (!sim.settled && performance.now() - simStartedAtMsRef.current >= 5800) {
+        sim.localVel = [0, 0]
+        sim.settled = true
+      }
       if (ballMeshRef.current) {
         ballMeshRef.current.position.set(
           sim.localPos[0],
@@ -358,7 +391,8 @@ export function PuttingGreen3D({
             lipOut: sim.lipOut,
             restLocalPos: sim.localPos,
             distanceMeters: Number(dist.toFixed(2)),
-            rampEnabled: activePuttShot.rampEnabled || courseHole === 'bunker-island',
+            rampEnabled: shotRamp,
+            courseHole: shotHole,
             timestamp: Date.now(),
           })
         }
@@ -869,6 +903,7 @@ export function PuttingGreen3D({
             onClick={() => {
               setCourseHole('straight')
               setAimAngleDeg(0)
+              onConfigurePutting({ courseHole: 'straight' })
             }}
           />
           <MiniSignButton
@@ -880,6 +915,7 @@ export function PuttingGreen3D({
             onClick={() => {
               setCourseHole('breaking-ridge')
               setAimAngleDeg(6.5)
+              onConfigurePutting({ courseHole: 'breaking-ridge' })
             }}
           />
           <MiniSignButton
@@ -892,6 +928,7 @@ export function PuttingGreen3D({
               setCourseHole('bunker-island')
               setAimAngleDeg(0)
               setPuttPowerPct(68)
+              onConfigurePutting({ courseHole: 'bunker-island' })
             }}
           />
           {/* Aim & Power Adjusters */}

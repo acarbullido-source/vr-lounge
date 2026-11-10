@@ -2256,8 +2256,10 @@ export function CompanionOverlay({
                         onPointerLeave={() =>
                           getNesEmulator().setButtonState(btnId as NesButtonId, false)
                         }
-                        onClick={() => getNesEmulator().tapButton(btnId as NesButtonId)}
-                        className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-600 bg-slate-800 text-xs font-bold text-slate-100 hover:bg-slate-700 active:scale-95"
+                        onPointerCancel={() =>
+                          getNesEmulator().setButtonState(btnId as NesButtonId, false)
+                        }
+                        className="flex h-7 w-7 touch-none select-none items-center justify-center rounded-md border border-slate-600 bg-slate-800 text-xs font-bold text-slate-100 hover:bg-slate-700 active:scale-95"
                       >
                         {label}
                       </button>
@@ -2271,8 +2273,10 @@ export function CompanionOverlay({
                       onPointerLeave={() =>
                         getNesEmulator().setButtonState('select', false)
                       }
-                      onClick={() => getNesEmulator().tapButton('select')}
-                      className="rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-[10px] font-bold text-slate-200 hover:bg-slate-700"
+                      onPointerCancel={() =>
+                        getNesEmulator().setButtonState('select', false)
+                      }
+                      className="touch-none select-none rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-[10px] font-bold text-slate-200 hover:bg-slate-700"
                     >
                       SEL
                     </button>
@@ -2283,8 +2287,10 @@ export function CompanionOverlay({
                       onPointerLeave={() =>
                         getNesEmulator().setButtonState('start', false)
                       }
-                      onClick={() => getNesEmulator().tapButton('start')}
-                      className="rounded-md border border-amber-400 bg-amber-500/20 px-2 py-1 text-[10px] font-extrabold text-amber-300 hover:bg-amber-500/35"
+                      onPointerCancel={() =>
+                        getNesEmulator().setButtonState('start', false)
+                      }
+                      className="touch-none select-none rounded-md border border-amber-400 bg-amber-500/20 px-2 py-1 text-[10px] font-extrabold text-amber-300 hover:bg-amber-500/35"
                     >
                       START
                     </button>
@@ -2295,8 +2301,8 @@ export function CompanionOverlay({
                       onPointerDown={() => getNesEmulator().setButtonState('b', true)}
                       onPointerUp={() => getNesEmulator().setButtonState('b', false)}
                       onPointerLeave={() => getNesEmulator().setButtonState('b', false)}
-                      onClick={() => getNesEmulator().tapButton('b')}
-                      className="flex h-7 w-7 items-center justify-center rounded-full border border-red-300 bg-red-600 text-xs font-extrabold text-white shadow hover:bg-red-500 active:scale-95"
+                      onPointerCancel={() => getNesEmulator().setButtonState('b', false)}
+                      className="flex h-7 w-7 touch-none select-none items-center justify-center rounded-full border border-red-300 bg-red-600 text-xs font-extrabold text-white shadow hover:bg-red-500 active:scale-95"
                     >
                       B
                     </button>
@@ -2305,8 +2311,8 @@ export function CompanionOverlay({
                       onPointerDown={() => getNesEmulator().setButtonState('a', true)}
                       onPointerUp={() => getNesEmulator().setButtonState('a', false)}
                       onPointerLeave={() => getNesEmulator().setButtonState('a', false)}
-                      onClick={() => getNesEmulator().tapButton('a')}
-                      className="flex h-7 w-7 items-center justify-center rounded-full border border-red-300 bg-red-600 text-xs font-extrabold text-white shadow hover:bg-red-500 active:scale-95"
+                      onPointerCancel={() => getNesEmulator().setButtonState('a', false)}
+                      className="flex h-7 w-7 touch-none select-none items-center justify-center rounded-full border border-red-300 bg-red-600 text-xs font-extrabold text-white shadow hover:bg-red-500 active:scale-95"
                     >
                       A
                     </button>

@@ -17,11 +17,50 @@ export const HALLWAY_HEIGHT = 3.8
 export const BOARDROOM_WHITEBOARD_STORAGE_KEY =
   'vr-lounge:boardroom-whiteboard:v1'
 
+export const MAX_WHITEBOARD_TOTAL_COORDS = 12_000
+
+function getBoardroomWhiteboardStorageKey(roomCode?: string): string {
+  const normalized = roomCode?.trim().toUpperCase()
+  return normalized
+    ? `${BOARDROOM_WHITEBOARD_STORAGE_KEY}:${normalized}`
+    : BOARDROOM_WHITEBOARD_STORAGE_KEY
+}
+
 export interface PersistedBoardroomWhiteboardSnapshot {
   strokes: BoardroomWhiteboardStroke[]
   grid: boolean
   clearedAt: number
   updatedAt: number
+}
+
+function decimateStrokeUvCoords(coords: number[]): number[] {
+  if (coords.length <= 6) return coords
+  const out: number[] = [coords[0], coords[1]]
+  for (let i = 2; i + 3 < coords.length; i += 2) {
+    const ax = out[out.length - 2]
+    const ay = out[out.length - 1]
+    const bx = coords[i]
+    const by = coords[i + 1]
+    const cx = coords[i + 2]
+    const cy = coords[i + 3]
+    const dx1 = bx - ax
+    const dy1 = by - ay
+    if (dx1 * dx1 + dy1 * dy1 < 0.0000015) {
+      continue
+    }
+    const dx2 = cx - ax
+    const dy2 = cy - ay
+    const segLen = Math.hypot(dx2, dy2)
+    if (segLen > 0.0001) {
+      const perpDist = Math.abs(dx1 * dy2 - dy1 * dx2) / segLen
+      if (perpDist < 0.00025 && dx1 * dx2 + dy1 * dy2 >= 0) {
+        continue
+      }
+    }
+    out.push(bx, by)
+  }
+  out.push(coords[coords.length - 2], coords[coords.length - 1])
+  return out
 }
 
 export function sanitizeBoardroomWhiteboardStrokes(
@@ -33,17 +72,18 @@ export function sanitizeBoardroomWhiteboardStrokes(
     if (!item || typeof item !== 'object') continue
     const candidate = item as Partial<BoardroomWhiteboardStroke>
     if (!Array.isArray(candidate.points) || candidate.points.length < 2) continue
-    const cleanPoints: number[] = []
-    const maxCoords = Math.min(candidate.points.length, 640)
+    const rawCoords: number[] = []
+    const maxCoords = Math.min(candidate.points.length, 480)
     for (let i = 0; i + 1 < maxCoords; i += 2) {
       const u = Number(candidate.points[i])
       const v = Number(candidate.points[i + 1])
       if (!Number.isFinite(u) || !Number.isFinite(v)) continue
-      cleanPoints.push(
-        Number(Math.max(0, Math.min(1, u)).toFixed(4)),
-        Number(Math.max(0, Math.min(1, v)).toFixed(4)),
+      rawCoords.push(
+        Number(Math.max(0, Math.min(1, u)).toFixed(3)),
+        Number(Math.max(0, Math.min(1, v)).toFixed(3)),
       )
     }
+    const cleanPoints = decimateStrokeUvCoords(rawCoords)
     if (cleanPoints.length < 2) continue
     const tool = candidate.tool === 'eraser' ? 'eraser' : 'pen'
     const size: 1 | 2 | 3 =
@@ -73,13 +113,32 @@ export function sanitizeBoardroomWhiteboardStrokes(
           : Date.now(),
     })
   }
-  return sanitized
+
+  // Enforce a hard total coordinate budget so Realtime WebSocket broadcasts never drop oversized packets
+  let totalCoords = 0
+  const budgetedReversed: BoardroomWhiteboardStroke[] = []
+  for (let idx = sanitized.length - 1; idx >= 0; idx--) {
+    const stroke = sanitized[idx]
+    if (
+      budgetedReversed.length > 0 &&
+      totalCoords + stroke.points.length > MAX_WHITEBOARD_TOTAL_COORDS
+    ) {
+      break
+    }
+    totalCoords += stroke.points.length
+    budgetedReversed.push(stroke)
+  }
+  budgetedReversed.reverse()
+  return budgetedReversed
 }
 
-export function loadPersistedBoardroomWhiteboard(): PersistedBoardroomWhiteboardSnapshot | null {
+export function loadPersistedBoardroomWhiteboard(
+  roomCode?: string,
+): PersistedBoardroomWhiteboardSnapshot | null {
   if (typeof window === 'undefined' || !window.localStorage) return null
   try {
-    const raw = window.localStorage.getItem(BOARDROOM_WHITEBOARD_STORAGE_KEY)
+    const storageKey = getBoardroomWhiteboardStorageKey(roomCode)
+    const raw = window.localStorage.getItem(storageKey)
     if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<PersistedBoardroomWhiteboardSnapshot>
     if (!parsed || typeof parsed !== 'object') return null
@@ -102,11 +161,13 @@ export function loadPersistedBoardroomWhiteboard(): PersistedBoardroomWhiteboard
 
 export function savePersistedBoardroomWhiteboard(
   snapshot: PersistedBoardroomWhiteboardSnapshot,
+  roomCode?: string,
 ): void {
   if (typeof window === 'undefined' || !window.localStorage) return
   try {
+    const storageKey = getBoardroomWhiteboardStorageKey(roomCode)
     window.localStorage.setItem(
-      BOARDROOM_WHITEBOARD_STORAGE_KEY,
+      storageKey,
       JSON.stringify({
         strokes: sanitizeBoardroomWhiteboardStrokes(snapshot.strokes),
         grid: snapshot.grid,
@@ -139,8 +200,9 @@ export const DEFAULT_EXPANSION_WING_STATE: ExpansionWingSyncedState = {
 
 export function resolveExpansionWingState(
   raw?: Partial<ExpansionWingSyncedState> | null,
+  roomCode?: string,
 ): ExpansionWingSyncedState {
-  const localWb = loadPersistedBoardroomWhiteboard()
+  const localWb = loadPersistedBoardroomWhiteboard(roomCode)
   if (!raw || typeof raw !== 'object') {
     return {
       ...DEFAULT_EXPANSION_WING_STATE,
@@ -192,12 +254,15 @@ export function resolveExpansionWingState(
       (max, s) => Math.max(max, s.createdAt),
       0,
     )
-    savePersistedBoardroomWhiteboard({
-      strokes: rawStrokes,
-      grid: rawGrid,
-      clearedAt: rawClearedAt,
-      updatedAt: Math.max(Date.now(), latestStrokeTime, rawClearedAt),
-    })
+    savePersistedBoardroomWhiteboard(
+      {
+        strokes: rawStrokes,
+        grid: rawGrid,
+        clearedAt: rawClearedAt,
+        updatedAt: Math.max(Date.now(), latestStrokeTime, rawClearedAt),
+      },
+      roomCode,
+    )
   }
 
   const libraryFireLit =

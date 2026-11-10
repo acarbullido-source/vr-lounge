@@ -80,8 +80,8 @@ interface PresenceRecord {
   lastSeen: number
 }
 
-const PRESENCE_TTL_MS = 8500
-const PRESENCE_HEARTBEAT_MS = 2500
+const PRESENCE_TTL_MS = 75_000
+const PRESENCE_HEARTBEAT_MS = 2400
 
 const PUBLIC_WSS_BROKERS = [
   'wss://broker.emqx.io:8084/mqtt',
@@ -172,11 +172,14 @@ export class RoomRealtimeService {
   private pendingRetainedNesVault: RetainedNesVaultPayload | null = null
   private pendingRetainedProfiles: RetainedProfilesVaultPayload | null = null
   private localChannel: BroadcastChannel | null = null
-  private heartbeatTimer: number | null = null
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private heartbeatWorker: Worker | null = null
+  private heartbeatWorkerUrl: string | null = null
+  private lifecycleAttached = false
   private presenceMap = new Map<string, PresenceRecord>()
   private seenPacketIds = new Set<string>()
   private lastAnnounceReplyByPeer = new Map<string, number>()
-  private supabaseReconnectTimer: number | null = null
+  private supabaseReconnectTimer: ReturnType<typeof setTimeout> | null = null
   private supabaseFailCount = 0
   private destroyed = false
 
@@ -190,6 +193,123 @@ export class RoomRealtimeService {
     this.currentProfile = profile
     this.callbacks = callbacks
     this.mode = hasSupabaseCredentials() ? 'supabase' : 'cloud-relay'
+  }
+
+  private runHeartbeatTick = (): void => {
+    if (this.destroyed) return
+    this.presenceMap.set(this.localUserId, {
+      profile: this.currentProfile,
+      lastSeen: Date.now(),
+    })
+    void this.publishEncrypted('presence-announce', this.currentProfile)
+    this.emitPresenceRoster()
+  }
+
+  private startHeartbeatLoop(): void {
+    this.stopHeartbeatLoop()
+    if (
+      typeof Worker !== 'undefined' &&
+      typeof Blob !== 'undefined' &&
+      typeof URL !== 'undefined' &&
+      typeof URL.createObjectURL === 'function'
+    ) {
+      try {
+        const script = `setInterval(function(){postMessage(1)},${PRESENCE_HEARTBEAT_MS});`
+        const blob = new Blob([script], { type: 'text/javascript' })
+        const url = URL.createObjectURL(blob)
+        const worker = new Worker(url)
+        worker.onmessage = () => this.runHeartbeatTick()
+        worker.onerror = () => {
+          this.stopHeartbeatLoop()
+          if (!this.destroyed && this.heartbeatTimer === null) {
+            this.heartbeatTimer = setInterval(this.runHeartbeatTick, PRESENCE_HEARTBEAT_MS)
+          }
+        }
+        this.heartbeatWorker = worker
+        this.heartbeatWorkerUrl = url
+        return
+      } catch {
+        // Fall back to standard timer if Blob Workers are restricted by CSP
+      }
+    }
+    this.heartbeatTimer = setInterval(this.runHeartbeatTick, PRESENCE_HEARTBEAT_MS)
+  }
+
+  private stopHeartbeatLoop(): void {
+    if (this.heartbeatWorker) {
+      try {
+        this.heartbeatWorker.terminate()
+      } catch {
+        // Ignore worker termination error
+      }
+      this.heartbeatWorker = null
+    }
+    if (this.heartbeatWorkerUrl && typeof URL !== 'undefined' && URL.revokeObjectURL) {
+      try {
+        URL.revokeObjectURL(this.heartbeatWorkerUrl)
+      } catch {
+        // Ignore URL revoke error
+      }
+      this.heartbeatWorkerUrl = null
+    }
+    if (this.heartbeatTimer !== null) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = null
+    }
+  }
+
+  private attachLifecycleListeners(): void {
+    if (this.lifecycleAttached || typeof window === 'undefined') return
+    this.lifecycleAttached = true
+    window.addEventListener('beforeunload', this.handleWindowUnload)
+    window.addEventListener('pagehide', this.handleWindowUnload)
+    window.addEventListener('online', this.handleNetworkOrVisibilityWake)
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this.handleVisibilityChange)
+    }
+  }
+
+  private detachLifecycleListeners(): void {
+    if (!this.lifecycleAttached || typeof window === 'undefined') return
+    this.lifecycleAttached = false
+    window.removeEventListener('beforeunload', this.handleWindowUnload)
+    window.removeEventListener('pagehide', this.handleWindowUnload)
+    window.removeEventListener('online', this.handleNetworkOrVisibilityWake)
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.handleVisibilityChange)
+    }
+  }
+
+  private handleVisibilityChange = (): void => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+      this.handleNetworkOrVisibilityWake()
+    }
+  }
+
+  private handleNetworkOrVisibilityWake = (): void => {
+    if (this.destroyed || !this.masterKeyHex || !this.topicToken) return
+    this.runHeartbeatTick()
+    this.requestRoomState()
+
+    if (this.mode === 'supabase') {
+      const chState = (this.supabaseChannel as unknown as { state?: string } | null)?.state
+      if (!this.supabaseChannel || chState === 'closed' || chState === 'errored') {
+        const client = getSupabaseClient()
+        if (this.supabaseChannel && client) {
+          void client.removeChannel(this.supabaseChannel).catch(() => undefined)
+          this.supabaseChannel = null
+        }
+        void this.connectSupabase()
+      }
+    }
+
+    if (this.mqttClient && !this.mqttClient.connected) {
+      try {
+        this.mqttClient.reconnect()
+      } catch {
+        // Ignore reconnect error; mqtt client manages its own backoff
+      }
+    }
   }
 
   async connect(): Promise<void> {
@@ -222,6 +342,8 @@ export class RoomRealtimeService {
     this.mqttRetainedClubhouseTopic = `vrlounge/v2/enc/${this.topicToken}/retained-clubhouse`
     this.mqttRetainedNesVaultTopic = `vrlounge/v2/enc/${this.topicToken}/retained-nes-saves`
     this.mqttRetainedProfilesTopic = `vrlounge/v2/enc/${this.topicToken}/retained-profiles`
+
+    this.attachLifecycleListeners()
 
     if (this.mode === 'supabase') {
       void this.connectMqttBroker(0, true)
@@ -322,27 +444,19 @@ export class RoomRealtimeService {
         subscribedOnce = true
         this.supabaseFailCount = 0
         if (this.supabaseReconnectTimer !== null) {
-          window.clearTimeout(this.supabaseReconnectTimer)
+          clearTimeout(this.supabaseReconnectTimer)
           this.supabaseReconnectTimer = null
         }
         this.callbacks.onConnectionStatus?.(true)
-        this.publishEncrypted('presence-announce', this.currentProfile)
+        void this.publishEncrypted('presence-announce', this.currentProfile)
         this.requestRoomState()
-
-        if (this.heartbeatTimer === null) {
-          this.heartbeatTimer = window.setInterval(() => {
-            if (this.destroyed) return
-            this.presenceMap.set(this.localUserId, {
-              profile: this.currentProfile,
-              lastSeen: Date.now(),
-            })
-            this.publishEncrypted('presence-announce', this.currentProfile)
-            this.emitPresenceRoster()
-          }, PRESENCE_HEARTBEAT_MS)
+        this.startHeartbeatLoop()
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        if (status !== 'CLOSED') {
+          this.supabaseFailCount += 1
         }
-      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-        this.supabaseFailCount += 1
         if (
+          status !== 'CLOSED' &&
           (!subscribedOnce || this.supabaseFailCount >= 2) &&
           this.supabaseChannel === channel
         ) {
@@ -352,20 +466,19 @@ export class RoomRealtimeService {
           this.connectCloudRelayAndLocal()
           return
         }
+        if (this.supabaseChannel !== channel) return
         this.callbacks.onConnectionStatus?.(false)
         if (this.supabaseReconnectTimer === null && !this.destroyed) {
-          this.supabaseReconnectTimer = window.setTimeout(() => {
+          this.supabaseReconnectTimer = setTimeout(() => {
             this.supabaseReconnectTimer = null
             if (this.destroyed || this.mode !== 'supabase') return
-            if (this.supabaseChannel) {
-              void client.removeChannel(this.supabaseChannel).catch(() => undefined)
+            if (this.supabaseChannel === channel) {
+              void client.removeChannel(channel).catch(() => undefined)
               this.supabaseChannel = null
             }
             void this.connectSupabase()
-          }, 2500)
+          }, 2000)
         }
-      } else if (status === 'CLOSED') {
-        this.callbacks.onConnectionStatus?.(false)
       }
     })
   }
@@ -398,25 +511,9 @@ export class RoomRealtimeService {
     // 2. Global TLS WebSocket Relay (MQTT over WSS) on unguessable HMAC topic
     void this.connectMqttBroker(0, false)
 
-    this.publishEncrypted('presence-announce', this.currentProfile)
+    void this.publishEncrypted('presence-announce', this.currentProfile)
     this.requestRoomState()
-
-    if (this.heartbeatTimer !== null) {
-      window.clearInterval(this.heartbeatTimer)
-    }
-    this.heartbeatTimer = window.setInterval(() => {
-      if (this.destroyed) return
-      this.presenceMap.set(this.localUserId, {
-        profile: this.currentProfile,
-        lastSeen: Date.now(),
-      })
-      this.publishEncrypted('presence-announce', this.currentProfile)
-      this.emitPresenceRoster()
-    }, PRESENCE_HEARTBEAT_MS)
-
-    if (typeof window !== 'undefined') {
-      window.addEventListener('beforeunload', this.handleWindowUnload)
-    }
+    this.startHeartbeatLoop()
   }
 
   private async connectMqttBroker(
@@ -614,6 +711,13 @@ export class RoomRealtimeService {
       return
     }
 
+    if (env.type !== 'presence-leave') {
+      const existingPeer = this.presenceMap.get(env.senderId)
+      if (existingPeer) {
+        existingPeer.lastSeen = Date.now()
+      }
+    }
+
     switch (env.type) {
       case 'presence-announce': {
         const profile = env.payload as ParticipantProfile
@@ -634,7 +738,7 @@ export class RoomRealtimeService {
         const lastReplyToPeer = this.lastAnnounceReplyByPeer.get(verifiedProfile.userId) ?? 0
         if (isBrandNewPeer || now - lastReplyToPeer > 3500) {
           this.lastAnnounceReplyByPeer.set(verifiedProfile.userId, now)
-          this.publishEncrypted('presence-announce', this.currentProfile)
+          void this.publishEncrypted('presence-announce', this.currentProfile)
         }
         break
       }
@@ -679,7 +783,7 @@ export class RoomRealtimeService {
           // Immediately announce our presence so a joining or refreshing peer discovers
           // all active members without waiting for the periodic presence heartbeat.
           this.lastAnnounceReplyByPeer.set(req.requesterId, Date.now())
-          this.publishEncrypted('presence-announce', this.currentProfile)
+          void this.publishEncrypted('presence-announce', this.currentProfile)
           this.callbacks.onRoomStateRequest(req.requesterId)
         }
         break
@@ -748,41 +852,53 @@ export class RoomRealtimeService {
     this.callbacks.onParticipantsChange(disambiguated)
   }
 
-  private publishEncrypted(type: RelayEnvelopeType, payload: unknown): void {
-    if (this.destroyed || !this.masterKeyHex) return
-    void this.buildEncryptedPacket(type, payload).then((built) => {
-      if (!built || this.destroyed) return
-      const { wirePacket } = built
+  private async publishEncrypted(
+    type: RelayEnvelopeType,
+    payload: unknown,
+    allowDuringTeardown = false,
+  ): Promise<void> {
+    if ((this.destroyed && !allowDuringTeardown) || !this.masterKeyHex) return
+    const built = await this.buildEncryptedPacket(type, payload).catch(() => null)
+    if (!built || (this.destroyed && !allowDuringTeardown)) return
+    const { wirePacket } = built
 
-      if (this.supabaseChannel && this.mode === 'supabase') {
-        void this.supabaseChannel.send({
+    if (this.supabaseChannel && this.mode === 'supabase') {
+      await this.supabaseChannel
+        .send({
           type: 'broadcast',
           event: 'enc-envelope',
           payload: wirePacket,
         })
-      }
+        .catch(() => undefined)
+    }
 
-      // Publish all packets on MQTT in cloud-relay mode, AND also dual-publish
-      // critical WebRTC signaling & control packets in supabase mode for zero-drop reliability.
-      if (
-        this.mqttClient?.connected &&
-        (this.mode !== 'supabase' || type !== 'pose-update')
-      ) {
-        const qos = type === 'webrtc-signal' || type === 'presence-announce' ? 1 : 0
-        this.mqttClient.publish(this.mqttTopic, JSON.stringify(wirePacket), { qos })
-      }
+    // Publish all packets on MQTT in cloud-relay mode, AND also dual-publish
+    // critical WebRTC signaling & control packets in supabase mode for zero-drop reliability.
+    if (
+      this.mqttClient?.connected &&
+      (this.mode !== 'supabase' || type !== 'pose-update')
+    ) {
+      const qos =
+        type === 'webrtc-signal' || type === 'presence-announce' || type === 'presence-leave'
+          ? 1
+          : 0
+      this.mqttClient.publish(this.mqttTopic, JSON.stringify(wirePacket), { qos })
+    }
 
-      if (
-        this.localChannel &&
-        (type !== 'pose-update' || (!this.mqttClient?.connected && !this.supabaseChannel))
-      ) {
+    if (
+      this.localChannel &&
+      (type !== 'pose-update' || (!this.mqttClient?.connected && !this.supabaseChannel))
+    ) {
+      try {
         this.localChannel.postMessage(wirePacket)
+      } catch {
+        // Ignore closed BroadcastChannel
       }
-    })
+    }
   }
 
   private handleWindowUnload = (): void => {
-    this.publishEncrypted('presence-leave', { userId: this.localUserId })
+    void this.publishEncrypted('presence-leave', { userId: this.localUserId }, true)
   }
 
   async updatePresence(patch: Partial<ParticipantProfile>): Promise<void> {
@@ -797,12 +913,12 @@ export class RoomRealtimeService {
       lastSeen: Date.now(),
     })
     this.emitPresenceRoster()
-    this.publishEncrypted('presence-announce', this.currentProfile)
+    void this.publishEncrypted('presence-announce', this.currentProfile)
   }
 
   broadcastPose(pose: AvatarPose6DoF): void {
     if (this.destroyed) return
-    this.publishEncrypted('pose-update', {
+    void this.publishEncrypted('pose-update', {
       ...pose,
       userId: this.localUserId,
     })
@@ -810,7 +926,7 @@ export class RoomRealtimeService {
 
   broadcastPresenterState(state: PresenterState): void {
     if (this.destroyed) return
-    this.publishEncrypted('presenter-state', state)
+    void this.publishEncrypted('presenter-state', state)
   }
 
   broadcastRoomCustomization(state: RoomCustomizationState): void {
@@ -821,17 +937,17 @@ export class RoomRealtimeService {
       'room-customization',
       state,
     )
-    this.publishEncrypted('room-customization', state)
+    void this.publishEncrypted('room-customization', state)
   }
 
   broadcastBarGamesEvent(event: BarGamesWireEvent): void {
     if (this.destroyed) return
-    this.publishEncrypted('bar-games-event', event)
+    void this.publishEncrypted('bar-games-event', event)
   }
 
   broadcastNesEvent(event: NesWireEvent): void {
     if (this.destroyed) return
-    this.publishEncrypted('nes-event', event)
+    void this.publishEncrypted('nes-event', event)
   }
 
   publishRetainedClubhouseState(state: unknown): void {
@@ -842,7 +958,7 @@ export class RoomRealtimeService {
       'clubhouse-vault',
       state,
     )
-    this.publishEncrypted('clubhouse-vault', state)
+    void this.publishEncrypted('clubhouse-vault', state)
   }
 
   publishRetainedNesVault(payload: RetainedNesVaultPayload): void {
@@ -853,7 +969,7 @@ export class RoomRealtimeService {
       'nes-vault',
       payload,
     )
-    this.publishEncrypted('nes-vault', payload)
+    void this.publishEncrypted('nes-vault', payload)
   }
 
   publishRetainedProfilesVault(payload: RetainedProfilesVaultPayload): void {
@@ -864,17 +980,17 @@ export class RoomRealtimeService {
       'profiles-vault',
       payload,
     )
-    this.publishEncrypted('profiles-vault', payload)
+    void this.publishEncrypted('profiles-vault', payload)
   }
 
   requestRoomState(): void {
     if (this.destroyed) return
-    this.publishEncrypted('request-room-state', { requesterId: this.localUserId })
+    void this.publishEncrypted('request-room-state', { requesterId: this.localUserId })
   }
 
   broadcastChatMessage(message: ChatMessage): void {
     if (this.destroyed) return
-    this.publishEncrypted('chat-message', {
+    void this.publishEncrypted('chat-message', {
       ...message,
       userId: this.localUserId,
     })
@@ -882,7 +998,7 @@ export class RoomRealtimeService {
 
   broadcastReaction(reaction: FloatingReaction): void {
     if (this.destroyed) return
-    this.publishEncrypted('emoji-reaction', {
+    void this.publishEncrypted('emoji-reaction', {
       ...reaction,
       userId: this.localUserId,
     })
@@ -890,7 +1006,7 @@ export class RoomRealtimeService {
 
   sendWebRTCSignal(signal: WebRTCSignalMessage): void {
     if (this.destroyed) return
-    this.publishEncrypted('webrtc-signal', {
+    void this.publishEncrypted('webrtc-signal', {
       ...signal,
       fromUserId: this.localUserId,
     })
@@ -898,20 +1014,20 @@ export class RoomRealtimeService {
 
   async disconnect(): Promise<void> {
     if (this.destroyed) return
-    this.publishEncrypted('presence-leave', { userId: this.localUserId })
     this.destroyed = true
 
-    if (this.heartbeatTimer !== null) {
-      window.clearInterval(this.heartbeatTimer)
-      this.heartbeatTimer = null
-    }
+    this.stopHeartbeatLoop()
     if (this.supabaseReconnectTimer !== null) {
-      window.clearTimeout(this.supabaseReconnectTimer)
+      clearTimeout(this.supabaseReconnectTimer)
       this.supabaseReconnectTimer = null
     }
-    if (typeof window !== 'undefined') {
-      window.removeEventListener('beforeunload', this.handleWindowUnload)
-    }
+    this.detachLifecycleListeners()
+
+    // Flush signed presence-leave before closing underlying transports
+    await Promise.race([
+      this.publishEncrypted('presence-leave', { userId: this.localUserId }, true),
+      new Promise<void>((resolve) => setTimeout(resolve, 180)),
+    ])
 
     if (this.supabaseChannel) {
       const client = getSupabaseClient()

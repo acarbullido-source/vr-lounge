@@ -179,11 +179,20 @@ export function NesConsoleModal({
       }
     }
 
+    const clearHeld = () => {
+      nes.releaseAllUiButtons()
+    }
+
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('blur', clearHeld)
+    document.addEventListener('visibilitychange', clearHeld)
     return () => {
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('blur', clearHeld)
+      document.removeEventListener('visibilitychange', clearHeld)
+      clearHeld()
     }
   }, [isNesCurrentlyOnScreen, localPlayerNum, nes, open])
 
@@ -299,7 +308,19 @@ export function NesConsoleModal({
     onPointerDown: () => nes.setButtonState(btn, true, localPlayerNum),
     onPointerUp: () => nes.setButtonState(btn, false, localPlayerNum),
     onPointerLeave: () => nes.setButtonState(btn, false, localPlayerNum),
-    onClick: () => nes.tapButton(btn, localPlayerNum),
+    onPointerCancel: () => nes.setButtonState(btn, false, localPlayerNum),
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault()
+        nes.setButtonState(btn, true, localPlayerNum)
+      }
+    },
+    onKeyUp: (e: React.KeyboardEvent) => {
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault()
+        nes.setButtonState(btn, false, localPlayerNum)
+      }
+    },
   })
 
   return (

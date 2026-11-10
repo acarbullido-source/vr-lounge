@@ -57,7 +57,11 @@ export interface BarGamesCorner3DProps {
   ) => void
   onSettlePuttShot: (packet: PuttShotSettlePacket) => void
   onJoinPutting: () => void
-  onConfigurePutting: (patch: { mode?: PuttingGameMode; rampEnabled?: boolean }) => void
+  onConfigurePutting: (patch: {
+    mode?: PuttingGameMode
+    rampEnabled?: boolean
+    courseHole?: 'straight' | 'breaking-ridge' | 'bunker-island'
+  }) => void
   onResetBallToTee: () => void
   onResetPutting: () => void
   // Tabletop
