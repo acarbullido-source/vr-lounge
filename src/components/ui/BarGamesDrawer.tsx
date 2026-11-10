@@ -35,11 +35,16 @@ import {
 import { computeBallisticDartVelocity } from '../../services/barGamesPhysics'
 import type {
   ClubhousePersistentState,
+  CornholeBagRecord,
+  CornholeState,
   DartGameMode,
   DartsMatchState,
   DieKind,
   PuttingGameMode,
   PuttingMatchState,
+  ShuffleboardPuck,
+  ShuffleboardState,
+  TableGameMode,
   TableSurfaceStyle,
   TabletopState,
 } from '../../types/barGames'
@@ -59,6 +64,8 @@ export interface BarGamesDrawerProps {
   dartsState: DartsMatchState
   puttingState: PuttingMatchState
   tabletopState: TabletopState
+  shuffleboardState?: ShuffleboardState
+  cornholeState?: CornholeState
   clubhouseState: ClubhousePersistentState
   adventureState?: AdventureQuestState
   hasActiveDartShot: boolean
@@ -82,9 +89,21 @@ export interface BarGamesDrawerProps {
   onConfigurePutting: (patch: { mode?: PuttingGameMode; rampEnabled?: boolean }) => void
   onResetBallToTee: () => void
   onResetPutting: () => void
-  // Tabletop
+  // Shuffleboard & Cornhole
+  onRecordShuffleboardShot?: (puck: ShuffleboardPuck) => void
+  onResetShuffleboard?: () => void
+  onRecordCornholeThrow?: (bag: CornholeBagRecord) => void
+  onResetCornhole?: () => void
+  // Tabletop & Casino Modes
   onRollDice: (kinds: DieKind[]) => void
   onSetSurface: (surface: TableSurfaceStyle) => void
+  onSetGameMode?: (mode: TableGameMode) => void
+  onBetChips?: (amount: number) => void
+  onDealBlackjack?: () => void
+  onHitBlackjack?: () => void
+  onStandBlackjack?: () => void
+  onDealHoldem?: () => void
+  onAdvanceHoldemStreet?: () => void
   onShuffleDeck: () => void
   onDrawCardToHand: () => void
   onPlayCardFromHand: (cardId: string, faceUp: boolean) => void
@@ -140,6 +159,8 @@ export function BarGamesDrawer({
   dartsState,
   puttingState,
   tabletopState,
+  shuffleboardState,
+  cornholeState,
   clubhouseState,
   adventureState,
   hasActiveDartShot,
@@ -154,8 +175,19 @@ export function BarGamesDrawer({
   onConfigurePutting,
   onResetBallToTee,
   onResetPutting,
+  onRecordShuffleboardShot,
+  onResetShuffleboard,
+  onRecordCornholeThrow,
+  onResetCornhole,
   onRollDice,
   onSetSurface,
+  onSetGameMode,
+  onBetChips,
+  onDealBlackjack,
+  onHitBlackjack,
+  onStandBlackjack,
+  onDealHoldem,
+  onAdvanceHoldemStreet,
   onShuffleDeck,
   onDrawCardToHand,
   onPlayCardFromHand,
@@ -282,19 +314,19 @@ export function BarGamesDrawer({
   return (
     <div
       id="bar-games-drawer"
-      className="pointer-events-auto fixed top-16 right-4 bottom-28 z-40 flex w-[410px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-white/15 bg-[#0b0f17]/95 text-[#f4f1ea] shadow-2xl backdrop-blur-xl"
+      className="pointer-events-auto lounge-panel fixed top-16 right-4 bottom-28 z-40 flex w-[410px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-3xl border border-white/10 bg-zinc-900/85 text-[#f4f1ea] shadow-2xl backdrop-blur-2xl"
     >
       {/* Top Header */}
-      <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+      <div className="flex items-center justify-between border-b border-white/10 bg-slate-900/60 px-4 py-3.5">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#e5a93c]/20 text-[#e5a93c]">
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-[#e5a93c]/35 bg-[#e5a93c]/15 text-[#e5a93c] shadow-inner">
             <Dices className="h-4 w-4" />
           </div>
           <div>
             <h2 className="text-sm font-bold tracking-wide text-[#f4f1ea]">
               Bar Games &amp; Clubhouse Corner
             </h2>
-            <p className="text-[11px] text-slate-400">
+            <p className="text-[11px] text-[#c7c2b8]/85">
               Authoritative 3D Darts · Putting · Polyhedral Table · $1 Props
             </p>
           </div>
@@ -303,7 +335,7 @@ export function BarGamesDrawer({
           id="btn-close-bar-games"
           type="button"
           onClick={onClose}
-          className="rounded-lg p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-white"
+          className="lounge-btn rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white"
           title="Close Bar Games Drawer"
         >
           <X className="h-4 w-4" />
@@ -311,7 +343,7 @@ export function BarGamesDrawer({
       </div>
 
       {/* 5-Pillar Navigation Tabs */}
-      <div className="grid grid-cols-5 gap-1 border-b border-white/10 bg-[#080b11] p-1.5 text-[11px] font-semibold">
+      <div className="grid grid-cols-5 gap-1 border-b border-white/10 bg-zinc-950/80 p-1.5 text-[11px] font-semibold">
         {(
           [
             { id: 'play', label: '🎯 Play' },
@@ -326,10 +358,10 @@ export function BarGamesDrawer({
             id={`tab-bargames-${tab.id}`}
             type="button"
             onClick={() => onChangeTab(tab.id)}
-            className={`rounded-lg px-1.5 py-1.5 transition ${
+            className={`lounge-btn rounded-lg px-1.5 py-1.5 ${
               activeTab === tab.id
-                ? 'bg-[#e5a93c] text-[#090c12] shadow'
-                : 'text-slate-300 hover:bg-white/8'
+                ? 'bg-[#e5a93c] text-[#090c12] shadow-sm'
+                : 'text-slate-300 hover:bg-white/10 hover:text-white'
             }`}
           >
             {tab.label}
@@ -338,7 +370,7 @@ export function BarGamesDrawer({
       </div>
 
       {/* Scrollable Body */}
-      <div className="flex-1 space-y-4 overflow-y-auto p-4 text-xs">
+      <div className="lounge-scrollbar flex-1 space-y-4 overflow-y-auto p-4 text-xs">
         {/* =============================================================== */}
         {/* TAB 0: MAIN CINEMA SCREEN ADVENTURE QUEST (STORY QUEST)         */}
         {/* =============================================================== */}
@@ -544,6 +576,46 @@ export function BarGamesDrawer({
                   )}
                 </div>
 
+                {/* Live Party Roster & Phase Status Strip */}
+                <div className="rounded-xl border border-white/10 bg-[#0b101b] p-2.5 space-y-1.5">
+                  <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    <span>
+                      👥 Party Roster ({Object.keys(adventureState.players).length})
+                    </span>
+                    <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-sky-300">
+                      Phase: {adventureState.phase.toUpperCase()}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {Object.values(adventureState.players).map((pl) => {
+                      const archSpec = ARCHETYPE_SPECS[pl.archetype]
+                      return (
+                        <span
+                          key={pl.userId}
+                          className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-semibold ${
+                            pl.isGhost
+                              ? 'border-cyan-400/40 bg-cyan-950/30 text-cyan-200'
+                              : 'border-white/10 bg-white/5 text-slate-200'
+                          }`}
+                        >
+                          <span>{archSpec.icon}</span>
+                          <span>{pl.displayName}</span>
+                          <span className="text-amber-300">
+                            {pl.isGhost ? '👻' : `${pl.hp}/${pl.maxHp}HP`}
+                          </span>
+                          <span>
+                            {pl.rollOutcome !== 'pending' && pl.totalRoll !== null
+                              ? `🎲${pl.totalRoll}`
+                              : pl.lockedCardId
+                                ? '🔒'
+                                : '⏳'}
+                          </span>
+                        </span>
+                      )
+                    })}
+                  </div>
+                </div>
+
                 {/* 4 Action Cards */}
                 {node && (
                   <div className="space-y-1.5">
@@ -576,7 +648,7 @@ export function BarGamesDrawer({
                               {card.title}
                             </span>
                             <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-bold uppercase text-amber-300">
-                              {card.attribute} · {showDc ? `DC ${card.dc}` : 'DC ??'}
+                              {card.attribute} · {showDc ? `DC ${card.dc}` : 'DC ??'} · -{card.failHpDamage} HP on fail
                             </span>
                           </div>
                           <p className="mt-1 text-[11px] text-slate-300">{card.description}</p>
@@ -616,7 +688,7 @@ export function BarGamesDrawer({
         )}
 
         {/* =============================================================== */}
-        {/* TAB 1: DARTS & MINI-GOLF PUTTING CONTROLS                       */}
+        {/* TAB 1: DARTS, PUTTING, SHUFFLEBOARD & CORNHOLE CONTROLS         */}
         {/* =============================================================== */}
         {activeTab === 'play' && (
           <>
@@ -632,7 +704,7 @@ export function BarGamesDrawer({
                     : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
                 }`}
               >
-                🚶 Walk Free
+                🚶 Walk Mode
               </button>
               <button
                 id="btn-goto-oche"
@@ -644,7 +716,7 @@ export function BarGamesDrawer({
                     : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
                 }`}
               >
-                🎯 Oche
+                🎯 Darts Oche
               </button>
               <button
                 id="btn-goto-putting"
@@ -656,7 +728,7 @@ export function BarGamesDrawer({
                     : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
                 }`}
               >
-                ⛳ Putting
+                ⛳ Putting Green
               </button>
               <button
                 id="btn-goto-gametable"
@@ -668,7 +740,7 @@ export function BarGamesDrawer({
                     : 'border-white/10 bg-white/5 text-slate-200 hover:bg-white/10'
                 }`}
               >
-                🎲 Table
+                🎲 Card Table
               </button>
               <button
                 id="btn-goto-shuffleboard"
@@ -726,7 +798,7 @@ export function BarGamesDrawer({
                 <div className="flex items-center gap-2">
                   <Target className="h-4 w-4 text-[#e5a93c]" />
                   <span className="font-bold text-[#f4f1ea]">
-                    3D Back-Wall Dartboard ({dartsState.mode.toUpperCase()})
+                    🎯 Darts Oche ({dartsState.mode.toUpperCase()})
                   </span>
                 </div>
                 <div className="flex items-center gap-1">
@@ -755,6 +827,36 @@ export function BarGamesDrawer({
                     Cricket
                   </button>
                 </div>
+              </div>
+
+              {/* Live Turn & Score Banner */}
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-cyan-400/25 bg-cyan-950/20 px-2.5 py-1.5 text-[11px]">
+                {dartsState.players.length > 0 ? (
+                  <>
+                    <span className="font-semibold text-cyan-200">
+                      {dartsState.winnerName
+                        ? `🏆 Winner: ${dartsState.winnerName}`
+                        : `Now Throwing: ${
+                            dartsState.players[dartsState.activePlayerIndex]?.displayName ??
+                            localDisplayName
+                          } · Dart ${dartsState.dartsThrownInTurn + 1}/3`}
+                    </span>
+                    <span className="font-mono font-bold text-[#fde68a]">
+                      {dartsState.players
+                        .map(
+                          (p) =>
+                            `${p.displayName}: ${
+                              dartsState.mode === '501' ? p.score501 : `${p.cricketPoints}pts`
+                            }`,
+                        )
+                        .join(' · ')}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-slate-300">
+                    Open Oche — Throw a dart or click + Join Match to start!
+                  </span>
+                )}
               </div>
 
               <div className="flex flex-wrap items-center gap-1.5">
@@ -882,7 +984,7 @@ export function BarGamesDrawer({
                 <div className="flex items-center gap-2">
                   <Flag className="h-4 w-4 text-emerald-400" />
                   <span className="font-bold text-[#f4f1ea]">
-                    Mini-Golf Putting Strip
+                    ⛳ Putting Green
                   </span>
                 </div>
                 <div className="flex items-center gap-1">
@@ -911,6 +1013,25 @@ export function BarGamesDrawer({
                     Putt-Off
                   </button>
                 </div>
+              </div>
+
+              {/* Live Putting Streak & Round Banner */}
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-400/25 bg-emerald-950/20 px-2.5 py-1.5 text-[11px]">
+                <span className="font-semibold text-emerald-200">
+                  {puttingState.mode === 'puttoff'
+                    ? `Putt-Off Round ${puttingState.round}/${puttingState.maxRounds}`
+                    : 'Streak Challenge Mode'}
+                </span>
+                <span className="font-mono font-bold text-emerald-300">
+                  {puttingState.players.length > 0
+                    ? puttingState.players
+                        .map(
+                          (p) =>
+                            `${p.displayName}: 🔥${p.currentStreak} (Best ${p.bestSessionStreak})`,
+                        )
+                        .join(' · ')
+                    : 'Sink a putt to start your streak!'}
+                </span>
               </div>
 
               <div className="flex flex-wrap gap-1.5">
@@ -1000,6 +1121,93 @@ export function BarGamesDrawer({
               <p className="rounded-lg bg-black/30 px-2.5 py-1.5 text-[11px] text-slate-300">
                 {puttingState.lastOutcomeText}
               </p>
+            </div>
+
+            {/* SHUFFLEBOARD & DECK CORNHOLE 2D QUICK CONTROLS */}
+            <div className="grid grid-cols-2 gap-2.5">
+              {shuffleboardState && (
+                <div className="space-y-2 rounded-xl border border-orange-400/25 bg-white/[0.03] p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-orange-300">🥌 Shuffleboard</span>
+                    <span className="font-mono text-[11px] font-bold text-white">
+                      🔴{shuffleboardState.redScore} – 🔵{shuffleboardState.blueScore}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    Active: <strong className="text-slate-200">{shuffleboardState.activeTeam.toUpperCase()}</strong> (to 15)
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button
+                      id="btn-drawer-slide-puck"
+                      type="button"
+                      onClick={() => {
+                        const pts = ([1, 2, 3, 4] as const)[Math.floor(Math.random() * 4)]
+                        onRecordShuffleboardShot?.({
+                          id: `puck-${Date.now().toString(36)}`,
+                          team: shuffleboardState.activeTeam,
+                          localX: Number(((Math.random() - 0.5) * 0.18).toFixed(3)),
+                          localZ: Number((-0.65 - pts * 0.14).toFixed(3)),
+                          points: pts,
+                          shotBy: localDisplayName,
+                        })
+                      }}
+                      className="flex-1 rounded-lg bg-orange-500 py-1.5 text-[11px] font-bold text-slate-950 hover:bg-orange-400"
+                    >
+                      🥌 Slide Puck
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onResetShuffleboard?.()}
+                      className="rounded-lg border border-white/10 bg-white/8 px-2 py-1.5 text-[10px] text-slate-300 hover:bg-white/15"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {cornholeState && (
+                <div className="space-y-2 rounded-xl border border-lime-400/25 bg-white/[0.03] p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-lime-300">🌽 Cornhole</span>
+                    <span className="font-mono text-[11px] font-bold text-white">
+                      🟡{cornholeState.goldScore} – 🩵{cornholeState.cyanScore}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    Active: <strong className="text-slate-200">{cornholeState.activeTeam.toUpperCase()}</strong> (to 21)
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button
+                      id="btn-drawer-toss-bag"
+                      type="button"
+                      onClick={() => {
+                        const inHole = Math.random() > 0.45
+                        onRecordCornholeThrow?.({
+                          id: `bag-${Date.now().toString(36)}`,
+                          team: cornholeState.activeTeam,
+                          boardIndex: 0,
+                          localX: Number(((Math.random() - 0.5) * 0.16).toFixed(3)),
+                          localZ: Number((inHole ? 0.3 : (Math.random() - 0.5) * 0.3).toFixed(3)),
+                          inHole,
+                          points: inHole ? 3 : 1,
+                          thrownBy: localDisplayName,
+                        })
+                      }}
+                      className="flex-1 rounded-lg bg-lime-500 py-1.5 text-[11px] font-bold text-slate-950 hover:bg-lime-400"
+                    >
+                      🌽 Toss Bag
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onResetCornhole?.()}
+                      className="rounded-lg border border-white/10 bg-white/8 px-2 py-1.5 text-[10px] text-slate-300 hover:bg-white/15"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </>
         )}
@@ -1195,6 +1403,118 @@ export function BarGamesDrawer({
                   </button>
                 )
               })}
+            </div>
+
+            {/* Table Game Mode Switcher & Casino Controls (Freeform / Blackjack 21 / Texas Hold'em) */}
+            <div className="space-y-2.5 rounded-xl border border-amber-400/25 bg-white/[0.03] p-3.5">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-[#fde68a]">
+                  🃏 Card Table Mode
+                </span>
+                <span className="font-mono text-[11px] font-bold text-emerald-300">
+                  Pot: ${tabletopState.potChips ?? 0} · Stack: $
+                  {tabletopState.playerChips?.[localDisplayName] ?? 500}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-1.5">
+                {(
+                  [
+                    { id: 'freeform', label: '🎲 Freeform' },
+                    { id: 'blackjack', label: '🂡 Blackjack 21' },
+                    { id: 'holdem', label: "♠️ Hold'em" },
+                  ] as const
+                ).map((gm) => {
+                  const active = (tabletopState.gameMode ?? 'freeform') === gm.id
+                  return (
+                    <button
+                      key={gm.id}
+                      id={`btn-table-mode-${gm.id}`}
+                      type="button"
+                      onClick={() => onSetGameMode?.(gm.id)}
+                      className={`rounded-lg border py-1.5 text-[11px] font-bold transition ${
+                        active
+                          ? 'border-[#e5a93c] bg-[#e5a93c] text-[#090c12]'
+                          : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
+                      }`}
+                    >
+                      {gm.label}
+                    </button>
+                  )
+                })}
+              </div>
+
+              {tabletopState.gameMode === 'blackjack' && (
+                <div className="grid grid-cols-4 gap-1.5 pt-1">
+                  <button
+                    id="btn-drawer-bj-deal"
+                    type="button"
+                    onClick={() => onDealBlackjack?.()}
+                    className="rounded-lg bg-emerald-500 py-1.5 text-[11px] font-bold text-slate-950 hover:bg-emerald-400"
+                  >
+                    🂡 Deal 21
+                  </button>
+                  <button
+                    id="btn-drawer-bj-hit"
+                    type="button"
+                    disabled={tabletopState.blackjackPhase !== 'player-turn'}
+                    onClick={() => onHitBlackjack?.()}
+                    className="rounded-lg bg-amber-500 py-1.5 text-[11px] font-bold text-slate-950 hover:bg-amber-400 disabled:opacity-40"
+                  >
+                    Hit
+                  </button>
+                  <button
+                    id="btn-drawer-bj-stand"
+                    type="button"
+                    disabled={tabletopState.blackjackPhase !== 'player-turn'}
+                    onClick={() => onStandBlackjack?.()}
+                    className="rounded-lg bg-sky-500 py-1.5 text-[11px] font-bold text-slate-950 hover:bg-sky-400 disabled:opacity-40"
+                  >
+                    Stand
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onBetChips?.(25)}
+                    className="rounded-lg border border-amber-400/40 bg-amber-500/15 py-1.5 text-[11px] font-bold text-amber-200 hover:bg-amber-500/25"
+                  >
+                    Bet +$25
+                  </button>
+                </div>
+              )}
+
+              {tabletopState.gameMode === 'holdem' && (
+                <div className="grid grid-cols-3 gap-1.5 pt-1">
+                  <button
+                    id="btn-drawer-holdem-deal"
+                    type="button"
+                    onClick={() => onDealHoldem?.()}
+                    className="rounded-lg bg-emerald-500 py-1.5 text-[11px] font-bold text-slate-950 hover:bg-emerald-400"
+                  >
+                    ♠️ Deal Hand
+                  </button>
+                  <button
+                    id="btn-drawer-holdem-street"
+                    type="button"
+                    onClick={() => onAdvanceHoldemStreet?.()}
+                    className="rounded-lg bg-amber-500 py-1.5 text-[11px] font-bold text-slate-950 hover:bg-amber-400"
+                  >
+                    Next Street ({(tabletopState.holdemStreet ?? 'idle').toUpperCase()})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onBetChips?.(25)}
+                    className="rounded-lg border border-amber-400/40 bg-amber-500/15 py-1.5 text-[11px] font-bold text-amber-200 hover:bg-amber-500/25"
+                  >
+                    Bet +$25
+                  </button>
+                </div>
+              )}
+
+              {tabletopState.tableBanner && (
+                <p className="rounded-lg bg-black/35 px-2.5 py-1.5 text-[11px] text-amber-200">
+                  {tabletopState.tableBanner}
+                </p>
+              )}
             </div>
 
             {/* Polyhedral Dice Roller */}

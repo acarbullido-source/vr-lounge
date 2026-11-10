@@ -7,8 +7,10 @@ import { hasSupabaseCredentials } from './realtime'
 const CANONICAL_LAYOUT_KEY = 'vr-lounge:single-room-layout:v1'
 const LOCAL_STORAGE_PREFIX = 'vr-lounge:hangout-v2:'
 
-const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim() ?? ''
-const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim() ?? ''
+const supabaseUrl =
+  (import.meta.env?.VITE_SUPABASE_URL as string | undefined)?.trim() ?? ''
+const supabaseAnonKey =
+  (import.meta.env?.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim() ?? ''
 
 /**
  * Tracks whether an optional `public.room_layouts` table exists on the user's

@@ -88,6 +88,8 @@ import {
 } from './services/nesEmulator'
 import {
   isControllerButtonPressed,
+  isSpatialDrawingSurfaceActive,
+  onSpatialDrawingSurfaceChange,
   readControllerThumbstick,
   readXRSpaceWorldPose,
 } from './services/xrTracking'
@@ -282,11 +284,9 @@ function SeatCameraAndOriginRig({
 
   const originRef = useRef<THREE.Group>(null)
   const dockGroupRef = useRef<THREE.Group>(null)
+  const vrTeleportRingRef = useRef<THREE.Group>(null)
   const orbitRef = useRef<OrbitControlsImpl>(null)
   const vrLocalOffsetRef = useRef<[number, number, number]>([0, 0, 0])
-  const [vrTeleportRingPos, setVrTeleportRingPos] = useState<
-    [number, number, number] | null
-  >(null)
 
   const pressedKeysRef = useRef<Set<string>>(new Set())
   const desktopTransitionRemainingRef = useRef(0)
@@ -310,20 +310,16 @@ function SeatCameraAndOriginRig({
   const prevBOrYPressedRef = useRef(false)
   const prevAOrXPressedRef = useRef(false)
   const rightGripHoldSecRef = useRef(0)
+  const leftYHoldSecRef = useRef(0)
   const activeVrTeleportTargetRef = useRef<[number, number, number] | null>(null)
 
   const prevIsFreeRoamingRef = useRef(isFreeRoaming)
   const isFreeRoamingRef = useRef(isFreeRoaming)
-  isFreeRoamingRef.current = isFreeRoaming
   const prevFlyModeRef = useRef(flyMode)
   const flyModeRef = useRef(flyMode)
-  flyModeRef.current = flyMode
   const nesActiveOnScreenRef = useRef(nesActiveOnScreen)
-  nesActiveOnScreenRef.current = nesActiveOnScreen
   const nesControllerEngagedRef = useRef(nesControllerEngaged)
-  nesControllerEngagedRef.current = nesControllerEngaged
   const onDisengageNesControllerRef = useRef(onDisengageNesController)
-  onDisengageNesControllerRef.current = onDisengageNesController
 
   const desiredCamPos = useMemo(() => new THREE.Vector3(), [])
   const desiredLookTarget = useMemo(() => new THREE.Vector3(), [])
@@ -340,18 +336,38 @@ function SeatCameraAndOriginRig({
   const scratchRayDir = useMemo(() => new THREE.Vector3(), [])
 
   const onInVRChangeRef = useRef(onInVRChange)
-  onInVRChangeRef.current = onInVRChange
   const onEnterFreeRoamRef = useRef(onEnterFreeRoam)
-  onEnterFreeRoamRef.current = onEnterFreeRoam
   const onToggleFlyModeRef = useRef(onToggleFlyMode)
-  onToggleFlyModeRef.current = onToggleFlyMode
   const onToggleWristHudRef = useRef(onToggleWristHud)
-  onToggleWristHudRef.current = onToggleWristHud
   const onSummonDockToggleRef = useRef(onSummonDockToggle)
-  onSummonDockToggleRef.current = onSummonDockToggle
   const onRoamWingChangeRef = useRef(onRoamWingChange)
-  onRoamWingChangeRef.current = onRoamWingChange
   const lastReportedWingRef = useRef<LoungeWingId>('main-lounge')
+
+  useEffect(() => {
+    isFreeRoamingRef.current = isFreeRoaming
+    flyModeRef.current = flyMode
+    nesActiveOnScreenRef.current = nesActiveOnScreen
+    nesControllerEngagedRef.current = nesControllerEngaged
+    onDisengageNesControllerRef.current = onDisengageNesController
+    onInVRChangeRef.current = onInVRChange
+    onEnterFreeRoamRef.current = onEnterFreeRoam
+    onToggleFlyModeRef.current = onToggleFlyMode
+    onToggleWristHudRef.current = onToggleWristHud
+    onSummonDockToggleRef.current = onSummonDockToggle
+    onRoamWingChangeRef.current = onRoamWingChange
+  }, [
+    flyMode,
+    isFreeRoaming,
+    nesActiveOnScreen,
+    nesControllerEngaged,
+    onDisengageNesController,
+    onEnterFreeRoam,
+    onInVRChange,
+    onRoamWingChange,
+    onSummonDockToggle,
+    onToggleFlyMode,
+    onToggleWristHud,
+  ])
 
   // Initialize <XROrigin> & dockGroupRef once on mount so JSX re-renders never reset VR walk transforms
   useEffect(() => {
@@ -496,19 +512,26 @@ function SeatCameraAndOriginRig({
     }
   }, [inVR, joined])
 
+  useEffect(() => {
+    const syncOrbitRotate = (drawingActive: boolean) => {
+      if (orbitRef.current) {
+        orbitRef.current.enableRotate = !drawingActive
+      }
+    }
+    syncOrbitRotate(isSpatialDrawingSurfaceActive())
+    return onSpatialDrawingSurfaceChange(syncOrbitRotate)
+  }, [])
+
+  const [seatX, seatY, seatZ] = seat.position
+
   // Update seated VR & Desktop targets whenever concrete seat changes
   useEffect(() => {
     if (isFreeRoaming) return
     vrLocalOffsetRef.current = [0, 0, 0]
     const isStandingStation = seat.id.startsWith('station:')
     const seatDeltaY = isStandingStation ? 0 : Math.max(0, seat.seatHeightOffset - 0.38)
-    const ergonomicFloorY =
-      seat.position[1] + seatDeltaY + (isStandingStation ? 0 : 0.06)
-    vrOriginTargetPosRef.current.set(
-      seat.position[0],
-      ergonomicFloorY,
-      seat.position[2],
-    )
+    const ergonomicFloorY = seatY + seatDeltaY + (isStandingStation ? 0 : 0.06)
+    vrOriginTargetPosRef.current.set(seatX, ergonomicFloorY, seatZ)
     vrOriginYawRef.current = seat.rotationY
     vrDockYawRef.current = seat.rotationY
     desktopGlideTargetRef.current = null
@@ -519,9 +542,9 @@ function SeatCameraAndOriginRig({
     inVR,
     isFreeRoaming,
     seat.id,
-    seat.position[0],
-    seat.position[1],
-    seat.position[2],
+    seatX,
+    seatY,
+    seatZ,
     seat.rotationY,
     seat.seatHeightOffset,
   ])
@@ -741,33 +764,57 @@ function SeatCameraAndOriginRig({
         rightGripHoldSecRef.current = 0
       }
 
-      // 1. Quest B/Y button toggles the floating Lounge Controls dock
-      //    (When NES controller is engaged, hold both B+Y together to toggle the dock so B & Y work as NES B / START)
-      const rightBY = isControllerButtonPressed(rightController, ['b-button', 'y-button'], 5)
-      const leftYB = isControllerButtonPressed(leftController, ['y-button', 'b-button'], 5)
-      const bOrYPressed = controllingNes ? rightBY && leftYB : rightBY || leftYB
-      if (bOrYPressed && !prevBOrYPressedRef.current && joined) {
-        onSummonDockToggleRef.current()
-      }
-      prevBOrYPressedRef.current = bOrYPressed
-
-      // 2. Quest A/X hold-to-aim & release comfort floor teleport (disabled while NES controller is engaged so A/X = NES A/B)
-      const rightAX = isControllerButtonPressed(
-        rightController,
-        ['a-button', 'x-button'],
-        4,
+      // 1. Quest Left Y button toggles the floating Control Dock (Right B stays free for room/station actions!)
+      //    When NES controller is engaged, hold Left Y for ~0.65s (or press Left Y + Right B) so quick taps act as NES START
+      const leftYPressed = isControllerButtonPressed(
+        leftController,
+        ['y-button', 'b-button'],
+        5,
       )
-      const leftAX = isControllerButtonPressed(
+      const rightBPressed = isControllerButtonPressed(
+        rightController,
+        ['b-button', 'y-button'],
+        5,
+      )
+      const dockToggleBtn = leftController ? leftYPressed : rightBPressed
+      if (controllingNes) {
+        if (dockToggleBtn) {
+          leftYHoldSecRef.current += dt
+          if (leftYHoldSecRef.current >= 0.65 && !prevBOrYPressedRef.current && joined) {
+            prevBOrYPressedRef.current = true
+            onSummonDockToggleRef.current()
+          }
+        } else {
+          leftYHoldSecRef.current = 0
+          prevBOrYPressedRef.current = false
+        }
+      } else {
+        leftYHoldSecRef.current = 0
+        if (dockToggleBtn && !prevBOrYPressedRef.current && joined) {
+          onSummonDockToggleRef.current()
+        }
+        prevBOrYPressedRef.current = dockToggleBtn
+      }
+
+      // 2. Quest Left X hold-to-aim & release comfort floor teleport (Right A stays free for room/station actions!)
+      const leftXPressed = isControllerButtonPressed(
         leftController,
         ['x-button', 'a-button'],
         4,
       )
+      const singleCtrlFallbackA =
+        !leftController &&
+        isControllerButtonPressed(rightController, ['a-button', 'x-button'], 4)
       const aOrXPressed =
-        !controllingNes && (rightAX || leftAX) && joined && !buildMode && !keyboardOpen
+        !controllingNes &&
+        (leftXPressed || singleCtrlFallbackA) &&
+        joined &&
+        !buildMode &&
+        !keyboardOpen
       if (aOrXPressed) {
         const xrFrame = gl.xr.getFrame?.()
         const refSpace = xrOriginRefSpace ?? gl.xr.getReferenceSpace?.()
-        const teleportCtrl = rightAX ? rightController : leftController
+        const teleportCtrl = leftController ?? rightController
         const hasRay = readXRSpaceWorldPose(
           xrFrame,
           teleportCtrl?.inputSource?.targetRaySpace,
@@ -785,14 +832,23 @@ function SeatCameraAndOriginRig({
               const hitZ = scratchRayPos.z + scratchRayDir.z * tZero
               const clamped = resolveWalkablePosition(hitX, hitZ, architecture)
               activeVrTeleportTargetRef.current = clamped
-              setVrTeleportRingPos([clamped[0], clamped[1] + 0.022, clamped[2]])
+              if (vrTeleportRingRef.current) {
+                vrTeleportRingRef.current.visible = true
+                vrTeleportRingRef.current.position.set(
+                  clamped[0],
+                  clamped[1] + 0.022,
+                  clamped[2],
+                )
+              }
             }
           }
         }
       } else if (prevAOrXPressedRef.current) {
         const dest = activeVrTeleportTargetRef.current
         activeVrTeleportTargetRef.current = null
-        setVrTeleportRingPos(null)
+        if (vrTeleportRingRef.current) {
+          vrTeleportRingRef.current.visible = false
+        }
         if (dest) {
           if (!isFreeRoamingRef.current) {
             onEnterFreeRoamRef.current()
@@ -1167,6 +1223,15 @@ function SeatCameraAndOriginRig({
           desktopGlideTargetRef.current = null
         }
       }
+      if (dockGroupRef.current) {
+        const roamPos = localRoamPoseRef.current.position
+        desiredDockPos.set(roamPos[0], roamPos[1], roamPos[2])
+        desiredDockQuat.setFromEuler(
+          tmpEuler.set(0, localRoamPoseRef.current.yaw, 0),
+        )
+        dockGroupRef.current.position.lerp(desiredDockPos, rigAlpha)
+        dockGroupRef.current.quaternion.slerp(desiredDockQuat, rigAlpha)
+      }
       const spec =
         ROOM_SIZE_SPECS[architecture.sizePreset] ?? ROOM_SIZE_SPECS.classic
       const detectedWing = detectActiveLoungeWing(
@@ -1238,6 +1303,7 @@ function SeatCameraAndOriginRig({
         <WristWatchHUD3D
           visible={joined}
           hudHidden={wristHudHidden}
+          nesControllerEngaged={nesControllerEngaged}
           onToggleHudHidden={onToggleWristHud}
           xrOriginRef={originRef}
           activeLoungeWing={activeLoungeWing}
@@ -1258,9 +1324,9 @@ function SeatCameraAndOriginRig({
         />
       </SceneSectionBoundary>
 
-      {/* VR A/X Hold-to-Aim Comfort Teleport Ring */}
-      {inVR && vrTeleportRingPos && (
-        <group position={vrTeleportRingPos}>
+      {/* VR Left-X Hold-to-Aim Comfort Teleport Ring (Updated imperatively in useFrame) */}
+      {inVR && (
+        <group ref={vrTeleportRingRef} visible={false}>
           <mesh rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
             <ringGeometry args={[0.28, 0.36, 32]} />
             <meshBasicMaterial color="#38BDF8" transparent opacity={0.92} />
@@ -1307,9 +1373,11 @@ export function App() {
   const [flyMode, setFlyMode] = useState(false)
   const [wristHudHidden, setWristHudHidden] = useState<boolean>(() => {
     try {
-      return window.localStorage.getItem('vr-lounge:wrist-hud-hidden') === '1'
+      const saved = window.localStorage.getItem('vr-lounge:wrist-hud-hidden')
+      if (saved !== null) return saved === '1'
+      return true
     } catch {
-      return false
+      return true
     }
   })
   const handleToggleWristHud = useCallback(() => {
@@ -1438,20 +1506,20 @@ export function App() {
   )
 
   const handleEnterFreeRoam = useCallback(() => {
-    setFreeRoamWing(activeSeat?.roomWing ?? 'main-lounge')
+    setFreeRoamWing(activeSeat.roomWing ?? 'main-lounge')
     roomSelectSeat(FREE_ROAM_SEAT_ID)
-  }, [activeSeat?.roomWing, roomSelectSeat])
+  }, [activeSeat.roomWing, roomSelectSeat])
 
   const handleToggleFlyMode = useCallback(() => {
     setFlyMode((prev) => {
       const next = !prev
       if (next && !isFreeRoaming) {
-        setFreeRoamWing(activeSeat?.roomWing ?? 'main-lounge')
+        setFreeRoamWing(activeSeat.roomWing ?? 'main-lounge')
         roomSelectSeat(FREE_ROAM_SEAT_ID)
       }
       return next
     })
-  }, [activeSeat?.roomWing, isFreeRoaming, roomSelectSeat])
+  }, [activeSeat.roomWing, isFreeRoaming, roomSelectSeat])
 
   const handleDropToFloor = useCallback(() => {
     setFlyMode(false)
@@ -2340,6 +2408,7 @@ export function App() {
                         canTakeControl={room.canTakeControl}
                         isMuted={room.localProfile.isMuted}
                         cinemaVolume={cinemaVolume}
+                        effectiveCinemaVolume={effectiveCinemaVolume}
                         voiceVolume={voiceVolume}
                         localCurrentTime={media.localCurrentTime}
                         localDuration={media.localDuration}
@@ -2376,7 +2445,11 @@ export function App() {
                         onToggleChatPanel={() => setSpatialChatOpen((v) => !v)}
                         onRecenterSeat={() => setRecenterVersion((v) => v + 1)}
                         localSeatId={room.localProfile.seatId}
+                        activeLoungeWing={activeLoungeWing}
                         onSelectSeat={handleSelectSeat}
+                        onJumpToWing={handleJumpToWing}
+                        activeLightingPreset={roomCustomization.lighting.preset}
+                        onApplyLightingPreset={handleApplyLightingPreset}
                         atGameStation={Boolean(
                           !isFreeRoaming &&
                             activeSeat?.stationKind &&
@@ -2407,37 +2480,45 @@ export function App() {
               )}
             </SeatCameraAndOriginRig>
 
-            <CinemaRoom
-              roomCode={room.roomCode}
-              presenterState={room.presenterState}
-              roomCustomization={roomCustomization}
-              computedSeats={computedSeats}
-              videoTexture={media.videoTexture}
-              hasVideoFrames={media.hasVideoFrames}
-              isResolvingMedia={media.isResolvingMedia}
-              activeStreamQuality={media.activeStreamQuality}
-              mediaError={media.mediaError}
-              needsAudioUnlock={media.needsAudioUnlock}
-              localSeatId={room.localProfile.seatId}
-              localSeatIndex={room.localProfile.seatIndex}
-              participants={room.participants}
-              canTakeControl={room.canTakeControl}
-              buildMode={buildMode}
-              selectedFurnitureId={selectedFurnitureId}
-              onTakeControl={() => room.takeControl()}
-              onOpenYouTubeBrowser={room.joined ? handleOpenYouTubeBrowser : undefined}
-              onStartStoryQuest={room.joined ? () => handleStartStoryQuest() : undefined}
-              onQuestScreenAction={room.joined ? handleQuestScreenAction : undefined}
-              onQuestHoverCard={room.joined ? barGames.hoverAdventureCard : undefined}
-              onUnlockAudio={media.unlockAudio}
-              onSelectSeat={handleSelectSeat}
-              onTeleportToFloor={room.joined ? handleTeleportToFloor : undefined}
-              onSelectFurniture={setSelectedFurnitureId}
-              onUpdateFurnitureItem={handleUpdateFurnitureItem}
-              onDuplicateFurnitureItem={handleDuplicateFurnitureItem}
-              onDeleteFurnitureItem={handleDeleteFurnitureItem}
-              onEditFurnitureMedia={handleEditFurnitureMediaInVR}
-            />
+            <group
+              name="main-cinema-lounge-root"
+              visible={
+                activeLoungeWing === 'main-lounge' ||
+                activeLoungeWing === 'hallway'
+              }
+            >
+              <CinemaRoom
+                roomCode={room.roomCode}
+                presenterState={room.presenterState}
+                roomCustomization={roomCustomization}
+                computedSeats={computedSeats}
+                videoTexture={media.videoTexture}
+                hasVideoFrames={media.hasVideoFrames}
+                isResolvingMedia={media.isResolvingMedia}
+                activeStreamQuality={media.activeStreamQuality}
+                mediaError={media.mediaError}
+                needsAudioUnlock={media.needsAudioUnlock}
+                localSeatId={room.localProfile.seatId}
+                localSeatIndex={room.localProfile.seatIndex}
+                participants={room.participants}
+                canTakeControl={room.canTakeControl}
+                buildMode={buildMode}
+                selectedFurnitureId={selectedFurnitureId}
+                onTakeControl={() => room.takeControl()}
+                onOpenYouTubeBrowser={room.joined ? handleOpenYouTubeBrowser : undefined}
+                onStartStoryQuest={room.joined ? () => handleStartStoryQuest() : undefined}
+                onQuestScreenAction={room.joined ? handleQuestScreenAction : undefined}
+                onQuestHoverCard={room.joined ? barGames.hoverAdventureCard : undefined}
+                onUnlockAudio={media.unlockAudio}
+                onSelectSeat={handleSelectSeat}
+                onTeleportToFloor={room.joined ? handleTeleportToFloor : undefined}
+                onSelectFurniture={setSelectedFurnitureId}
+                onUpdateFurnitureItem={handleUpdateFurnitureItem}
+                onDuplicateFurnitureItem={handleDuplicateFurnitureItem}
+                onDeleteFurnitureItem={handleDeleteFurnitureItem}
+                onEditFurnitureMedia={handleEditFurnitureMediaInVR}
+              />
+            </group>
 
             <SceneSectionBoundary>
               <ExpansionWing3D
@@ -2485,68 +2566,73 @@ export function App() {
             </SceneSectionBoundary>
 
             <SceneSectionBoundary>
-              <BarGamesCorner3D
-                localUserId={room.localUserId}
-                localDisplayName={room.localProfile.displayName}
-                localSeatId={room.localProfile.seatId}
-                participants={room.participants}
-                roomCustomization={roomCustomization}
-                buildMode={buildMode}
-                dartsState={barGames.dartsState}
-                puttingState={barGames.puttingState}
-                tabletopState={barGames.tabletopState}
-                shuffleboardState={barGames.shuffleboardState}
-                clubhouseState={barGames.clubhouseState}
-                activeDartShot={barGames.activeDartShot}
-                activePuttShot={barGames.activePuttShot}
-                onSelectSeat={handleSelectSeat}
-                onOpen2DPropsDrawer={
-                  !inVRSession
-                    ? () => {
-                        setBuildMode(false)
-                        setWardrobeOpen(false)
-                        setClubhouseOpen(false)
-                        setBarGamesTab('props')
-                        setBarGamesOpen(true)
-                      }
-                    : undefined
-                }
-                onLaunchDartShot={barGames.launchDartShot}
-                onSettleDartShot={barGames.settleDartShot}
-                onJoinDarts={barGames.joinDartsMatch}
-                onConfigureDarts={barGames.configureDartsMatch}
-                onResetDarts={barGames.resetDartsMatch}
-                onLaunchPuttShot={barGames.launchPuttShot}
-                onSettlePuttShot={barGames.settlePuttShot}
-                onJoinPutting={barGames.joinPuttingMatch}
-                onConfigurePutting={barGames.configurePuttingMatch}
-                onResetBallToTee={barGames.resetPuttingBallToTee}
-                onResetPutting={barGames.resetPuttingMatch}
-                onRollDice={barGames.rollPolyhedralDice}
-                onRerollSingleDie={barGames.rerollSingleDie}
-                onSetSurface={barGames.setTableSurface}
-                onSetGameMode={barGames.setTableGameMode}
-                onBetChips={barGames.betTableChips}
-                onDealBlackjack={barGames.dealBlackjackRound}
-                onHitBlackjack={barGames.hitBlackjack}
-                onStandBlackjack={barGames.standBlackjack}
-                onDealHoldem={barGames.dealHoldemRound}
-                onAdvanceHoldemStreet={barGames.advanceHoldemStreet}
-                onShuffleDeck={barGames.shuffleDeck}
-                onDrawCardToHand={barGames.drawCardToHand}
-                onPlayCardFromHand={barGames.playCardFromHand}
-                onDealCardToTable={barGames.dealCardToTable}
-                onFlipTableCard={barGames.flipTableCard}
-                onResetDeck={barGames.resetCardDeck}
-                onSpawnToken={barGames.spawnTableToken}
-                onMoveToken={barGames.moveTableToken}
-                onCreateProp={barGames.createPredictionProp}
-                onPickPropOption={barGames.pickPropOption}
-                onLockProp={barGames.lockPredictionProp}
-                onResolveProp={barGames.resolvePredictionProp}
-                onRecordShuffleboardShot={barGames.recordShuffleboardShot}
-                onResetShuffleboard={barGames.resetShuffleboard}
-              />
+              <group
+                name="bar-games-corner-root"
+                visible={activeLoungeWing === 'main-lounge'}
+              >
+                <BarGamesCorner3D
+                  localUserId={room.localUserId}
+                  localDisplayName={room.localProfile.displayName}
+                  localSeatId={room.localProfile.seatId}
+                  participants={room.participants}
+                  roomCustomization={roomCustomization}
+                  buildMode={buildMode}
+                  dartsState={barGames.dartsState}
+                  puttingState={barGames.puttingState}
+                  tabletopState={barGames.tabletopState}
+                  shuffleboardState={barGames.shuffleboardState}
+                  clubhouseState={barGames.clubhouseState}
+                  activeDartShot={barGames.activeDartShot}
+                  activePuttShot={barGames.activePuttShot}
+                  onSelectSeat={handleSelectSeat}
+                  onOpen2DPropsDrawer={
+                    !inVRSession
+                      ? () => {
+                          setBuildMode(false)
+                          setWardrobeOpen(false)
+                          setClubhouseOpen(false)
+                          setBarGamesTab('props')
+                          setBarGamesOpen(true)
+                        }
+                      : undefined
+                  }
+                  onLaunchDartShot={barGames.launchDartShot}
+                  onSettleDartShot={barGames.settleDartShot}
+                  onJoinDarts={barGames.joinDartsMatch}
+                  onConfigureDarts={barGames.configureDartsMatch}
+                  onResetDarts={barGames.resetDartsMatch}
+                  onLaunchPuttShot={barGames.launchPuttShot}
+                  onSettlePuttShot={barGames.settlePuttShot}
+                  onJoinPutting={barGames.joinPuttingMatch}
+                  onConfigurePutting={barGames.configurePuttingMatch}
+                  onResetBallToTee={barGames.resetPuttingBallToTee}
+                  onResetPutting={barGames.resetPuttingMatch}
+                  onRollDice={barGames.rollPolyhedralDice}
+                  onRerollSingleDie={barGames.rerollSingleDie}
+                  onSetSurface={barGames.setTableSurface}
+                  onSetGameMode={barGames.setTableGameMode}
+                  onBetChips={barGames.betTableChips}
+                  onDealBlackjack={barGames.dealBlackjackRound}
+                  onHitBlackjack={barGames.hitBlackjack}
+                  onStandBlackjack={barGames.standBlackjack}
+                  onDealHoldem={barGames.dealHoldemRound}
+                  onAdvanceHoldemStreet={barGames.advanceHoldemStreet}
+                  onShuffleDeck={barGames.shuffleDeck}
+                  onDrawCardToHand={barGames.drawCardToHand}
+                  onPlayCardFromHand={barGames.playCardFromHand}
+                  onDealCardToTable={barGames.dealCardToTable}
+                  onFlipTableCard={barGames.flipTableCard}
+                  onResetDeck={barGames.resetCardDeck}
+                  onSpawnToken={barGames.spawnTableToken}
+                  onMoveToken={barGames.moveTableToken}
+                  onCreateProp={barGames.createPredictionProp}
+                  onPickPropOption={barGames.pickPropOption}
+                  onLockProp={barGames.lockPredictionProp}
+                  onResolveProp={barGames.resolvePredictionProp}
+                  onRecordShuffleboardShot={barGames.recordShuffleboardShot}
+                  onResetShuffleboard={barGames.resetShuffleboard}
+                />
+              </group>
             </SceneSectionBoundary>
 
             <SceneSectionBoundary>
@@ -2561,6 +2647,7 @@ export function App() {
                 isFlying={flyMode && isFreeRoaming}
                 remoteVoiceStreams={webrtc.remoteVoiceStreams}
                 voiceVolume={voiceVolume}
+                selectedSpeakerId={selectedSpeakerId}
                 broadcastPose={room.broadcastPose}
                 spectralGhostUserIds={Object.values(
                   barGames.adventureState.players,
@@ -2814,7 +2901,7 @@ export function App() {
           computedSeats={computedSeats}
           participants={room.participants}
           localUserId={room.localUserId}
-          localRoamPosition={localRoamPoseRef.current.position}
+          localRoamPosition={activeSeat.position}
           onSelectSeat={handleSelectSeat}
           onJumpToDestination={handleJumpToDestination}
           onUpdateWingState={handleUpdateWingState}
@@ -2847,6 +2934,8 @@ export function App() {
           dartsState={barGames.dartsState}
           puttingState={barGames.puttingState}
           tabletopState={barGames.tabletopState}
+          shuffleboardState={barGames.shuffleboardState}
+          cornholeState={barGames.cornholeState}
           clubhouseState={barGames.clubhouseState}
           hasActiveDartShot={Boolean(barGames.activeDartShot)}
           hasActivePuttShot={Boolean(barGames.activePuttShot)}
@@ -2860,8 +2949,19 @@ export function App() {
           onConfigurePutting={barGames.configurePuttingMatch}
           onResetBallToTee={barGames.resetPuttingBallToTee}
           onResetPutting={barGames.resetPuttingMatch}
+          onRecordShuffleboardShot={barGames.recordShuffleboardShot}
+          onResetShuffleboard={barGames.resetShuffleboard}
+          onRecordCornholeThrow={barGames.recordCornholeThrow}
+          onResetCornhole={barGames.resetCornhole}
           onRollDice={barGames.rollPolyhedralDice}
           onSetSurface={barGames.setTableSurface}
+          onSetGameMode={barGames.setTableGameMode}
+          onBetChips={barGames.betTableChips}
+          onDealBlackjack={barGames.dealBlackjackRound}
+          onHitBlackjack={barGames.hitBlackjack}
+          onStandBlackjack={barGames.standBlackjack}
+          onDealHoldem={barGames.dealHoldemRound}
+          onAdvanceHoldemStreet={barGames.advanceHoldemStreet}
           onShuffleDeck={barGames.shuffleDeck}
           onDrawCardToHand={barGames.drawCardToHand}
           onPlayCardFromHand={barGames.playCardFromHand}

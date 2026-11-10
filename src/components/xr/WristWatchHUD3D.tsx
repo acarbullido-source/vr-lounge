@@ -1,17 +1,21 @@
 import { RoundedBox, Text } from '@react-three/drei'
 import { useFrame, useThree } from '@react-three/fiber'
 import { useXR, useXRInputSourceState } from '@react-three/xr'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
+import { isAdventureMediaUrl } from '../../games/adventure'
+import { playSpatialUiFeedback } from '../../services/soundboardAudio'
 import {
   isControllerButtonPressed,
   readXRSpaceWorldPose,
+  setSpatialUiHovered,
 } from '../../services/xrTracking'
 import type { LoungeWingId, PresenterState } from '../../types/lounge'
 
 export interface WristWatchHUD3DProps {
   visible: boolean
   hudHidden?: boolean
+  nesControllerEngaged?: boolean
   xrOriginRef: React.RefObject<THREE.Group | null>
   activeLoungeWing: LoungeWingId
   flyMode: boolean
@@ -49,13 +53,14 @@ const TELEPORT_BUTTONS: ReadonlyArray<{
   pos: [number, number, number]
   width?: number
 }> = [
-  { wing: 'main-lounge', label: '🎬 Theater', pos: [-0.072, 0.036, 0.008], width: 0.068 },
-  { wing: 'library', label: '🔥 Library', pos: [0, 0.036, 0.008], width: 0.068 },
-  { wing: 'outdoor-deck', label: '🏔 Deck', pos: [0.072, 0.036, 0.008], width: 0.068 },
-  { wing: 'command-center', label: '🛰 Ops', pos: [-0.081, 0.002, 0.008], width: 0.051 },
-  { wing: 'game-room', label: '🕹 Game', pos: [-0.027, 0.002, 0.008], width: 0.051 },
-  { wing: 'shooting-range', label: '🎯 Range', pos: [0.027, 0.002, 0.008], width: 0.051 },
-  { wing: 'boardroom', label: '💼 Board', pos: [0.081, 0.002, 0.008], width: 0.051 },
+  { wing: 'main-lounge', label: '🎬 Theater', pos: [-0.081, 0.008, 0.008], width: 0.051 },
+  { wing: 'hallway', label: '🏛 Hallway', pos: [-0.027, 0.008, 0.008], width: 0.051 },
+  { wing: 'boardroom', label: '💼 Board', pos: [0.027, 0.008, 0.008], width: 0.051 },
+  { wing: 'library', label: '🔥 Library', pos: [0.081, 0.008, 0.008], width: 0.051 },
+  { wing: 'command-center', label: '🛰 Control', pos: [-0.081, -0.032, 0.008], width: 0.051 },
+  { wing: 'game-room', label: '🕹 Game Rm', pos: [-0.027, -0.032, 0.008], width: 0.051 },
+  { wing: 'shooting-range', label: '🎯 Range', pos: [0.027, -0.032, 0.008], width: 0.051 },
+  { wing: 'outdoor-deck', label: '🏔 Deck', pos: [0.081, -0.032, 0.008], width: 0.051 },
 ]
 
 interface WatchChipButtonProps {
@@ -64,9 +69,11 @@ interface WatchChipButtonProps {
   position: [number, number, number]
   width?: number
   height?: number
+  fontSize?: number
   active?: boolean
   accentColor?: string
   danger?: boolean
+  soundKind?: 'ui-click' | 'teleport' | 'dice-roll'
   onClick: () => void
 }
 
@@ -74,14 +81,23 @@ function WatchChipButton({
   label,
   sublabel,
   position,
-  width = 0.066,
-  height = 0.028,
+  width = 0.068,
+  height = 0.03,
+  fontSize = 0.009,
   active = false,
   accentColor = '#E5A93C',
   danger = false,
+  soundKind = 'ui-click',
   onClick,
 }: WatchChipButtonProps) {
   const [hovered, setHovered] = useState(false)
+  const sourceId = `wrist-chip-${label}`
+
+  useEffect(() => {
+    return () => {
+      setSpatialUiHovered(false, sourceId)
+    }
+  }, [sourceId])
 
   const bg = danger
     ? hovered
@@ -100,23 +116,43 @@ function WatchChipButton({
   return (
     <group
       position={position}
+      scale={hovered ? 1.04 : 1}
       pointerEventsType={{ deny: 'grab' }}
       onPointerOver={(e) => {
         e.stopPropagation()
         setHovered(true)
+        setSpatialUiHovered(true, sourceId)
       }}
-      onPointerOut={() => setHovered(false)}
+      onPointerOut={() => {
+        setHovered(false)
+        setSpatialUiHovered(false, sourceId)
+      }}
       onClick={(e) => {
         e.stopPropagation()
+        playSpatialUiFeedback(soundKind)
         onClick()
       }}
     >
+      {(hovered || active) && (
+        <RoundedBox
+          args={[width + 0.0024, height + 0.0024, 0.004]}
+          radius={0.0055}
+          smoothness={2}
+          position={[0, 0, -0.0008]}
+        >
+          <meshBasicMaterial
+            color={danger ? '#F87171' : active ? '#FDE68A' : accentColor}
+            transparent
+            opacity={hovered ? 0.85 : 0.45}
+          />
+        </RoundedBox>
+      )}
       <RoundedBox args={[width, height, 0.005]} radius={0.005} smoothness={2}>
         <meshBasicMaterial color={bg} />
       </RoundedBox>
       <Text
-        position={[0, sublabel ? 0.004 : 0, 0.0035]}
-        fontSize={0.0082}
+        position={[0, sublabel ? 0.0045 : 0, 0.0035]}
+        fontSize={fontSize}
         color={fg}
         anchorX="center"
         anchorY="middle"
@@ -125,9 +161,9 @@ function WatchChipButton({
       </Text>
       {sublabel && (
         <Text
-          position={[0, -0.0065, 0.0035]}
-          fontSize={0.0062}
-          color={active && !danger ? '#1E293B' : '#94A3B8'}
+          position={[0, -0.007, 0.0035]}
+          fontSize={0.0068}
+          color={active && !danger ? '#1E293B' : '#CBD5E1'}
           anchorX="center"
           anchorY="middle"
         >
@@ -143,17 +179,20 @@ function WatchChipButton({
  * - Attaches to the local player's left VR controller (`gripSpace`) or tracked left hand (`wrist`).
  * - Glance-to-Open: Automatically expands into a holographic command deck when the user turns
  *   their left wrist toward their headset, and collapses into a compact wristband when lowered.
- * - Easy Hide / Unhide: Users can collapse the holographic deck or completely hide/unhide the
- *   Wrist HUD via the watch buttons, Left Thumbstick click (`L3`), 3D Spatial Dock, or `H` key.
+ * - 2-Level Progressive Disclosure:
+ *   - Level 1 exposes high-frequency primary actions (Mic, Screen Vol, Rooms Drawer, Control Dock,
+ *     Fly Mode, Drop to Floor, Recenter View, and context-sensitive Quest D20 roll).
+ *   - Level 2 (`roomsDrawerOpen`) expands the 8-room fast-travel grid on demand.
  */
 export function WristWatchHUD3D({
   visible,
   hudHidden = false,
+  nesControllerEngaged = false,
   xrOriginRef,
   activeLoungeWing,
   flyMode,
   isMuted,
-  cinemaVolume: _cinemaVolume,
+  cinemaVolume,
   effectiveCinemaVolume,
   presenterState,
   liveAlertText,
@@ -179,6 +218,7 @@ export function WristWatchHUD3D({
   const [glancedOpen, setGlancedOpen] = useState(false)
   const [pinnedOpen, setPinnedOpen] = useState(false)
   const [glanceDismissed, setGlanceDismissed] = useState(false)
+  const [roomsDrawerOpen, setRoomsDrawerOpen] = useState(false)
   const glancedOpenRef = useRef(false)
   const glanceDismissedRef = useRef(false)
   const prevStickClickRef = useRef(false)
@@ -202,6 +242,7 @@ export function WristWatchHUD3D({
   const handleToggleDeckExpand = () => {
     if (isExpanded) {
       setPinnedOpen(false)
+      setRoomsDrawerOpen(false)
       glanceDismissedRef.current = true
       setGlanceDismissed(true)
     } else {
@@ -217,11 +258,14 @@ export function WristWatchHUD3D({
     const alpha = 1 - Math.exp(-18 * dt)
 
     // 1. Left Controller Thumbstick Click (`L3`) unhides HUD if hidden, or toggles deck open/close
-    const stickClicked = isControllerButtonPressed(
-      leftController,
-      ['xr-standard-thumbstick', 'thumbstick'],
-      3,
-    )
+    //    (Disabled while NES controller is engaged so L3 acts strictly as NES SELECT)
+    const stickClicked =
+      !nesControllerEngaged &&
+      isControllerButtonPressed(
+        leftController,
+        ['xr-standard-thumbstick', 'thumbstick'],
+        3,
+      )
     if (stickClicked && !prevStickClickRef.current) {
       if (hudHidden) {
         onToggleHudHidden?.()
@@ -318,11 +362,20 @@ export function WristWatchHUD3D({
 
   const wingMeta = WING_LABELS[activeLoungeWing] ?? WING_LABELS['main-lounge']
   const streamPct = Math.round(effectiveCinemaVolume * 100)
+  const isQuietZoneMuted =
+    effectiveCinemaVolume === 0 &&
+    cinemaVolume > 0 &&
+    (activeLoungeWing === 'library' || activeLoungeWing === 'game-room')
+  const questActive = isAdventureMediaUrl(presenterState.mediaUrl)
   const presenterSummary =
     liveAlertText ||
-    (presenterState.screenMode !== 'idle'
-      ? `📺 ${presenterState.mediaTitle.slice(0, 20)}`
-      : `${wingMeta.emoji} ${wingMeta.short}`)
+    (isQuietZoneMuted
+      ? activeLoungeWing === 'library'
+        ? '🔥 Quiet Library · Screen Muted'
+        : '🔇 Game Room · Screen Muted'
+      : presenterState.screenMode !== 'idle'
+        ? `📺 ${presenterState.mediaTitle.slice(0, 20)}`
+        : `${wingMeta.emoji} ${wingMeta.short}`)
 
   return (
     <group ref={wristRootRef} name="left-wrist-smartwatch-hud">
@@ -336,10 +389,10 @@ export function WristWatchHUD3D({
             <meshStandardMaterial color="#0F172A" roughness={0.6} metalness={0.4} />
           </mesh>
           <WatchChipButton
-            label="⌚ Show HUD"
+            label="⌚ Wrist HUD"
             position={[0, 0, 0.003]}
-            width={0.056}
-            height={0.02}
+            width={0.06}
+            height={0.022}
             onClick={() => {
               onToggleHudHidden?.()
               setPinnedOpen(false)
@@ -355,8 +408,16 @@ export function WristWatchHUD3D({
              ===================================================================== */}
           <group
             pointerEventsType={{ deny: 'grab' }}
+            onPointerOver={(e) => {
+              e.stopPropagation()
+              setSpatialUiHovered(true, 'wrist-watch-bezel')
+            }}
+            onPointerOut={() => {
+              setSpatialUiHovered(false, 'wrist-watch-bezel')
+            }}
             onClick={(e) => {
               e.stopPropagation()
+              playSpatialUiFeedback('ui-click')
               handleToggleDeckExpand()
             }}
           >
@@ -410,7 +471,7 @@ export function WristWatchHUD3D({
               anchorY="middle"
             >
               {flyMode
-                ? '🚀 FLY ON · TAP'
+                ? '🚀 FLY MODE · TAP'
                 : `${isMuted ? '🔇 MUTED' : '🎙 LIVE'} · ${isExpanded ? '▼ CLOSE' : '▲ OPEN'}`}
             </Text>
           </group>
@@ -422,8 +483,10 @@ export function WristWatchHUD3D({
               position={[0.048, 0, 0.003]}
               width={0.032}
               height={0.02}
+              fontSize={0.0078}
               onClick={() => {
                 setPinnedOpen(false)
+                setRoomsDrawerOpen(false)
                 onToggleHudHidden()
               }}
             />
@@ -432,49 +495,60 @@ export function WristWatchHUD3D({
           {/* =====================================================================
               EXPANDED HOLOGRAPHIC WRIST COMMAND DECK (Floating 9cm above watch face)
              ===================================================================== */}
-          <group ref={holoDeckRef} position={[0, 0.102, 0.018]}>
+          <group ref={holoDeckRef} position={[0, 0.104, 0.018]}>
+            {/* Brushed metallic outer chassis bezel */}
+            <RoundedBox
+              args={[0.244, 0.182, 0.005]}
+              radius={0.014}
+              smoothness={3}
+              position={[0, 0, -0.002]}
+            >
+              <meshStandardMaterial color="#1E293B" metalness={0.75} roughness={0.25} />
+            </RoundedBox>
+
             {/* Frosted obsidian holographic backplate */}
-            <RoundedBox args={[0.232, 0.168, 0.006]} radius={0.012} smoothness={3}>
-              <meshBasicMaterial color="#090D15" transparent opacity={0.94} />
+            <RoundedBox args={[0.236, 0.174, 0.006]} radius={0.012} smoothness={3}>
+              <meshBasicMaterial color="#090D15" transparent opacity={0.95} />
             </RoundedBox>
 
             {/* Outer neon border frame */}
             <RoundedBox
-              args={[0.236, 0.172, 0.004]}
+              args={[0.24, 0.178, 0.004]}
               radius={0.013}
               smoothness={2}
-              position={[0, 0, -0.0015]}
+              position={[0, 0, -0.001]}
             >
               <meshBasicMaterial
                 color={flyMode ? '#38BDF8' : '#E5A93C'}
                 transparent
-                opacity={0.45}
+                opacity={0.5}
               />
             </RoundedBox>
 
             {/* Top Status Readout Bar + Pin, Collapse & Hide HUD Buttons */}
             <RoundedBox
-              args={[0.216, 0.024, 0.005]}
+              args={[0.22, 0.024, 0.005]}
               radius={0.005}
               smoothness={2}
-              position={[0, 0.066, 0.003]}
+              position={[0, 0.068, 0.003]}
             >
               <meshBasicMaterial color="#111827" />
             </RoundedBox>
             <Text
-              position={[-0.102, 0.066, 0.0065]}
+              position={[-0.104, 0.068, 0.0065]}
               fontSize={0.0068}
-              color="#E5A93C"
+              color={isQuietZoneMuted ? '#38BDF8' : '#E5A93C'}
               anchorX="left"
               anchorY="middle"
             >
               {presenterSummary}
             </Text>
             <WatchChipButton
-              label={pinnedOpen ? '📌 Pin' : '📌 Pin'}
-              position={[0.018, 0.066, 0.004]}
+              label="📌 Pin"
+              position={[0.018, 0.068, 0.004]}
               width={0.034}
               height={0.019}
+              fontSize={0.0074}
               active={pinnedOpen}
               onClick={() => {
                 const next = !pinnedOpen
@@ -487,11 +561,13 @@ export function WristWatchHUD3D({
             />
             <WatchChipButton
               label="▼ Min"
-              position={[0.054, 0.066, 0.004]}
+              position={[0.054, 0.068, 0.004]}
               width={0.034}
               height={0.019}
+              fontSize={0.0074}
               onClick={() => {
                 setPinnedOpen(false)
+                setRoomsDrawerOpen(false)
                 glanceDismissedRef.current = true
                 setGlanceDismissed(true)
               }}
@@ -499,106 +575,210 @@ export function WristWatchHUD3D({
             {onToggleHudHidden && (
               <WatchChipButton
                 label="✕ Hide"
-                position={[0.09, 0.066, 0.004]}
+                position={[0.09, 0.068, 0.004]}
                 width={0.034}
                 height={0.019}
+                fontSize={0.0074}
                 danger={true}
                 onClick={() => {
                   setPinnedOpen(false)
+                  setRoomsDrawerOpen(false)
                   onToggleHudHidden()
                 }}
               />
             )}
 
-            {/* Row 1 & 2: One-Tap Room Teleport Grid */}
-            {TELEPORT_BUTTONS.map((btn) => (
-              <WatchChipButton
-                key={btn.wing}
-                label={btn.label}
-                position={btn.pos}
-                width={btn.width ?? 0.068}
-                height={0.028}
-                active={activeLoungeWing === btn.wing}
-                onClick={() => onJumpToWing(btn.wing)}
-              />
-            ))}
+            {roomsDrawerOpen ? (
+              /* ===============================================================
+                 LEVEL 2 DRAWER: 8-ROOM TELEPORT GRID (Progressive Disclosure)
+                 =============================================================== */
+              <>
+                <WatchChipButton
+                  label="◀ Back"
+                  position={[-0.076, 0.038, 0.008]}
+                  width={0.062}
+                  height={0.022}
+                  fontSize={0.0082}
+                  active={true}
+                  onClick={() => setRoomsDrawerOpen(false)}
+                />
+                <Text
+                  position={[0.024, 0.038, 0.008]}
+                  fontSize={0.0074}
+                  color="#94A3B8"
+                  anchorX="center"
+                  anchorY="middle"
+                >
+                  TELEPORT TO ROOM (8)
+                </Text>
 
-            {/* Row 3: Movement & Comfort (Fly Mode, Drop to Floor, Recenter View) */}
-            <WatchChipButton
-              label={flyMode ? '🚀 Fly: ON' : '🚀 Fly: OFF'}
-              sublabel={flyMode ? 'R-Stick ▲▼' : 'Free 3D'}
-              position={[-0.072, -0.033, 0.008]}
-              width={0.068}
-              height={0.03}
-              active={flyMode}
-              accentColor="#38BDF8"
-              onClick={onToggleFlyMode}
-            />
-            <WatchChipButton
-              label="⬇ Floor"
-              sublabel="Drop Y=0"
-              position={[0, -0.033, 0.008]}
-              width={0.068}
-              height={0.03}
-              onClick={onDropToFloor}
-            />
-            <WatchChipButton
-              label="🎯 Recenter"
-              sublabel="Align View"
-              position={[0.072, -0.033, 0.008]}
-              width={0.068}
-              height={0.03}
-              onClick={onRecenterView}
-            />
+                {TELEPORT_BUTTONS.map((btn) => (
+                  <WatchChipButton
+                    key={btn.wing}
+                    label={btn.label}
+                    position={btn.pos}
+                    width={btn.width ?? 0.051}
+                    height={0.032}
+                    fontSize={0.0084}
+                    active={activeLoungeWing === btn.wing}
+                    soundKind="teleport"
+                    onClick={() => {
+                      onJumpToWing(btn.wing)
+                      setRoomsDrawerOpen(false)
+                    }}
+                  />
+                ))}
 
-            {/* Row 4: Audio, Story Quest D20 Roller & Main Dock */}
-            <WatchChipButton
-              label={isMuted ? '🔇 Mic' : '🎙 Mic'}
-              sublabel={isMuted ? 'Muted' : 'Live'}
-              position={[-0.081, -0.067, 0.008]}
-              width={0.051}
-              height={0.028}
-              danger={isMuted}
-              active={!isMuted}
-              accentColor="#10B981"
-              onClick={onToggleMute}
-            />
-            <WatchChipButton
-              label={streamPct === 0 ? '🔇 0%' : `🔊 ${streamPct}%`}
-              sublabel="TV Vol"
-              position={[-0.027, -0.067, 0.008]}
-              width={0.051}
-              height={0.028}
-              active={streamPct > 0}
-              onClick={onCycleStreamVolume}
-            />
-            <WatchChipButton
-              label="🎲 D20"
-              sublabel="Quest Roll"
-              position={[0.027, -0.067, 0.008]}
-              width={0.051}
-              height={0.028}
-              active={true}
-              accentColor="#F59E0B"
-              onClick={() => {
-                if (onRollQuestD20) {
-                  onRollQuestD20()
-                } else if (onStartStoryQuest) {
-                  onStartStoryQuest()
-                }
-              }}
-            />
-            <WatchChipButton
-              label="🎛 Dock"
-              sublabel="UI / Quest"
-              position={[0.081, -0.067, 0.008]}
-              width={0.051}
-              height={0.028}
-              onClick={onSummonMainDock}
-            />
+                <WatchChipButton
+                  label="🎯 Recenter View"
+                  position={[-0.055, -0.068, 0.008]}
+                  width={0.104}
+                  height={0.026}
+                  fontSize={0.0082}
+                  onClick={onRecenterView}
+                />
+                <WatchChipButton
+                  label="🎛 Control Dock"
+                  position={[0.055, -0.068, 0.008]}
+                  width={0.104}
+                  height={0.026}
+                  fontSize={0.0082}
+                  onClick={onSummonMainDock}
+                />
+              </>
+            ) : (
+              /* ===============================================================
+                 LEVEL 1 PRIMARY DECK: HIGH-FREQUENCY AUDIO, ROOMS & COMFORT
+                 =============================================================== */
+              <>
+                {/* Row 1: Primary Mic & Screen Volume */}
+                <WatchChipButton
+                  label={isMuted ? '🔇 Mic Muted' : '🎙 Mic Live'}
+                  sublabel={isMuted ? 'Tap to Unmute' : 'Voice Active'}
+                  position={[-0.055, 0.032, 0.008]}
+                  width={0.104}
+                  height={0.033}
+                  fontSize={0.0094}
+                  danger={isMuted}
+                  active={!isMuted}
+                  accentColor="#10B981"
+                  onClick={onToggleMute}
+                />
+                <WatchChipButton
+                  label={streamPct === 0 ? '🔇 Screen 0%' : `🔊 Screen ${streamPct}%`}
+                  sublabel={
+                    isQuietZoneMuted
+                      ? '🔥 Quiet Zone Auto-Mute'
+                      : 'Tap to Cycle Vol'
+                  }
+                  position={[0.055, 0.032, 0.008]}
+                  width={0.104}
+                  height={0.033}
+                  fontSize={0.0094}
+                  active={streamPct > 0}
+                  onClick={onCycleStreamVolume}
+                />
+
+                {/* Row 2: Rooms Sub-Drawer Trigger & Floating Control Dock */}
+                <WatchChipButton
+                  label="🚪 Rooms ▸"
+                  sublabel={`${wingMeta.emoji} ${wingMeta.short}`}
+                  position={[-0.055, -0.004, 0.008]}
+                  width={0.104}
+                  height={0.033}
+                  fontSize={0.0094}
+                  active={true}
+                  onClick={() => setRoomsDrawerOpen(true)}
+                />
+                <WatchChipButton
+                  label="🎛 Control Dock"
+                  sublabel="Media & Tools (L-Y)"
+                  position={[0.055, -0.004, 0.008]}
+                  width={0.104}
+                  height={0.033}
+                  fontSize={0.0094}
+                  onClick={onSummonMainDock}
+                />
+
+                {/* Row 3: Locomotion & Comfort (Fly Mode, Drop to Floor, Recenter View) */}
+                <WatchChipButton
+                  label={flyMode ? '🚀 Fly: ON' : '🚀 Fly: OFF'}
+                  sublabel={flyMode ? 'R-Stick ▲▼' : 'Free 3D'}
+                  position={[-0.072, -0.039, 0.008]}
+                  width={0.068}
+                  height={0.029}
+                  fontSize={0.0086}
+                  active={flyMode}
+                  accentColor="#38BDF8"
+                  onClick={onToggleFlyMode}
+                />
+                <WatchChipButton
+                  label="⬇ Drop Floor"
+                  sublabel="Reset Y=0"
+                  position={[0, -0.039, 0.008]}
+                  width={0.068}
+                  height={0.029}
+                  fontSize={0.0086}
+                  onClick={onDropToFloor}
+                />
+                <WatchChipButton
+                  label="🎯 Recenter"
+                  sublabel="Align View"
+                  position={[0.072, -0.039, 0.008]}
+                  width={0.068}
+                  height={0.029}
+                  fontSize={0.0086}
+                  onClick={onRecenterView}
+                />
+
+                {/* Row 4: Context-Sensitive Action Strip */}
+                {questActive ? (
+                  <WatchChipButton
+                    label="🎲 Roll D20 (Adventure Quest Check)"
+                    position={[0, -0.07, 0.008]}
+                    width={0.214}
+                    height={0.026}
+                    fontSize={0.0088}
+                    active={true}
+                    accentColor="#F59E0B"
+                    soundKind="dice-roll"
+                    onClick={() => {
+                      if (onRollQuestD20) {
+                        onRollQuestD20()
+                      } else if (onStartStoryQuest) {
+                        onStartStoryQuest()
+                      }
+                    }}
+                  />
+                ) : (
+                  <>
+                    <WatchChipButton
+                      label="🎬 Main Theater"
+                      position={[-0.055, -0.07, 0.008]}
+                      width={0.104}
+                      height={0.026}
+                      fontSize={0.0084}
+                      active={activeLoungeWing === 'main-lounge'}
+                      soundKind="teleport"
+                      onClick={() => onJumpToWing('main-lounge')}
+                    />
+                    <WatchChipButton
+                      label="⚔️ Story Quest"
+                      position={[0.055, -0.07, 0.008]}
+                      width={0.104}
+                      height={0.026}
+                      fontSize={0.0084}
+                      accentColor="#F59E0B"
+                      onClick={() => onStartStoryQuest?.()}
+                    />
+                  </>
+                )}
+              </>
+            )}
           </group>
         </>
       )}
     </group>
   )
 }
+

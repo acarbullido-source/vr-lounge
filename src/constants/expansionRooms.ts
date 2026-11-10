@@ -1,4 +1,5 @@
 import type {
+  BoardroomWhiteboardStroke,
   CommandNewsCategoryId,
   ComputedSeat,
   ExpansionWingSyncedState,
@@ -13,9 +14,117 @@ export const HALLWAY_HALF_WIDTH = 1.65
 export const HALLWAY_LENGTH = 20.4
 export const HALLWAY_HEIGHT = 3.8
 
+export const BOARDROOM_WHITEBOARD_STORAGE_KEY =
+  'vr-lounge:boardroom-whiteboard:v1'
+
+export interface PersistedBoardroomWhiteboardSnapshot {
+  strokes: BoardroomWhiteboardStroke[]
+  grid: boolean
+  clearedAt: number
+  updatedAt: number
+}
+
+export function sanitizeBoardroomWhiteboardStrokes(
+  raw: unknown,
+): BoardroomWhiteboardStroke[] {
+  if (!Array.isArray(raw)) return []
+  const sanitized: BoardroomWhiteboardStroke[] = []
+  for (const item of raw.slice(-320)) {
+    if (!item || typeof item !== 'object') continue
+    const candidate = item as Partial<BoardroomWhiteboardStroke>
+    if (!Array.isArray(candidate.points) || candidate.points.length < 2) continue
+    const cleanPoints: number[] = []
+    const maxCoords = Math.min(candidate.points.length, 640)
+    for (let i = 0; i + 1 < maxCoords; i += 2) {
+      const u = Number(candidate.points[i])
+      const v = Number(candidate.points[i + 1])
+      if (!Number.isFinite(u) || !Number.isFinite(v)) continue
+      cleanPoints.push(
+        Number(Math.max(0, Math.min(1, u)).toFixed(4)),
+        Number(Math.max(0, Math.min(1, v)).toFixed(4)),
+      )
+    }
+    if (cleanPoints.length < 2) continue
+    const tool = candidate.tool === 'eraser' ? 'eraser' : 'pen'
+    const size: 1 | 2 | 3 =
+      candidate.size === 1 || candidate.size === 3 ? candidate.size : 2
+    const color =
+      typeof candidate.color === 'string' &&
+      /^#[0-9a-fA-F]{3,8}$/.test(candidate.color.trim())
+        ? candidate.color.trim()
+        : '#0F172A'
+    sanitized.push({
+      id:
+        typeof candidate.id === 'string' && candidate.id.trim()
+          ? candidate.id.trim().slice(0, 64)
+          : `wb-${Date.now()}-${sanitized.length}`,
+      tool,
+      color,
+      size,
+      points: cleanPoints,
+      author:
+        typeof candidate.author === 'string'
+          ? candidate.author.trim().slice(0, 28)
+          : undefined,
+      createdAt:
+        typeof candidate.createdAt === 'number' &&
+        Number.isFinite(candidate.createdAt)
+          ? candidate.createdAt
+          : Date.now(),
+    })
+  }
+  return sanitized
+}
+
+export function loadPersistedBoardroomWhiteboard(): PersistedBoardroomWhiteboardSnapshot | null {
+  if (typeof window === 'undefined' || !window.localStorage) return null
+  try {
+    const raw = window.localStorage.getItem(BOARDROOM_WHITEBOARD_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<PersistedBoardroomWhiteboardSnapshot>
+    if (!parsed || typeof parsed !== 'object') return null
+    return {
+      strokes: sanitizeBoardroomWhiteboardStrokes(parsed.strokes),
+      grid: typeof parsed.grid === 'boolean' ? parsed.grid : true,
+      clearedAt:
+        typeof parsed.clearedAt === 'number' && Number.isFinite(parsed.clearedAt)
+          ? parsed.clearedAt
+          : 0,
+      updatedAt:
+        typeof parsed.updatedAt === 'number' && Number.isFinite(parsed.updatedAt)
+          ? parsed.updatedAt
+          : 0,
+    }
+  } catch {
+    return null
+  }
+}
+
+export function savePersistedBoardroomWhiteboard(
+  snapshot: PersistedBoardroomWhiteboardSnapshot,
+): void {
+  if (typeof window === 'undefined' || !window.localStorage) return
+  try {
+    window.localStorage.setItem(
+      BOARDROOM_WHITEBOARD_STORAGE_KEY,
+      JSON.stringify({
+        strokes: sanitizeBoardroomWhiteboardStrokes(snapshot.strokes),
+        grid: snapshot.grid,
+        clearedAt: snapshot.clearedAt,
+        updatedAt: snapshot.updatedAt,
+      }),
+    )
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
 export const DEFAULT_EXPANSION_WING_STATE: ExpansionWingSyncedState = {
   boardroomScreenMode: 'agenda',
   boardroomAgendaIndex: 0,
+  boardroomWhiteboardStrokes: [],
+  boardroomWhiteboardGrid: true,
+  boardroomWhiteboardClearedAt: 0,
   libraryFireLit: true,
   outdoorSkyPreset: 'golden-sunset',
   commandScreenMode: 'mirror-lounge',
@@ -31,16 +140,66 @@ export const DEFAULT_EXPANSION_WING_STATE: ExpansionWingSyncedState = {
 export function resolveExpansionWingState(
   raw?: Partial<ExpansionWingSyncedState> | null,
 ): ExpansionWingSyncedState {
+  const localWb = loadPersistedBoardroomWhiteboard()
   if (!raw || typeof raw !== 'object') {
-    return { ...DEFAULT_EXPANSION_WING_STATE }
+    return {
+      ...DEFAULT_EXPANSION_WING_STATE,
+      boardroomWhiteboardStrokes: localWb?.strokes ?? [],
+      boardroomWhiteboardGrid: localWb?.grid ?? true,
+      boardroomWhiteboardClearedAt: localWb?.clearedAt ?? 0,
+    }
   }
   const boardroomScreenMode =
-    raw.boardroomScreenMode === 'mirror-lounge' ? 'mirror-lounge' : 'agenda'
+    raw.boardroomScreenMode === 'mirror-lounge'
+      ? 'mirror-lounge'
+      : raw.boardroomScreenMode === 'whiteboard'
+        ? 'whiteboard'
+        : 'agenda'
   const boardroomAgendaIndex =
     typeof raw.boardroomAgendaIndex === 'number' &&
     Number.isFinite(raw.boardroomAgendaIndex)
       ? Math.max(0, Math.min(3, Math.floor(raw.boardroomAgendaIndex)))
       : 0
+
+  const hasExplicitStrokesArray = Array.isArray(raw.boardroomWhiteboardStrokes)
+  const rawStrokes = hasExplicitStrokesArray
+    ? sanitizeBoardroomWhiteboardStrokes(raw.boardroomWhiteboardStrokes)
+    : []
+  const rawClearedAt =
+    typeof raw.boardroomWhiteboardClearedAt === 'number' &&
+    Number.isFinite(raw.boardroomWhiteboardClearedAt)
+      ? raw.boardroomWhiteboardClearedAt
+      : 0
+  const rawGrid =
+    typeof raw.boardroomWhiteboardGrid === 'boolean'
+      ? raw.boardroomWhiteboardGrid
+      : (localWb?.grid ?? true)
+
+  // Preserve drawn strokes across reloads and non-whiteboard room updates unless explicitly cleared
+  let boardroomWhiteboardStrokes = rawStrokes
+  let boardroomWhiteboardClearedAt = rawClearedAt
+  if (
+    rawStrokes.length === 0 &&
+    localWb &&
+    localWb.strokes.length > 0 &&
+    rawClearedAt <= localWb.clearedAt &&
+    rawClearedAt < localWb.updatedAt
+  ) {
+    boardroomWhiteboardStrokes = localWb.strokes
+    boardroomWhiteboardClearedAt = localWb.clearedAt
+  } else if (hasExplicitStrokesArray && (rawStrokes.length > 0 || rawClearedAt > 0)) {
+    const latestStrokeTime = rawStrokes.reduce(
+      (max, s) => Math.max(max, s.createdAt),
+      0,
+    )
+    savePersistedBoardroomWhiteboard({
+      strokes: rawStrokes,
+      grid: rawGrid,
+      clearedAt: rawClearedAt,
+      updatedAt: Math.max(Date.now(), latestStrokeTime, rawClearedAt),
+    })
+  }
+
   const libraryFireLit =
     typeof raw.libraryFireLit === 'boolean' ? raw.libraryFireLit : true
   const outdoorSkyPreset: OutdoorSkyPresetId =
@@ -91,6 +250,9 @@ export function resolveExpansionWingState(
   return {
     boardroomScreenMode,
     boardroomAgendaIndex,
+    boardroomWhiteboardStrokes,
+    boardroomWhiteboardGrid: rawGrid,
+    boardroomWhiteboardClearedAt,
     libraryFireLit,
     outdoorSkyPreset,
     commandScreenMode,
@@ -346,8 +508,8 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
     {
       id: 'main-lounge',
       emoji: '🎬',
-      shortLabel: 'Main Lounge',
-      title: 'Main Cinema & Hangout Lounge',
+      shortLabel: 'Main Theater',
+      title: 'Main Theater',
       subtitle: 'Giant Screen · Back-Wall Mirrors · Shuffleboard, Darts & Putting',
       accentColor: '#E5A93C',
       spawnPosition: [0, 0, 0.85],
@@ -357,8 +519,8 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
     {
       id: 'hallway',
       emoji: '🏛',
-      shortLabel: 'Hallway',
-      title: 'Grand Clubhouse Gallery Hallway',
+      shortLabel: 'Grand Hallway',
+      title: 'Grand Hallway',
       subtitle: 'Central corridor connecting all private rooms, Range Corridor, Game Room & deck',
       accentColor: '#94A3B8',
       spawnPosition: [0, 0, Number((z0 + 2.4).toFixed(2))],
@@ -369,8 +531,9 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
       id: 'boardroom',
       emoji: '💼',
       shortLabel: 'Boardroom',
-      title: 'Executive Board Room',
-      subtitle: '9-Seat Marble & Mahogany Table · Strategy & Mirror Wall',
+      title: 'Executive Boardroom',
+      subtitle:
+        '9-Seat Marble Table · Interactive Wall Whiteboard · Presentation & Mirror Screen',
       accentColor: '#F59E0B',
       spawnPosition: [-3.0, 0, boardZ],
       spawnYaw: Math.PI / 2,
@@ -379,8 +542,8 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
     {
       id: 'library',
       emoji: '🔥',
-      shortLabel: 'Library',
-      title: 'Cozy Library & Crackling Fireplace',
+      shortLabel: 'Quiet Library',
+      title: 'Quiet Library',
       subtitle: 'Quiet Audio Isolation Zone · Stone Hearth & Reading Chairs',
       accentColor: '#EA580C',
       spawnPosition: [3.2, 0, libZ],
@@ -390,8 +553,8 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
     {
       id: 'command-center',
       emoji: '🛰',
-      shortLabel: 'Command Ops',
-      title: 'Command & Control Center',
+      shortLabel: 'Control Room',
+      title: 'Control Room',
       subtitle: 'Aux Screen · Live US Sports Scoreboard · Weather & Breaking News',
       accentColor: '#38BDF8',
       spawnPosition: [-7.35, 0, cmdZ],
@@ -402,7 +565,7 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
       id: 'game-room',
       emoji: '🕹',
       shortLabel: 'Game Room',
-      title: 'The Game Room & Holotable Sanctum',
+      title: 'Game Room',
       subtitle: 'Wall Stream Mirror · Neon Arcade Perimeter · 3D Tactical Holotable',
       accentColor: '#A855F7',
       spawnPosition: [3.25, 0, gameRoomZ],
@@ -413,7 +576,7 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
       id: 'shooting-range',
       emoji: '🎯',
       shortLabel: 'Shooting Range',
-      title: 'Tactical Ballistics & Shooting Range',
+      title: 'Shooting Range',
       subtitle: 'West Annex Corridor · 1-Hand Pistols · 2-Hand Rifles · 35m Target Lanes',
       accentColor: '#EF4444',
       spawnPosition: [-15.85, 0, rangeZ],
@@ -424,7 +587,7 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
       id: 'outdoor-deck',
       emoji: '🏔',
       shortLabel: 'Lake Deck',
-      title: 'Outdoor Lake & Mountain Observation Deck',
+      title: 'Outdoor Lake Deck',
       subtitle: 'Panoramic Alpine Lake · Deck Cornhole · Firepit & Aurora Sky',
       accentColor: '#34D399',
       spawnPosition: [0, 0, Number((deckZ0 + 22.4).toFixed(2))],
@@ -436,8 +599,10 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
   const wingSeats: Array<Omit<ComputedSeat, 'index'>> = []
 
   // -------------------------------------------------------------------------
-  // 1. EXECUTIVE BOARD ROOM SEATS (9 leather executive chairs around [-6.4, boardZ])
+  // 1. EXECUTIVE BOARD ROOM SEATS (9 leather executive chairs around [-6.4, boardZ]
+  //    + 1 Interactive Whiteboard Standing Station facing the South Wall Whiteboard)
   //    Screen is on West wall (-11.08, 2.05, boardZ).
+  //    Whiteboard is on South wall (-6.4, 2.18, z0 + 8.03).
   //    In SeatRig, rotationY = 0 faces -Z, rotationY = +PI/2 faces -X (West!),
   //    rotationY = -PI/2 faces +X (East), rotationY = PI faces +Z (South).
   // -------------------------------------------------------------------------
@@ -486,6 +651,20 @@ export function computeExpansionWingLayout(backZ: number): ExpansionWingLayout {
       stationKind: 'seat',
       roomWing: 'boardroom',
     })
+  })
+
+  wingSeats.push({
+    id: 'wing:boardroom-whiteboard',
+    furnitureId: 'wing-boardroom-whiteboard',
+    furnitureType: 'wing-seat',
+    label: '📝 Boardroom · Whiteboard Wall',
+    position: [-6.4, 0, Number((boardZ + 1.48).toFixed(2))],
+    localCushionOffset: [0, 0, 0],
+    seatHeightOffset: 0.52,
+    rotationY: Number(Math.PI.toFixed(4)),
+    lookAtTarget: [-6.4, 2.18, Number((z0 + 8.03).toFixed(2))],
+    stationKind: 'chalkboard',
+    roomWing: 'boardroom',
   })
 
   // -------------------------------------------------------------------------

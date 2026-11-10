@@ -11,7 +11,12 @@ import {
   type ActivePuttSim,
   type PuttingCourseHoleId,
 } from '../../services/barGamesPhysics'
-import { readXRSpaceWorldPose } from '../../services/xrTracking'
+import { playSpatialUiFeedback } from '../../services/soundboardAudio'
+import {
+  readXRSpaceWorldPose,
+  setSpatialUiHovered,
+  triggerXRHapticPulse,
+} from '../../services/xrTracking'
 import type {
   LivePuttShotPacket,
   PuttShotSettlePacket,
@@ -153,17 +158,30 @@ function MiniSignButton({
   onClick,
 }: MiniSignButtonProps) {
   const [hovered, setHovered] = useState(false)
+  const hoverId = `putting-btn-${label}`
+
+  useEffect(() => {
+    return () => setSpatialUiHovered(false, hoverId)
+  }, [hoverId])
+
   return (
     <group
       position={position}
+      scale={hovered ? 1.04 : 1}
       pointerEventsType={{ deny: 'grab' }}
       onPointerOver={(e) => {
         e.stopPropagation()
         setHovered(true)
+        setSpatialUiHovered(true, hoverId)
       }}
-      onPointerOut={() => setHovered(false)}
+      onPointerOut={(e) => {
+        e.stopPropagation()
+        setHovered(false)
+        setSpatialUiHovered(false, hoverId)
+      }}
       onClick={(e) => {
         e.stopPropagation()
+        playSpatialUiFeedback('ui-click')
         onClick()
       }}
     >
@@ -238,7 +256,12 @@ export function PuttingGreen3D({
   const simRef = useRef<ActivePuttSim | null>(null)
   const activeShotIdRef = useRef<string | null>(null)
   const settledShotIdRef = useRef<string | null>(null)
-  const prevBladeLocalRef = useRef<{ x: number; z: number; t: number } | null>(null)
+  const prevBladeLocalRef = useRef<{ x: number; z: number; t: number }>({
+    x: 0,
+    z: 0,
+    t: 0,
+  })
+  const hasPrevBladeSampleRef = useRef(false)
   const lastVrStrikeAtRef = useRef<number>(0)
 
   // Pre-allocated scratch math vectors/quaternions (zero per-frame heap allocations)
@@ -322,6 +345,7 @@ export function PuttingGreen3D({
       if (sim.settled && activePuttShot.shooterId === localUserId) {
         if (settledShotIdRef.current !== activePuttShot.shotId) {
           settledShotIdRef.current = activePuttShot.shotId
+          playSpatialUiFeedback(sim.holed ? 'putt-cup' : 'ui-hover')
           const dist = Math.hypot(
             activePuttShot.localOrigin[0] - 0,
             activePuttShot.localOrigin[1] - PUTTING_STRIP_SPECS.cupLocalZ,
@@ -351,7 +375,7 @@ export function PuttingGreen3D({
 
     if (!inVR || !xrSession || buildMode) {
       if (vrPutterGroupRef.current) vrPutterGroupRef.current.visible = false
-      prevBladeLocalRef.current = null
+      hasPrevBladeSampleRef.current = false
       setHoldingUi(false)
       return
     }
@@ -359,7 +383,9 @@ export function PuttingGreen3D({
     camera.getWorldPosition(scratchHeadWorld)
     const dxStrip = scratchHeadWorld.x - stripOrigin[0]
     const dzStrip = scratchHeadWorld.z - stripOrigin[2]
-    const nearPuttingZone = Math.abs(dxStrip) < 1.95 && Math.abs(dzStrip) < 2.65
+    const nearPuttingZone =
+      localSeatId === 'station:putting-tee' ||
+      (Math.abs(dxStrip) < 1.35 && Math.abs(dzStrip) < 2.25)
 
     // Auto-reset manual rack holster once player walks > 2.9m away so returning auto-equips
     if (vrPutterHolstered && Math.hypot(dxStrip, dzStrip) > 2.95) {
@@ -368,7 +394,7 @@ export function PuttingGreen3D({
 
     if (!nearPuttingZone || vrPutterHolstered) {
       if (vrPutterGroupRef.current) vrPutterGroupRef.current.visible = false
-      prevBladeLocalRef.current = null
+      hasPrevBladeSampleRef.current = false
       setHoldingUi(false)
       return
     }
@@ -377,7 +403,7 @@ export function PuttingGreen3D({
     const refSpace = xrOriginRefSpace ?? gl.xr.getReferenceSpace?.()
     if (!xrFrame || !refSpace) {
       if (vrPutterGroupRef.current) vrPutterGroupRef.current.visible = false
-      prevBladeLocalRef.current = null
+      hasPrevBladeSampleRef.current = false
       setHoldingUi(false)
       return
     }
@@ -401,7 +427,7 @@ export function PuttingGreen3D({
     )
     if (!hasPose) {
       if (vrPutterGroupRef.current) vrPutterGroupRef.current.visible = false
-      prevBladeLocalRef.current = null
+      hasPrevBladeSampleRef.current = false
       setHoldingUi(false)
       return
     }
@@ -425,10 +451,17 @@ export function PuttingGreen3D({
 
     const nowMs = performance.now()
     const prev = prevBladeLocalRef.current
-    prevBladeLocalRef.current = { x: bladeLocalX, z: bladeLocalZ, t: nowMs }
+    const hadPrev = hasPrevBladeSampleRef.current
+    const prevX = prev.x
+    const prevZ = prev.z
+    const prevT = prev.t
+    prev.x = bladeLocalX
+    prev.z = bladeLocalZ
+    prev.t = nowMs
+    hasPrevBladeSampleRef.current = true
 
     if (
-      prev &&
+      hadPrev &&
       !activePuttShot &&
       nowMs - lastVrStrikeAtRef.current > 900 &&
       bladeLocalY < 0.26
@@ -437,11 +470,13 @@ export function PuttingGreen3D({
       const ballZ = puttingState.ballRestLocal[2]
       const distToBall = Math.hypot(bladeLocalX - ballX, bladeLocalZ - ballZ)
       if (distToBall < 0.095) {
-        const dtSec = Math.max(0.012, (nowMs - prev.t) / 1000)
-        const vx = Math.max(-2.2, Math.min(2.2, ((bladeLocalX - prev.x) / dtSec) * 1.25))
-        const vz = Math.max(-4.2, Math.min(4.2, ((bladeLocalZ - prev.z) / dtSec) * 1.25))
+        const dtSec = Math.max(0.012, (nowMs - prevT) / 1000)
+        const vx = Math.max(-2.2, Math.min(2.2, ((bladeLocalX - prevX) / dtSec) * 1.25))
+        const vz = Math.max(-4.2, Math.min(4.2, ((bladeLocalZ - prevZ) / dtSec) * 1.25))
         if (Math.hypot(vx, vz) > 0.25) {
           lastVrStrikeAtRef.current = nowMs
+          playSpatialUiFeedback('putt-strike')
+          triggerXRHapticPulse(rightSource, 0.6, 45)
           onLaunchPuttShot(
             [Number(ballX.toFixed(3)), Number(ballZ.toFixed(3))],
             [Number(vx.toFixed(3)), Number(vz.toFixed(3))],
@@ -511,6 +546,7 @@ export function PuttingGreen3D({
       puttingState.ballRestLocal[2],
     ]
     const vel = computeConfiguredStrikeVelocity()
+    playSpatialUiFeedback('putt-strike')
     onLaunchPuttShot(ballXZ, vel)
   }
 
@@ -598,25 +634,26 @@ export function PuttingGreen3D({
               puttingState.ballRestLocal[2],
             ]
             const vel = computePuttVelocityFromInput(ballXZ, startXZ, endXZ)
+            playSpatialUiFeedback('putt-strike')
             onLaunchPuttShot(ballXZ, vel)
           }}
         >
           <planeGeometry args={[PUTTING_STRIP_SPECS.width, PUTTING_STRIP_SPECS.length]} />
-          <meshStandardMaterial color="#0F6B42" roughness={0.86} metalness={0.02} />
+          <meshStandardMaterial color="#0F6B42" roughness={0.85} metalness={0.02} />
         </mesh>
 
         {/* Subtle Walnut & Brass Bumper Rails */}
         <mesh position={[-PUTTING_STRIP_SPECS.width / 2 - 0.018, 0.048, 0]}>
           <boxGeometry args={[0.036, 0.045, PUTTING_STRIP_SPECS.length + 0.06]} />
-          <meshStandardMaterial color="#3E2718" roughness={0.55} metalness={0.15} />
+          <meshStandardMaterial color="#3E2718" roughness={0.35} metalness={0.1} />
         </mesh>
         <mesh position={[PUTTING_STRIP_SPECS.width / 2 + 0.018, 0.048, 0]}>
           <boxGeometry args={[0.036, 0.045, PUTTING_STRIP_SPECS.length + 0.06]} />
-          <meshStandardMaterial color="#3E2718" roughness={0.55} metalness={0.15} />
+          <meshStandardMaterial color="#3E2718" roughness={0.35} metalness={0.1} />
         </mesh>
         <mesh position={[0, 0.052, -PUTTING_STRIP_SPECS.length / 2 - 0.018]}>
           <boxGeometry args={[PUTTING_STRIP_SPECS.width + 0.1, 0.055, 0.036]} />
-          <meshStandardMaterial color="#3E2718" roughness={0.55} metalness={0.15} />
+          <meshStandardMaterial color="#3E2718" roughness={0.35} metalness={0.1} />
         </mesh>
 
         {/* Distance Alignment Striping (Tee, 1m, 2m, 3m) */}

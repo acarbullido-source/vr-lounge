@@ -60,6 +60,7 @@ function MirrorBtn3D({
   return (
     <group
       position={position}
+      scale={hovered ? 1.04 : 1}
       pointerEventsType={{ deny: 'grab' }}
       onPointerOver={(e) => {
         e.stopPropagation()
@@ -71,6 +72,20 @@ function MirrorBtn3D({
         onClick()
       }}
     >
+      {(hovered || active) && (
+        <RoundedBox
+          args={[width + 0.006, height + 0.006, 0.012]}
+          radius={0.018}
+          smoothness={2}
+          position={[0, 0, -0.0015]}
+        >
+          <meshBasicMaterial
+            color={accentColor}
+            transparent
+            opacity={hovered ? 0.78 : 0.38}
+          />
+        </RoundedBox>
+      )}
       <RoundedBox args={[width, height, 0.014]} radius={0.016} smoothness={2}>
         <meshBasicMaterial
           color={active ? accentColor : hovered ? '#243044' : '#141B27'}
@@ -267,12 +282,21 @@ export function WardrobeMirror3D({
       {/* HOLOGRAPHIC VANITY MIRROR PEDESTAL                                */}
       {/* ================================================================= */}
       <group position={inVR ? [-0.44, 0, 0] : [0, 0, 0]}>
+        {/* Brushed Metallic Outer Mirror Frame */}
+        <RoundedBox args={[0.812, 1.192, 0.022]} position={[0, 0, -0.004]} radius={0.044} smoothness={3}>
+          <meshStandardMaterial
+            color="#1E293B"
+            roughness={0.25}
+            metalness={0.75}
+          />
+        </RoundedBox>
+
         {/* Solid dark studio mirror backing (prevents background screen text bleed-through) */}
         <RoundedBox args={[0.78, 1.16, 0.026]} radius={0.04} smoothness={3}>
           <meshStandardMaterial
             color="#080C14"
-            roughness={0.24}
-            metalness={0.62}
+            roughness={0.25}
+            metalness={0.75}
           />
         </RoundedBox>
 

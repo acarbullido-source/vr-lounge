@@ -21,6 +21,8 @@ import {
   fetchSportsScoreboard,
   type SportsScoreboardSnapshot,
 } from '../../services/sportsScoreboard'
+import { playSpatialUiFeedback } from '../../services/soundboardAudio'
+import { setSpatialUiHovered } from '../../services/xrTracking'
 import type {
   CommandNewsCategoryId,
   ComputedSeat,
@@ -79,10 +81,15 @@ function OpsButton3D({
       onPointerOver={(e) => {
         e.stopPropagation()
         setHovered(true)
+        setSpatialUiHovered(true, `ops-btn-${label}`)
       }}
-      onPointerOut={() => setHovered(false)}
+      onPointerOut={() => {
+        setHovered(false)
+        setSpatialUiHovered(false, `ops-btn-${label}`)
+      }}
       onClick={(e) => {
         e.stopPropagation()
+        playSpatialUiFeedback('ui-click')
         onClick()
       }}
     >
@@ -294,6 +301,7 @@ export function CommandCenterRoom3D({
   participants,
   cinemaVolume,
   visible = true,
+  isActiveRoom = false,
   onSelectSeat,
   onTeleportToFloor,
   onUpdateWingState,
@@ -319,6 +327,9 @@ export function CommandCenterRoom3D({
   const [opsAudioUnmuted, setOpsAudioUnmuted] = useState(false)
   const [hasOpsFrames, setHasOpsFrames] = useState(false)
   const [preferRoomCam, setPreferRoomCam] = useState(false)
+  const [hoveredCamId, setHoveredCamId] = useState<LoungeMirrorCamPreset | null>(
+    null,
+  )
 
   // Dedicated lightweight HTML5 <video> + VideoTexture for independent Command Ops streams
   const opsMedia = useMemo(() => {
@@ -508,7 +519,7 @@ export function CommandCenterRoom3D({
   const ring2Ref = useRef<THREE.Mesh>(null)
 
   useFrame((_, delta) => {
-    if (!visible) return
+    if (!visible || !isActiveRoom) return
     const dt = Math.min(delta, 0.1)
     if (globeRef.current) {
       globeRef.current.rotation.y += dt * 0.34
@@ -674,7 +685,7 @@ export function CommandCenterRoom3D({
       {/* =================================================================== */}
       {/* TOP OVERHEAD 5-ZONE WORLD CLOCK & DEFCON STATUS BAR (West Wall)     */}
       {/* =================================================================== */}
-      <WorldClocksStrip3D cmdZ={cmdZ} active={visible} />
+      <WorldClocksStrip3D cmdZ={cmdZ} active={visible && isActiveRoom} />
 
       {/* =================================================================== */}
       {/* CENTER PRIMARY AUXILIARY VIEWING SCREEN (Mirror Lounge or Ops Feed) */}
@@ -1368,14 +1379,27 @@ export function CommandCenterRoom3D({
           ] as const
         ).map((cam) => {
           const isFocused = loungeCamPreset === cam.id
+          const isHovered = hoveredCamId === cam.id
           const camTex = loungeCamWallTextures[cam.id] ?? loungeMirrorTexture
           return (
             <group
               key={cam.id}
               name={`control-room-cam-display-${cam.id}`}
               position={cam.pos}
+              scale={isHovered ? 1.025 : 1}
+              onPointerOver={(e) => {
+                e.stopPropagation()
+                setHoveredCamId(cam.id)
+                setSpatialUiHovered(true, `cmd-cam-${cam.id}`)
+              }}
+              onPointerOut={(e) => {
+                e.stopPropagation()
+                setHoveredCamId((prev) => (prev === cam.id ? null : prev))
+                setSpatialUiHovered(false, `cmd-cam-${cam.id}`)
+              }}
               onClick={(e) => {
                 e.stopPropagation()
+                playSpatialUiFeedback('ui-click')
                 onSelectLoungeCamPreset?.(cam.id)
                 setPreferRoomCam(true)
                 onUpdateWingState({ commandScreenMode: 'mirror-lounge' })
@@ -1384,7 +1408,7 @@ export function CommandCenterRoom3D({
               {/* Individual Wall-Mounted Display Bezel */}
               <RoundedBox args={[2.62, 1.12, 0.05]} radius={0.026} smoothness={2}>
                 <meshStandardMaterial
-                  color={isFocused ? '#17253B' : '#08111F'}
+                  color={isFocused ? '#17253B' : isHovered ? '#122038' : '#08111F'}
                   metalness={0.58}
                   roughness={0.34}
                 />
@@ -1392,11 +1416,11 @@ export function CommandCenterRoom3D({
               {/* Glowing Accent Trim Around Individual Monitor */}
               <mesh position={[0, 0.535, 0.028]}>
                 <planeGeometry args={[2.5, 0.022]} />
-                <meshBasicMaterial color={isFocused ? '#FDE68A' : cam.accent} />
+                <meshBasicMaterial color={isFocused || isHovered ? '#FDE68A' : cam.accent} />
               </mesh>
               <mesh position={[0, -0.535, 0.028]}>
                 <planeGeometry args={[2.5, 0.016]} />
-                <meshBasicMaterial color={isFocused ? '#FDE68A' : cam.accent} />
+                <meshBasicMaterial color={isFocused || isHovered ? '#FDE68A' : cam.accent} />
               </mesh>
 
               {/* Top Monitor Telemetry Bar */}

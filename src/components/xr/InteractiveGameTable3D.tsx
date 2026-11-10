@@ -1,8 +1,10 @@
 import { RoundedBox, Text } from '@react-three/drei'
 import { useFrame, type ThreeEvent } from '@react-three/fiber'
-import { Suspense, useMemo, useRef, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { SUIT_SYMBOLS, TOKEN_PALETTE, scoreBlackjackHand } from '../../constants/barGames'
+import { playSpatialUiFeedback } from '../../services/soundboardAudio'
+import { setSpatialUiHovered } from '../../services/xrTracking'
 import type {
   CardRank,
   CardSuit,
@@ -455,6 +457,12 @@ function PolyhedralDie3D({
     }
   })
 
+  useEffect(() => {
+    return () => {
+      setSpatialUiHovered(false, `table-die-${die.id}`)
+    }
+  }, [die.id])
+
   return (
     <group
       position={[die.localPos[0], 0, die.localPos[1]]}
@@ -462,10 +470,15 @@ function PolyhedralDie3D({
       onPointerOver={(e) => {
         e.stopPropagation()
         setHovered(true)
+        setSpatialUiHovered(true, `table-die-${die.id}`)
       }}
-      onPointerOut={() => setHovered(false)}
+      onPointerOut={() => {
+        setHovered(false)
+        setSpatialUiHovered(false, `table-die-${die.id}`)
+      }}
       onClick={(e) => {
         e.stopPropagation()
+        playSpatialUiFeedback('dice-roll')
         onReroll(die.id)
       }}
     >
@@ -575,21 +588,50 @@ function RimChip({
   onClick,
 }: RimChipProps) {
   const [hovered, setHovered] = useState(false)
+  const sourceId = `rim-chip-${label}`
+
+  useEffect(() => {
+    return () => {
+      setSpatialUiHovered(false, sourceId)
+    }
+  }, [sourceId])
+
   return (
     <group
       position={position}
       rotation={[-Math.PI / 2, 0, 0]}
+      scale={hovered ? 1.04 : 1}
       pointerEventsType={{ deny: 'grab' }}
       onPointerOver={(e) => {
         e.stopPropagation()
         setHovered(true)
+        setSpatialUiHovered(true, sourceId)
       }}
-      onPointerOut={() => setHovered(false)}
+      onPointerOut={() => {
+        setHovered(false)
+        setSpatialUiHovered(false, sourceId)
+      }}
       onClick={(e) => {
         e.stopPropagation()
+        playSpatialUiFeedback('ui-click')
         onClick()
       }}
     >
+      {(hovered || active) && (
+        <RoundedBox
+          args={[width + 0.008, 0.056, 0.009]}
+          radius={0.012}
+          smoothness={2}
+          position={[0, 0, -0.002]}
+          raycast={() => null}
+        >
+          <meshBasicMaterial
+            color={active ? '#E5A93C' : '#38BDF8'}
+            transparent
+            opacity={active ? 0.5 : 0.4}
+          />
+        </RoundedBox>
+      )}
       <RoundedBox args={[width, 0.048, 0.012]} radius={0.01} smoothness={2}>
         <meshBasicMaterial
           color={active ? '#E5A93C' : hovered ? '#334155' : color}
@@ -703,17 +745,17 @@ export function InteractiveGameTable3D({
       {/* Heavy Floor Base */}
       <mesh position={[0, 0.03, 0]}>
         <cylinderGeometry args={[0.48, 0.54, 0.06, 24]} />
-        <meshStandardMaterial color="#1B130E" roughness={0.6} metalness={0.2} />
+        <meshStandardMaterial color="#1B130E" roughness={0.35} metalness={0.1} />
       </mesh>
       {/* Turned Central Column */}
       <mesh position={[0, 0.39, 0]}>
         <cylinderGeometry args={[0.14, 0.19, 0.68, 20]} />
-        <meshStandardMaterial color="#2C1D13" roughness={0.55} metalness={0.14} />
+        <meshStandardMaterial color="#2C1D13" roughness={0.35} metalness={0.1} />
       </mesh>
-      {/* Outer Padded Casino Rail */}
+      {/* Outer Casino Rail */}
       <mesh position={[0, tabletopY - 0.025, 0]}>
         <cylinderGeometry args={[0.78, 0.76, 0.065, 32]} />
-        <meshStandardMaterial color="#241710" roughness={0.52} metalness={0.12} />
+        <meshStandardMaterial color="#241710" roughness={0.35} metalness={0.1} />
       </mesh>
       {/* Brass Rim Accent */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, tabletopY + 0.009, 0]}>
@@ -740,7 +782,7 @@ export function InteractiveGameTable3D({
         <meshStandardMaterial
           map={surfaceTex ?? undefined}
           color={surfaceTex ? '#FFFFFF' : '#125E3B'}
-          roughness={0.82}
+          roughness={0.85}
           metalness={0.04}
         />
       </mesh>
@@ -788,31 +830,35 @@ export function InteractiveGameTable3D({
           active={tabletopState.surface === 'wood'}
           onClick={() => onSetSurface('wood')}
         />
-        <RimChip
-          label="Sq Grid"
-          position={[-0.145, 0, -0.52]}
-          width={0.11}
-          active={tabletopState.surface === 'square-grid'}
-          onClick={() => onSetSurface('square-grid')}
-        />
-        <RimChip
-          label="Hex Grid"
-          position={[-0.015, 0, -0.52]}
-          width={0.115}
-          active={tabletopState.surface === 'hex-grid'}
-          onClick={() => onSetSurface('hex-grid')}
-        />
-        <RimChip
-          label="+ Token"
-          position={[0.115, 0, -0.52]}
-          width={0.105}
-          color="#0F766E"
-          onClick={() => {
-            const pick =
-              TOKEN_PALETTE[tabletopState.tokens.length % TOKEN_PALETTE.length]
-            onSpawnToken(pick.label, pick.color)
-          }}
-        />
+        {gameMode === 'freeform' && (
+          <>
+            <RimChip
+              label="Sq Grid"
+              position={[-0.145, 0, -0.52]}
+              width={0.11}
+              active={tabletopState.surface === 'square-grid'}
+              onClick={() => onSetSurface('square-grid')}
+            />
+            <RimChip
+              label="Hex Grid"
+              position={[-0.015, 0, -0.52]}
+              width={0.115}
+              active={tabletopState.surface === 'hex-grid'}
+              onClick={() => onSetSurface('hex-grid')}
+            />
+            <RimChip
+              label="+ Token"
+              position={[0.115, 0, -0.52]}
+              width={0.105}
+              color="#0F766E"
+              onClick={() => {
+                const pick =
+                  TOKEN_PALETTE[tabletopState.tokens.length % TOKEN_PALETTE.length]
+                onSpawnToken(pick.label, pick.color)
+              }}
+            />
+          </>
+        )}
 
         {/* =============================================================== */}
         {/* MODE-SPECIFIC INTERACTIVE DEALER & BETTING CONTROLS             */}
@@ -895,24 +941,34 @@ export function InteractiveGameTable3D({
           </group>
         )}
 
-        {/* Quick Polyhedral Dice Tray along South Rim */}
-        {(['d4', 'd6', 'd8', 'd10', 'd12', 'd20'] as const).map((dk, idx) => (
-          <RimChip
-            key={dk}
-            label={dk}
-            position={[-0.38 + idx * 0.088, 0, 0.54]}
-            width={0.078}
-            color="#312E81"
-            onClick={() => onRollDice([dk])}
-          />
-        ))}
-        <RimChip
-          label="🎲 2d6+d20"
-          position={[0.21, 0, 0.54]}
-          width={0.145}
-          color="#7C2D12"
-          onClick={() => onRollDice(['d20', 'd6', 'd6'])}
-        />
+        {/* Quick Polyhedral Dice Tray along South Rim (shown only in RPG & Dice mode) */}
+        {gameMode === 'freeform' && (
+          <>
+            {(['d4', 'd6', 'd8', 'd10', 'd12', 'd20'] as const).map((dk, idx) => (
+              <RimChip
+                key={dk}
+                label={dk}
+                position={[-0.38 + idx * 0.088, 0, 0.54]}
+                width={0.078}
+                color="#312E81"
+                onClick={() => {
+                  playSpatialUiFeedback('dice-roll')
+                  onRollDice([dk])
+                }}
+              />
+            ))}
+            <RimChip
+              label="🎲 2d6+d20"
+              position={[0.21, 0, 0.54]}
+              width={0.145}
+              color="#7C2D12"
+              onClick={() => {
+                playSpatialUiFeedback('dice-roll')
+                onRollDice(['d20', 'd6', 'd6'])
+              }}
+            />
+          </>
+        )}
 
         {/* =============================================================== */}
         {/* 3D DEALER CARDS ZONE & POKER CHIP STACKS                        */}
@@ -1259,13 +1315,13 @@ export function InteractiveGameTable3D({
             {/* Stool Chrome Footring & Pedestal */}
             <mesh position={[0, 0.02, 0]}>
               <cylinderGeometry args={[0.2, 0.22, 0.035, 16]} />
-              <meshStandardMaterial color="#334155" metalness={0.65} roughness={0.3} />
+              <meshStandardMaterial color="#334155" metalness={0.75} roughness={0.25} />
             </mesh>
             <mesh position={[0, 0.24, 0]}>
               <cylinderGeometry args={[0.04, 0.05, 0.44, 12]} />
-              <meshStandardMaterial color="#475569" metalness={0.7} roughness={0.28} />
+              <meshStandardMaterial color="#475569" metalness={0.75} roughness={0.25} />
             </mesh>
-            {/* Padded Leather Cushion */}
+            {/* Padded Matte Cushion */}
             <mesh position={[0, 0.47, 0]}>
               <cylinderGeometry args={[0.21, 0.19, 0.075, 20]} />
               <meshStandardMaterial
@@ -1278,7 +1334,8 @@ export function InteractiveGameTable3D({
                         ? '#B45309'
                         : '#3B2316'
                 }
-                roughness={0.55}
+                roughness={0.85}
+                metalness={0.04}
               />
             </mesh>
             {(isHov || isMine) && (

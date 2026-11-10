@@ -12,8 +12,10 @@ import { hasSupabaseCredentials } from './realtime'
 const CANONICAL_CLUBHOUSE_KEY = 'vr-lounge:single-room-clubhouse:v1'
 const LOCAL_CLUBHOUSE_PREFIX = 'vr-lounge:clubhouse-v3:'
 
-const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim() ?? ''
-const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim() ?? ''
+const supabaseUrl =
+  (import.meta.env?.VITE_SUPABASE_URL as string | undefined)?.trim() ?? ''
+const supabaseAnonKey =
+  (import.meta.env?.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim() ?? ''
 
 /**
  * Caches whether an optional `public.clubhouse_stats` table exists on Supabase so

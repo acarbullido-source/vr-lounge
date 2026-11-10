@@ -61,6 +61,7 @@ function HoloButton3D({
     <group
       name={name}
       position={position}
+      scale={hovered ? 1.04 : 1}
       pointerEventsType={{ deny: 'grab' }}
       onPointerOver={(e) => {
         e.stopPropagation()
@@ -72,6 +73,21 @@ function HoloButton3D({
         onClick()
       }}
     >
+      {(hovered || active) && (
+        <RoundedBox
+          args={[width + 0.01, height + 0.01, 0.011]}
+          radius={0.014}
+          smoothness={2}
+          position={[0, 0, -0.002]}
+          raycast={() => null}
+        >
+          <meshBasicMaterial
+            color={active ? accent : '#C084FC'}
+            transparent
+            opacity={active ? 0.5 : 0.4}
+          />
+        </RoundedBox>
+      )}
       <RoundedBox args={[width, height, 0.014]} radius={0.012} smoothness={2}>
         <meshBasicMaterial color={bg} />
       </RoundedBox>
@@ -118,17 +134,17 @@ function SanctumChair3D({
     >
       <mesh position={[0, 0.04, 0]}>
         <cylinderGeometry args={[0.26, 0.3, 0.05, 12]} />
-        <meshStandardMaterial color="#1E1B4B" metalness={0.65} roughness={0.3} />
+        <meshStandardMaterial color="#1E1B4B" metalness={0.75} roughness={0.25} />
       </mesh>
       <mesh position={[0, 0.22, 0]}>
         <cylinderGeometry args={[0.05, 0.06, 0.34, 10]} />
-        <meshStandardMaterial color="#4C1D95" metalness={0.7} roughness={0.28} />
+        <meshStandardMaterial color="#4C1D95" metalness={0.75} roughness={0.25} />
       </mesh>
       <RoundedBox args={[0.52, 0.09, 0.5]} position={[0, 0.41, 0]} radius={0.03}>
         <meshStandardMaterial
           color={hovered && !takenByOther ? '#5B21B6' : '#2E1065'}
-          roughness={0.5}
-          metalness={0.2}
+          roughness={0.85}
+          metalness={0.06}
           emissive="#1E1B4B"
           emissiveIntensity={0.3}
         />
@@ -141,8 +157,8 @@ function SanctumChair3D({
       >
         <meshStandardMaterial
           color="#1E1B4B"
-          roughness={0.5}
-          metalness={0.25}
+          roughness={0.85}
+          metalness={0.06}
           emissive="#0F172A"
           emissiveIntensity={0.25}
         />
@@ -983,7 +999,7 @@ export function GameRoom3D({
         rotation={[0, 0, 0]}
       >
         <RoundedBox args={[4.45, 2.52, 0.05]} radius={0.03} smoothness={2}>
-          <meshStandardMaterial color="#090D1A" metalness={0.55} roughness={0.35} />
+          <meshStandardMaterial color="#090D1A" metalness={0.75} roughness={0.25} />
         </RoundedBox>
         <mesh position={[0, 1.19, 0.028]}>
           <planeGeometry args={[4.25, 0.025]} />
@@ -1086,8 +1102,8 @@ export function GameRoom3D({
             <RoundedBox args={[1.18, 2.22, 0.78]} position={[0, 1.11, 0]} radius={0.035}>
               <meshStandardMaterial
                 color={isFocused ? '#1E1B4B' : '#0F172A'}
-                roughness={0.42}
-                metalness={0.38}
+                roughness={0.25}
+                metalness={0.75}
               />
             </RoundedBox>
             {/* Side Neon Trim */}
@@ -1278,10 +1294,10 @@ export function GameRoom3D({
         rotation={[0, -Math.PI / 2, 0]}
       >
         <RoundedBox args={[1.45, 0.85, 1.18]} position={[0, 0.425, 0.15]} radius={0.03}>
-          <meshStandardMaterial color="#1E1B4B" roughness={0.5} metalness={0.35} />
+          <meshStandardMaterial color="#1E1B4B" roughness={0.25} metalness={0.75} />
         </RoundedBox>
         <RoundedBox args={[1.5, 2.62, 0.12]} position={[0, 1.38, -0.36]} radius={0.025}>
-          <meshStandardMaterial color="#0F172A" metalness={0.45} roughness={0.4} />
+          <meshStandardMaterial color="#0F172A" metalness={0.75} roughness={0.25} />
         </RoundedBox>
         {/* Neon Backboard & Hoop Rim */}
         <mesh position={[0, 1.98, -0.28]}>
@@ -1386,10 +1402,10 @@ export function GameRoom3D({
         rotation={[0, -Math.PI / 2, 0]}
       >
         <RoundedBox args={[1.32, 0.82, 1.32]} position={[0, 0.41, 0.1]} radius={0.03}>
-          <meshStandardMaterial color="#172554" roughness={0.48} metalness={0.35} />
+          <meshStandardMaterial color="#172554" roughness={0.25} metalness={0.75} />
         </RoundedBox>
         <RoundedBox args={[1.36, 2.48, 0.14]} position={[0, 1.3, -0.42]} radius={0.025}>
-          <meshStandardMaterial color="#090D1A" metalness={0.45} roughness={0.4} />
+          <meshStandardMaterial color="#090D1A" metalness={0.75} roughness={0.25} />
         </RoundedBox>
         {/* Concentric Neon Target Rings (10 / 30 / 50 / 100 PTS) */}
         {[
@@ -1483,8 +1499,8 @@ export function GameRoom3D({
           <cylinderGeometry args={[1.08, 1.25, 0.82, 8]} />
           <meshStandardMaterial
             color="#1E1B4B"
-            metalness={0.58}
-            roughness={0.3}
+            metalness={0.75}
+            roughness={0.25}
             emissive="#110E2E"
             emissiveIntensity={0.35 * brightnessScale}
           />
@@ -1495,7 +1511,7 @@ export function GameRoom3D({
           radius={0.024}
           smoothness={2}
         >
-          <meshStandardMaterial color="#0F172A" metalness={0.62} roughness={0.28} />
+          <meshStandardMaterial color="#0F172A" metalness={0.75} roughness={0.25} />
         </RoundedBox>
         {/* Rotating Holographic Inner Rim Halo */}
         <mesh
@@ -2021,234 +2037,239 @@ export function GameRoom3D({
         )}
 
         {/* ================================================================= */}
-        {/* FLUSH PERIMETER TABLE APRON RAILS (West, North & East Table Edges)*/}
+        {/* FLUSH PERIMETER TABLE APRON RAILS (West & North Table Edges)      */}
         {/* Mounted directly on the table surface rim (y = 0.868m)            */}
+        {/* Shown contextually when Holotable is in RPG Miniatures mode       */}
         {/* ================================================================= */}
-        <group
-          name="holotable-control-console"
-          position={[-1.04, 0.868, 0]}
-          rotation={[-Math.PI / 2, 0, Math.PI / 2]}
-        >
-          <RoundedBox args={[1.76, 0.34, 0.016]} radius={0.012}>
-            <meshBasicMaterial color="#090D1A" />
-          </RoundedBox>
+        {tableMode === 'adventure-rpg' && (
+          <>
+            <group
+              name="holotable-control-console"
+              position={[-1.04, 0.868, 0]}
+              rotation={[-Math.PI / 2, 0, Math.PI / 2]}
+            >
+              <RoundedBox args={[1.76, 0.34, 0.016]} radius={0.012}>
+                <meshBasicMaterial color="#090D1A" />
+              </RoundedBox>
 
-          {/* Row 1: Spawn Miniatures (Flush on West Table Rail) */}
-          {(
-            [
-              { kind: 'hero-paladin', label: '+Paladin', color: '#F59E0B' },
-              { kind: 'hero-mage', label: '+Mage', color: '#38BDF8' },
-              { kind: 'hero-rogue', label: '+Rogue', color: '#10B981' },
-              { kind: 'monster-dragon', label: '+Dragon', color: '#EF4444' },
-              { kind: 'monster-golem', label: '+Golem', color: '#A855F7' },
-              { kind: 'prop-chest', label: '+Chest', color: '#EAB308' },
-            ] as Array<{ kind: HolotableMiniKind; label: string; color: string }>
-          ).map((sp, idx) => (
-            <HoloButton3D
-              key={sp.kind}
-              name={`btn-holo-spawn-${sp.kind}`}
-              label={sp.label}
-              position={[-0.65 + idx * 0.26, 0.09, 0.011]}
-              width={0.24}
-              height={0.068}
-              fontSize={0.022}
-              accent={sp.color}
-              onClick={() => {
-                setTableMode('adventure-rpg')
-                onSpawnHolotableMini(sp.kind, sp.label.replace('+', ''), sp.color)
-              }}
-            />
-          ))}
+              {/* Row 1: Spawn Miniatures (Flush on West Table Rail) */}
+              {(
+                [
+                  { kind: 'hero-paladin', label: '+Paladin', color: '#F59E0B' },
+                  { kind: 'hero-mage', label: '+Mage', color: '#38BDF8' },
+                  { kind: 'hero-rogue', label: '+Rogue', color: '#10B981' },
+                  { kind: 'monster-dragon', label: '+Dragon', color: '#EF4444' },
+                  { kind: 'monster-golem', label: '+Golem', color: '#A855F7' },
+                  { kind: 'prop-chest', label: '+Chest', color: '#EAB308' },
+                ] as Array<{ kind: HolotableMiniKind; label: string; color: string }>
+              ).map((sp, idx) => (
+                <HoloButton3D
+                  key={sp.kind}
+                  name={`btn-holo-spawn-${sp.kind}`}
+                  label={sp.label}
+                  position={[-0.65 + idx * 0.26, 0.09, 0.011]}
+                  width={0.24}
+                  height={0.068}
+                  fontSize={0.022}
+                  accent={sp.color}
+                  onClick={() => {
+                    setTableMode('adventure-rpg')
+                    onSpawnHolotableMini(sp.kind, sp.label.replace('+', ''), sp.color)
+                  }}
+                />
+              ))}
 
-          {/* Row 2: Selected Miniature Transform Controls (Flush on West Table Rail) */}
-          {selectedMini && (
-            <group position={[0, -0.01, 0.011]}>
-              <HoloButton3D
-                name="btn-holo-mini-rotate"
-                label="↻ Rot 45°"
-                position={[-0.64, 0, 0]}
-                width={0.25}
-                height={0.066}
-                fontSize={0.021}
-                onClick={() =>
-                  onUpdateHolotableMini(selectedMini.id, {
-                    rotationY: Number((selectedMini.rotationY + Math.PI / 4).toFixed(3)),
-                  })
-                }
-              />
-              <HoloButton3D
-                name="btn-holo-mini-scale-up"
-                label="+ Scale"
-                position={[-0.36, 0, 0]}
-                width={0.22}
-                height={0.066}
-                fontSize={0.021}
-                onClick={() =>
-                  onUpdateHolotableMini(selectedMini.id, {
-                    scale: selectedMini.scale >= 1.5 ? 0.85 : selectedMini.scale + 0.2,
-                  })
-                }
-              />
-              <HoloButton3D
-                name="btn-holo-mini-color"
-                label="🎨 Color"
-                position={[-0.1, 0, 0]}
-                width={0.24}
-                height={0.066}
-                fontSize={0.021}
-                accent={selectedMini.color}
-                active
-                onClick={() => {
-                  const cIdx = MINI_COLOR_SWATCHES.indexOf(selectedMini.color)
-                  const nextColor =
-                    MINI_COLOR_SWATCHES[(cIdx + 1) % MINI_COLOR_SWATCHES.length]
-                  onUpdateHolotableMini(selectedMini.id, { color: nextColor })
-                }}
-              />
-              <HoloButton3D
-                name="btn-holo-mini-step"
-                label="▶ Step"
-                position={[0.16, 0, 0]}
-                width={0.22}
-                height={0.066}
-                fontSize={0.021}
-                onClick={() =>
-                  onUpdateHolotableMini(selectedMini.id, {
-                    localPos: [
-                      selectedMini.localPos[0] > 0.45
-                        ? -0.35
-                        : Number((selectedMini.localPos[0] + 0.18).toFixed(2)),
-                      selectedMini.localPos[1],
-                    ],
-                  })
-                }
-              />
-              <HoloButton3D
-                name="btn-holo-mini-delete"
-                label="🗑 Del"
-                position={[0.41, 0, 0]}
-                width={0.2}
-                height={0.066}
-                fontSize={0.021}
-                accent="#EF4444"
-                onClick={() => onDeleteHolotableMini(selectedMini.id)}
-              />
-              <HoloButton3D
-                name="btn-holo-mini-reset"
-                label="↺ Reset"
-                position={[0.64, 0, 0]}
-                width={0.22}
-                height={0.066}
-                fontSize={0.021}
-                onClick={onResetHolotableMinis}
-              />
+              {/* Row 2: Selected Miniature Transform Controls (Flush on West Table Rail) */}
+              {selectedMini && (
+                <group position={[0, -0.01, 0.011]}>
+                  <HoloButton3D
+                    name="btn-holo-mini-rotate"
+                    label="↻ Rot 45°"
+                    position={[-0.64, 0, 0]}
+                    width={0.25}
+                    height={0.066}
+                    fontSize={0.021}
+                    onClick={() =>
+                      onUpdateHolotableMini(selectedMini.id, {
+                        rotationY: Number((selectedMini.rotationY + Math.PI / 4).toFixed(3)),
+                      })
+                    }
+                  />
+                  <HoloButton3D
+                    name="btn-holo-mini-scale-up"
+                    label="+ Scale"
+                    position={[-0.36, 0, 0]}
+                    width={0.22}
+                    height={0.066}
+                    fontSize={0.021}
+                    onClick={() =>
+                      onUpdateHolotableMini(selectedMini.id, {
+                        scale: selectedMini.scale >= 1.5 ? 0.85 : selectedMini.scale + 0.2,
+                      })
+                    }
+                  />
+                  <HoloButton3D
+                    name="btn-holo-mini-color"
+                    label="🎨 Color"
+                    position={[-0.1, 0, 0]}
+                    width={0.24}
+                    height={0.066}
+                    fontSize={0.021}
+                    accent={selectedMini.color}
+                    active
+                    onClick={() => {
+                      const cIdx = MINI_COLOR_SWATCHES.indexOf(selectedMini.color)
+                      const nextColor =
+                        MINI_COLOR_SWATCHES[(cIdx + 1) % MINI_COLOR_SWATCHES.length]
+                      onUpdateHolotableMini(selectedMini.id, { color: nextColor })
+                    }}
+                  />
+                  <HoloButton3D
+                    name="btn-holo-mini-step"
+                    label="▶ Step"
+                    position={[0.16, 0, 0]}
+                    width={0.22}
+                    height={0.066}
+                    fontSize={0.021}
+                    onClick={() =>
+                      onUpdateHolotableMini(selectedMini.id, {
+                        localPos: [
+                          selectedMini.localPos[0] > 0.45
+                            ? -0.35
+                            : Number((selectedMini.localPos[0] + 0.18).toFixed(2)),
+                          selectedMini.localPos[1],
+                        ],
+                      })
+                    }
+                  />
+                  <HoloButton3D
+                    name="btn-holo-mini-delete"
+                    label="🗑 Del"
+                    position={[0.41, 0, 0]}
+                    width={0.2}
+                    height={0.066}
+                    fontSize={0.021}
+                    accent="#EF4444"
+                    onClick={() => onDeleteHolotableMini(selectedMini.id)}
+                  />
+                  <HoloButton3D
+                    name="btn-holo-mini-reset"
+                    label="↺ Reset"
+                    position={[0.64, 0, 0]}
+                    width={0.22}
+                    height={0.066}
+                    fontSize={0.021}
+                    onClick={onResetHolotableMinis}
+                  />
+                </group>
+              )}
+
+              {/* Row 3: D20 RPG Combat Actions (Flush on West Table Rail) */}
+              <group position={[0, -0.11, 0.011]}>
+                <HoloButton3D
+                  name="btn-holo-rpg-melee"
+                  label="⚔️ Roll Melee (D20)"
+                  position={[-0.54, 0, 0]}
+                  width={0.5}
+                  height={0.068}
+                  fontSize={0.022}
+                  active
+                  accent="#EF4444"
+                  onClick={() => handleRpgAction('melee')}
+                />
+                <HoloButton3D
+                  name="btn-holo-rpg-spell"
+                  label="🔥 Cast Spell (D20)"
+                  position={[0.0, 0, 0]}
+                  width={0.5}
+                  height={0.068}
+                  fontSize={0.022}
+                  active
+                  accent="#38BDF8"
+                  onClick={() => handleRpgAction('spell')}
+                />
+                <HoloButton3D
+                  name="btn-holo-rpg-heal"
+                  label="✨ Divine Heal"
+                  position={[0.54, 0, 0]}
+                  width={0.48}
+                  height={0.068}
+                  fontSize={0.022}
+                  active
+                  accent="#10B981"
+                  onClick={() => handleRpgAction('heal')}
+                />
+              </group>
             </group>
-          )}
 
-          {/* Row 3: D20 RPG Combat Actions (Flush on West Table Rail) */}
-          <group position={[0, -0.11, 0.011]}>
-            <HoloButton3D
-              name="btn-holo-rpg-melee"
-              label="⚔️ Roll Melee (D20)"
-              position={[-0.54, 0, 0]}
-              width={0.5}
-              height={0.068}
-              fontSize={0.022}
-              active
-              accent="#EF4444"
-              onClick={() => handleRpgAction('melee')}
-            />
-            <HoloButton3D
-              name="btn-holo-rpg-spell"
-              label="🔥 Cast Spell (D20)"
-              position={[0.0, 0, 0]}
-              width={0.5}
-              height={0.068}
-              fontSize={0.022}
-              active
-              accent="#38BDF8"
-              onClick={() => handleRpgAction('spell')}
-            />
-            <HoloButton3D
-              name="btn-holo-rpg-heal"
-              label="✨ Divine Heal"
-              position={[0.54, 0, 0]}
-              width={0.48}
-              height={0.068}
-              fontSize={0.022}
-              active
-              accent="#10B981"
-              onClick={() => handleRpgAction('heal')}
-            />
-          </group>
-        </group>
+            {/* NORTH TABLE APRON RAIL (Flush on North Edge — Terrain & Fog Controls) */}
+            <group
+              name="holotable-north-rail"
+              position={[0, 0.868, -1.04]}
+              rotation={[-Math.PI / 2, 0, 0]}
+            >
+              <RoundedBox args={[1.76, 0.24, 0.016]} radius={0.012}>
+                <meshBasicMaterial color="#090D1A" />
+              </RoundedBox>
 
-        {/* NORTH TABLE APRON RAIL (Flush on North Edge — Terrain & Fog Controls) */}
-        <group
-          name="holotable-north-rail"
-          position={[0, 0.868, -1.04]}
-          rotation={[-Math.PI / 2, 0, 0]}
-        >
-          <RoundedBox args={[1.76, 0.24, 0.016]} radius={0.012}>
-            <meshBasicMaterial color="#090D1A" />
-          </RoundedBox>
+              {/* Row 1: 5 Terrain Presets */}
+              {TERRAIN_SPECS.map((t, idx) => (
+                <HoloButton3D
+                  key={t.id}
+                  name={`btn-holo-terrain-${t.id}`}
+                  label={t.shortLabel}
+                  position={[-0.64 + idx * 0.32, 0.055, 0.011]}
+                  width={0.29}
+                  height={0.07}
+                  fontSize={0.022}
+                  active={holotableState.terrain === t.id}
+                  accent={t.accentColor}
+                  onClick={() => {
+                    setTableMode('adventure-rpg')
+                    onSetHolotableTerrain(t.id)
+                  }}
+                />
+              ))}
 
-          {/* Row 1: 5 Terrain Presets */}
-          {TERRAIN_SPECS.map((t, idx) => (
-            <HoloButton3D
-              key={t.id}
-              name={`btn-holo-terrain-${t.id}`}
-              label={t.shortLabel}
-              position={[-0.64 + idx * 0.32, 0.055, 0.011]}
-              width={0.29}
-              height={0.07}
-              fontSize={0.022}
-              active={holotableState.terrain === t.id}
-              accent={t.accentColor}
-              onClick={() => {
-                setTableMode('adventure-rpg')
-                onSetHolotableTerrain(t.id)
-              }}
-            />
-          ))}
-
-          {/* Row 2: Interactive Fog of War Controls */}
-          <group position={[0, -0.055, 0.011]}>
-            <HoloButton3D
-              name="btn-holo-fog-toggle"
-              label={
-                holotableState.fogEnabled ? '🌫 Fog of War: ON' : '🌫 Fog of War: OFF'
-              }
-              position={[-0.46, 0, 0]}
-              width={0.56}
-              height={0.07}
-              fontSize={0.022}
-              active={holotableState.fogEnabled}
-              accent="#A855F7"
-              onClick={() => onToggleHolotableFog()}
-            />
-            <HoloButton3D
-              name="btn-holo-fog-reveal-all"
-              label="☀️ Clear All Fog"
-              position={[0.12, 0, 0]}
-              width={0.48}
-              height={0.07}
-              fontSize={0.022}
-              accent="#38BDF8"
-              onClick={onRevealAllHolotableFog}
-            />
-            <HoloButton3D
-              name="btn-holo-fog-shroud-all"
-              label="🌑 Shroud All"
-              position={[0.58, 0, 0]}
-              width={0.38}
-              height={0.07}
-              fontSize={0.022}
-              accent="#6366F1"
-              onClick={onShroudAllHolotableFog}
-            />
-          </group>
-        </group>
+              {/* Row 2: Interactive Fog of War Controls */}
+              <group position={[0, -0.055, 0.011]}>
+                <HoloButton3D
+                  name="btn-holo-fog-toggle"
+                  label={
+                    holotableState.fogEnabled ? '🌫 Fog of War: ON' : '🌫 Fog of War: OFF'
+                  }
+                  position={[-0.46, 0, 0]}
+                  width={0.56}
+                  height={0.07}
+                  fontSize={0.022}
+                  active={holotableState.fogEnabled}
+                  accent="#A855F7"
+                  onClick={() => onToggleHolotableFog()}
+                />
+                <HoloButton3D
+                  name="btn-holo-fog-reveal-all"
+                  label="☀️ Clear All Fog"
+                  position={[0.12, 0, 0]}
+                  width={0.48}
+                  height={0.07}
+                  fontSize={0.022}
+                  accent="#38BDF8"
+                  onClick={onRevealAllHolotableFog}
+                />
+                <HoloButton3D
+                  name="btn-holo-fog-shroud-all"
+                  label="🌑 Shroud All"
+                  position={[0.58, 0, 0]}
+                  width={0.38}
+                  height={0.07}
+                  fontSize={0.022}
+                  accent="#6366F1"
+                  onClick={onShroudAllHolotableFog}
+                />
+              </group>
+            </group>
+          </>
+        )}
       </group>
 
       {/* 6 Click-to-Sit Sanctum Chairs around the Tactical Holotable */}

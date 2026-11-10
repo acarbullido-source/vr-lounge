@@ -23,6 +23,8 @@ import {
 import {
   NES_LIBRARY_CARTRIDGES,
   getNesEmulator,
+  isNesMediaUrl,
+  parseNesCartridgeIdFromUrl,
 } from '../services/nesEmulator'
 import {
   buildRetainedNesVaultPayload,
@@ -212,6 +214,9 @@ export function useRoomSession(
   const localProfileRef = useRef<ParticipantProfile>(localProfile)
   const participantsRef = useRef<ParticipantProfile[]>(participants)
   const roomCodeRef = useRef<string>(roomCode)
+  const joinedAtRef = useRef<number>(0)
+  const lastImportedCheckpointTsRef = useRef<number>(0)
+  const prevDriverMaskRef = useRef<number>(0)
 
   useEffect(() => {
     presenterStateRef.current = presenterState
@@ -241,16 +246,94 @@ export function useRoomSession(
     roomCodeRef.current = roomCode
   }, [roomCode])
 
-  // Stream local NES controller inputs to peers when engaged as Player 1 or Player 2
+  const resolveAuthoritativeNesDriverId = useCallback((): string | null => {
+    const activeIds = new Set(participantsRef.current.map((p) => p.userId))
+    activeIds.add(localUserId)
+    const mp = nesMultiplayerStateRef.current
+    if (mp.player1Id && activeIds.has(mp.player1Id)) {
+      return mp.player1Id
+    }
+    const pres = presenterStateRef.current
+    if (pres.activePresenterId && activeIds.has(pres.activePresenterId)) {
+      return pres.activePresenterId
+    }
+    if (mp.player2Id && activeIds.has(mp.player2Id)) {
+      return mp.player2Id
+    }
+    const host = participantsRef.current.find((p) => p.isHost)
+    return host?.userId ?? (localProfileRef.current.isHost ? localUserId : null)
+  }, [localUserId])
+
+  const broadcastLiveNesCheckpoint = useCallback(async (): Promise<boolean> => {
+    const svc = serviceRef.current
+    if (!svc) return false
+    const emu = getNesEmulator()
+    if (!emu.isRomLoaded()) return false
+    const compressed = await emu.exportCompressedState()
+    if (!compressed) return false
+    svc.broadcastNesEvent({
+      kind: 'nes-state-checkpoint',
+      cartridgeId: emu.getActiveCartridge().id,
+      senderId: localUserId,
+      compressedState: compressed,
+      timestamp: Date.now(),
+    })
+    return true
+  }, [localUserId])
+
+  // Stream local NES controller inputs to peers and auto-claim Player 1 if unclaimed when playing on screen
   useEffect(() => {
     const emu = getNesEmulator()
     const unsubscribeInput = emu.onLocalInputMaskChange((player, buttonsMask, seq) => {
       const svc = serviceRef.current
       if (!svc) return
       const mp = nesMultiplayerStateRef.current
+      const pres = presenterStateRef.current
+      const isNesOnScreen =
+        pres.screenMode === 'url-sync' && isNesMediaUrl(pres.mediaUrl)
+
+      if (
+        isNesOnScreen &&
+        player === 1 &&
+        buttonsMask !== 0 &&
+        !mp.player1Id &&
+        mp.player2Id !== localUserId
+      ) {
+        const me = localProfileRef.current
+        const activeCart = emu.getActiveCartridge()
+        const autoMp: NesMultiplayerState = {
+          cartridgeId: activeCart.id,
+          cartridgeTitle: activeCart.title,
+          player1Id: localUserId,
+          player1Name: me.displayName,
+          player2Id: mp.player2Id,
+          player2Name: mp.player2Name,
+          revision: mp.revision + 1,
+          updatedAt: Date.now(),
+        }
+        nesMultiplayerStateRef.current = autoMp
+        setNesMultiplayerState(autoMp)
+        svc.broadcastNesEvent({
+          kind: 'nes-multiplayer-state',
+          state: autoMp,
+        })
+      }
+
+      const curMp = nesMultiplayerStateRef.current
       const isParticipant =
-        mp.player1Id === localUserId || mp.player2Id === localUserId
-      if (!isParticipant && emu.getEngagedPlayerSlot() === null) return
+        curMp.player1Id === localUserId || curMp.player2Id === localUserId
+      const isSlotOpen =
+        player === 1
+          ? !curMp.player1Id || curMp.player1Id === localUserId
+          : !curMp.player2Id || curMp.player2Id === localUserId
+      const canBroadcastInput =
+        isParticipant ||
+        emu.getEngagedPlayerSlot() !== null ||
+        (isNesOnScreen && isSlotOpen) ||
+        pres.activePresenterId === localUserId
+
+      if (!canBroadcastInput) return
+
       svc.broadcastNesEvent({
         kind: 'nes-input',
         player,
@@ -260,6 +343,24 @@ export function useRoomSession(
         seq,
         timestamp: Date.now(),
       })
+
+      // When the authoritative driver presses/releases START (bit 3) or SELECT (bit 2),
+      // broadcast a state checkpoint 180ms later so title-screen/mode/pause transitions lock in across all peers.
+      if (
+        player === 1 &&
+        isNesOnScreen &&
+        resolveAuthoritativeNesDriverId() === localUserId
+      ) {
+        const changedBits = buttonsMask ^ prevDriverMaskRef.current
+        prevDriverMaskRef.current = buttonsMask
+        if ((changedBits & 0b00001100) !== 0) {
+          window.setTimeout(() => {
+            if (resolveAuthoritativeNesDriverId() === localUserId) {
+              void broadcastLiveNesCheckpoint()
+            }
+          }, 180)
+        }
+      }
     })
     const unsubscribeSaves = emu.onSaveSlotsChanged(() => {
       const svc = serviceRef.current
@@ -270,7 +371,41 @@ export function useRoomSession(
       unsubscribeInput()
       unsubscribeSaves()
     }
-  }, [localUserId])
+  }, [broadcastLiveNesCheckpoint, localUserId, resolveAuthoritativeNesDriverId])
+
+  // Periodic authoritative NES hardware state synchronization so peers never drift or freeze out of sync
+  useEffect(() => {
+    const isNesOnScreen =
+      joined &&
+      presenterState.screenMode === 'url-sync' &&
+      isNesMediaUrl(presenterState.mediaUrl)
+    if (!isNesOnScreen || participants.length <= 1) return
+
+    const initialTimer = window.setTimeout(() => {
+      if (resolveAuthoritativeNesDriverId() === localUserId) {
+        void broadcastLiveNesCheckpoint()
+      }
+    }, 650)
+
+    const intervalId = window.setInterval(() => {
+      if (resolveAuthoritativeNesDriverId() === localUserId) {
+        void broadcastLiveNesCheckpoint()
+      }
+    }, 2500)
+
+    return () => {
+      window.clearTimeout(initialTimer)
+      window.clearInterval(intervalId)
+    }
+  }, [
+    broadcastLiveNesCheckpoint,
+    joined,
+    localUserId,
+    participants.length,
+    presenterState.mediaUrl,
+    presenterState.screenMode,
+    resolveAuthoritativeNesDriverId,
+  ])
 
   // Hydrate from cloud storage on initial mount and guarantee flush on pagehide/beforeunload
   useEffect(() => {
@@ -608,24 +743,53 @@ export function useRoomSession(
             )
           }
 
-          // If the active presenter disconnected, release presenter slot cleanly
+          const pastJoinGrace = Date.now() - joinedAtRef.current > 8000
+
+          // If the active presenter disconnected after the join grace period, hand off or release cleanly
           const currentPresenter = presenterStateRef.current.activePresenterId
-          if (currentPresenter && !activeIds.has(currentPresenter)) {
-            setPresenterState((prev) => ({
-              ...prev,
-              activePresenterId: null,
-              presenterName: null,
-              screenMode: prev.screenMode === 'tab-stream' ? 'idle' : prev.screenMode,
-              isPlaying: prev.screenMode === 'tab-stream' ? false : prev.isPlaying,
-              updatedAt: Date.now(),
-              revision: prev.revision + 1,
-            }))
+          if (pastJoinGrace && currentPresenter && !activeIds.has(currentPresenter)) {
+            setPresenterState((prev) => {
+              const isNesUrl =
+                prev.screenMode === 'url-sync' && isNesMediaUrl(prev.mediaUrl)
+              if (isNesUrl) {
+                const curMp = nesMultiplayerStateRef.current
+                const fallbackId =
+                  (curMp.player1Id && activeIds.has(curMp.player1Id)
+                    ? curMp.player1Id
+                    : null) ??
+                  (curMp.player2Id && activeIds.has(curMp.player2Id)
+                    ? curMp.player2Id
+                    : null) ??
+                  (hostId && activeIds.has(hostId) ? hostId : null)
+                const fallbackPeer = fallbackId
+                  ? hydrated.find((p) => p.userId === fallbackId)
+                  : undefined
+                return {
+                  ...prev,
+                  activePresenterId: fallbackId,
+                  presenterName: fallbackPeer?.displayName ?? null,
+                  updatedAt: Date.now(),
+                }
+              }
+              return {
+                ...prev,
+                activePresenterId: null,
+                presenterName: null,
+                screenMode: prev.screenMode === 'tab-stream' ? 'idle' : prev.screenMode,
+                isPlaying: prev.screenMode === 'tab-stream' ? false : prev.isPlaying,
+                updatedAt: Date.now(),
+              }
+            })
           }
 
           // If an NES Player 1 or Player 2 controller holder disconnected, release their lock
           const curNes = nesMultiplayerStateRef.current
-          const p1Gone = Boolean(curNes.player1Id && !activeIds.has(curNes.player1Id))
-          const p2Gone = Boolean(curNes.player2Id && !activeIds.has(curNes.player2Id))
+          const p1Gone =
+            pastJoinGrace &&
+            Boolean(curNes.player1Id && !activeIds.has(curNes.player1Id))
+          const p2Gone =
+            pastJoinGrace &&
+            Boolean(curNes.player2Id && !activeIds.has(curNes.player2Id))
           if (p1Gone || p2Gone) {
             if (p1Gone) getNesEmulator().setRemotePlayerMask(1, 0)
             if (p2Gone) getNesEmulator().setRemotePlayerMask(2, 0)
@@ -651,6 +815,9 @@ export function useRoomSession(
         },
         onPresenterState: (incoming) => {
           setPresenterState((prev) => {
+            if (!prev.activePresenterId && incoming.activePresenterId) {
+              return incoming
+            }
             if (incoming.revision < prev.revision) return prev
             if (
               incoming.revision === prev.revision &&
@@ -681,6 +848,13 @@ export function useRoomSession(
               if (event.state.revision < prev.revision) return prev
               const next = event.state
               nesMultiplayerStateRef.current = next
+              if (
+                next.cartridgeId &&
+                next.cartridgeId !== 'custom-rom' &&
+                emu.getActiveCartridge().id !== next.cartridgeId
+              ) {
+                emu.loadLibraryCartridge(next.cartridgeId)
+              }
               if (next.player2Id === activeLocalId) {
                 emu.setEngagedPlayerSlot(2)
               } else if (next.player1Id === activeLocalId) {
@@ -688,15 +862,39 @@ export function useRoomSession(
               } else if (emu.getEngagedPlayerSlot() !== null) {
                 emu.setEngagedPlayerSlot(null)
               }
+              if (resolveAuthoritativeNesDriverId() === activeLocalId) {
+                window.setTimeout(() => {
+                  if (resolveAuthoritativeNesDriverId() === activeLocalId) {
+                    void broadcastLiveNesCheckpoint()
+                  }
+                }, 180)
+              }
               return next
             })
           } else if (event.kind === 'nes-input') {
             if (event.senderId !== activeLocalId) {
+              if (
+                event.cartridgeId &&
+                event.cartridgeId !== 'custom-rom' &&
+                emu.getActiveCartridge().id !== event.cartridgeId
+              ) {
+                emu.loadLibraryCartridge(event.cartridgeId)
+              }
               emu.setRemotePlayerMask(event.player, event.buttonsMask)
             }
           } else if (event.kind === 'nes-state-checkpoint') {
             if (event.senderId !== activeLocalId && event.compressedState) {
-              void emu.importCompressedState(event.compressedState)
+              if (
+                event.timestamp &&
+                event.timestamp < lastImportedCheckpointTsRef.current
+              ) {
+                return
+              }
+              lastImportedCheckpointTsRef.current = event.timestamp || Date.now()
+              void emu.importCompressedState(
+                event.compressedState,
+                event.cartridgeId,
+              )
             }
           } else if (event.kind === 'nes-save-slot-shared') {
             if (event.slot?.cartridgeId && event.slot?.slotId) {
@@ -741,11 +939,24 @@ export function useRoomSession(
           }
 
           const currentNesMp = nesMultiplayerStateRef.current
-          if (currentNesMp.revision > 0 && me.isHost) {
+          if (
+            currentNesMp.revision > 0 &&
+            (me.isHost ||
+              currentNesMp.player1Id === activeLocalId ||
+              currentNesMp.player2Id === activeLocalId)
+          ) {
             service.broadcastNesEvent({
               kind: 'nes-multiplayer-state',
               state: currentNesMp,
             })
+          }
+
+          if (
+            current.screenMode === 'url-sync' &&
+            isNesMediaUrl(current.mediaUrl) &&
+            resolveAuthoritativeNesDriverId() === activeLocalId
+          ) {
+            void broadcastLiveNesCheckpoint()
           }
 
           barGamesBridgeRef.current?.onStateRequest(requesterId, me.isHost, (ev) =>
@@ -770,6 +981,7 @@ export function useRoomSession(
       })
 
       serviceRef.current = service
+      joinedAtRef.current = Date.now()
       recordMemberProfileToVault({
         displayName: cleanName,
         avatarColor: opts.avatarColor,
@@ -804,7 +1016,13 @@ export function useRoomSession(
         }).`,
       )
     },
-    [appendSystemMessage, localUserId, onWebRTCSignalRef],
+    [
+      appendSystemMessage,
+      broadcastLiveNesCheckpoint,
+      localUserId,
+      onWebRTCSignalRef,
+      resolveAuthoritativeNesDriverId,
+    ],
   )
 
   const leaveRoom = useCallback(async () => {
@@ -923,6 +1141,17 @@ export function useRoomSession(
     const nextRevision = Math.max(current.revision + 1, nextUpdatedAt)
     const next: RoomCustomizationState = {
       ...defaults,
+      expansionWing: defaults.expansionWing
+        ? {
+            ...defaults.expansionWing,
+            boardroomWhiteboardStrokes:
+              current.expansionWing?.boardroomWhiteboardStrokes ?? [],
+            boardroomWhiteboardGrid:
+              current.expansionWing?.boardroomWhiteboardGrid ?? true,
+            boardroomWhiteboardClearedAt:
+              current.expansionWing?.boardroomWhiteboardClearedAt ?? 0,
+          }
+        : current.expansionWing,
       revision: nextRevision,
       updatedAt: nextUpdatedAt,
       updatedBy: localProfileRef.current.displayName,
@@ -1062,6 +1291,41 @@ export function useRoomSession(
         revision: bumpRevision ? current.revision + 1 : current.revision,
       }
       publishPresenterState(nextState)
+
+      if (patch.mediaUrl && isNesMediaUrl(patch.mediaUrl)) {
+        const cartId = parseNesCartridgeIdFromUrl(patch.mediaUrl)
+        const cartMeta =
+          NES_LIBRARY_CARTRIDGES.find((c) => c.id === cartId) ??
+          getNesEmulator().getActiveCartridge()
+        const curMp = nesMultiplayerStateRef.current
+        const me = localProfileRef.current
+        const otherActiveP1 =
+          curMp.player1Id &&
+          curMp.player1Id !== localUserId &&
+          participantsRef.current.some((p) => p.userId === curMp.player1Id)
+        const nextMp: NesMultiplayerState = {
+          cartridgeId: cartMeta.id,
+          cartridgeTitle: cartMeta.title,
+          player1Id: otherActiveP1 ? curMp.player1Id : localUserId,
+          player1Name: otherActiveP1 ? curMp.player1Name : me.displayName,
+          player2Id:
+            curMp.player2Id === localUserId && !otherActiveP1
+              ? null
+              : curMp.player2Id,
+          player2Name:
+            curMp.player2Id === localUserId && !otherActiveP1
+              ? null
+              : curMp.player2Name,
+          revision: curMp.revision + 1,
+          updatedAt: Date.now(),
+        }
+        nesMultiplayerStateRef.current = nextMp
+        setNesMultiplayerState(nextMp)
+        serviceRef.current?.broadcastNesEvent({
+          kind: 'nes-multiplayer-state',
+          state: nextMp,
+        })
+      }
     },
     [localUserId, publishPresenterState],
   )
@@ -1244,24 +1508,26 @@ export function useRoomSession(
         kind: 'nes-multiplayer-state',
         state: nextState,
       })
+      if (slot === 1) {
+        window.setTimeout(() => {
+          if (resolveAuthoritativeNesDriverId() === localUserId) {
+            void broadcastLiveNesCheckpoint()
+          }
+        }, 180)
+      }
       return true
     },
-    [appendSystemMessage, localUserId],
+    [
+      appendSystemMessage,
+      broadcastLiveNesCheckpoint,
+      localUserId,
+      resolveAuthoritativeNesDriverId,
+    ],
   )
 
   const shareNesCheckpointWithRoom = useCallback(async () => {
-    const emu = getNesEmulator()
-    const compressed = await emu.exportCompressedState()
-    if (!compressed) return false
-    serviceRef.current?.broadcastNesEvent({
-      kind: 'nes-state-checkpoint',
-      cartridgeId: emu.getActiveCartridge().id,
-      senderId: localUserId,
-      compressedState: compressed,
-      timestamp: Date.now(),
-    })
-    return true
-  }, [localUserId])
+    return broadcastLiveNesCheckpoint()
+  }, [broadcastLiveNesCheckpoint])
 
   const shareNesSaveSlotWithRoom = useCallback((slot: NesSaveSlotMeta) => {
     serviceRef.current?.broadcastNesEvent({

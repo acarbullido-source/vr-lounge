@@ -411,8 +411,10 @@ export function useMediaScreen({
     const attachMedia = async () => {
       const mode = presenterState.screenMode
       const activePresenterId = presenterState.activePresenterId
+      const hasUrlSyncMedia =
+        mode === 'url-sync' && Boolean(presenterState.mediaUrl.trim())
 
-      if (mode === 'idle' || !activePresenterId) {
+      if (mode === 'idle' || (!activePresenterId && !hasUrlSyncMedia)) {
         clearCandidateWatchdog()
         activeYouTubeVideoIdRef.current = null
         setYoutubeEmbedVideoId(null)
@@ -447,7 +449,9 @@ export function useMediaScreen({
 
         const targetStream = isLocalPresenter
           ? localScreenStream
-          : remoteScreenStreams[activePresenterId] ?? null
+          : activePresenterId
+            ? (remoteScreenStreams[activePresenterId] ?? null)
+            : null
 
         if (!targetStream) {
           videoElement.srcObject = null
@@ -496,6 +500,25 @@ export function useMediaScreen({
 
       const sourceKey = `url:${rawUrl}:proxy=${presenterState.useCorsProxy}`
       if (loadedSourceKeyRef.current === sourceKey) {
+        if (isNesMediaUrl(rawUrl)) {
+          const nes = getNesEmulator()
+          nes.setConsumerActive('screen', true)
+          const cartId = parseNesCartridgeIdFromUrl(rawUrl)
+          if (
+            cartId !== 'custom-rom' &&
+            (nes.getActiveCartridge().id !== cartId || !nes.isRomLoaded())
+          ) {
+            nes.loadLibraryCartridge(cartId)
+          }
+          if (!cancelled) {
+            setHasVideoFrames(true)
+          }
+        } else if (isAdventureMediaUrl(rawUrl)) {
+          getCinemaQuestCanvas().setConsumerActive('screen', true)
+          if (!cancelled) {
+            setHasVideoFrames(true)
+          }
+        }
         sourceAttached = true
         return
       }
@@ -801,10 +824,17 @@ export function useMediaScreen({
       }
     }
 
+    let lastReportedTime = -1
     const onTimeUpdate = () => {
-      setLocalCurrentTime(videoElement.currentTime)
+      const cur = videoElement.currentTime
+      if (cur === 0 || Math.abs(cur - lastReportedTime) >= 0.45) {
+        lastReportedTime = cur
+        setLocalCurrentTime(cur)
+      }
       if (Number.isFinite(videoElement.duration) && videoElement.duration > 0) {
-        setLocalDuration(videoElement.duration)
+        setLocalDuration((prev) =>
+          Math.abs(prev - videoElement.duration) < 0.05 ? prev : videoElement.duration,
+        )
       }
       if (
         hasCompanionAudioRef.current &&

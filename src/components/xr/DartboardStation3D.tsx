@@ -16,7 +16,13 @@ import {
   stepDartFlightCCD,
   type ActiveDartSim,
 } from '../../services/barGamesPhysics'
-import { readXRSpaceWorldPose } from '../../services/xrTracking'
+import { playSpatialUiFeedback } from '../../services/soundboardAudio'
+import {
+  isSpatialUiHovered,
+  readXRSpaceWorldPose,
+  setSpatialUiHovered,
+  triggerXRHapticPulse,
+} from '../../services/xrTracking'
 import type {
   ClubhousePersistentState,
   DartGameMode,
@@ -224,6 +230,12 @@ function ScoreButton3D({
   onClick,
 }: ScoreButton3DProps) {
   const [hovered, setHovered] = useState(false)
+  const hoverId = `darts-btn-${label}`
+
+  useEffect(() => {
+    return () => setSpatialUiHovered(false, hoverId)
+  }, [hoverId])
+
   return (
     <group
       position={position}
@@ -231,10 +243,16 @@ function ScoreButton3D({
       onPointerOver={(e) => {
         e.stopPropagation()
         setHovered(true)
+        setSpatialUiHovered(true, hoverId)
       }}
-      onPointerOut={() => setHovered(false)}
+      onPointerOut={(e) => {
+        e.stopPropagation()
+        setHovered(false)
+        setSpatialUiHovered(false, hoverId)
+      }}
       onClick={(e) => {
         e.stopPropagation()
+        playSpatialUiFeedback('ui-click')
         onClick()
       }}
     >
@@ -300,6 +318,8 @@ export function DartboardStation3D({
   const vrHandHistoryRef = useRef<Array<{ pos: THREE.Vector3; t: number }>>([])
   const vrLastAimVelRef = useRef<[number, number, number] | null>(null)
   const vrLastOriginRef = useRef<[number, number, number] | null>(null)
+  const lastAimArcUpdateRef = useRef<number>(0)
+  const lastVrTriggerThrowAtRef = useRef<number>(0)
 
   const tmpDir = useMemo(() => new THREE.Vector3(), [])
   const tmpQuat = useMemo(() => new THREE.Quaternion(), [])
@@ -360,6 +380,7 @@ export function DartboardStation3D({
       if (sim.settled && activeDartShot.shooterId === localUserId) {
         if (settledShotIdRef.current !== activeDartShot.shotId) {
           settledShotIdRef.current = activeDartShot.shotId
+          playSpatialUiFeedback('dart-hit')
           onSettleDartShot({
             shotId: activeDartShot.shotId,
             shooterId: activeDartShot.shooterId,
@@ -376,7 +397,7 @@ export function DartboardStation3D({
     }
 
     // 2. World-space VR Controller Trigger-Hold & Release Throw at Oche or Free-Roam Throw Zone
-    if (!xrSession || buildMode || activeDartShot) {
+    if (!xrSession || buildMode || activeDartShot || isSpatialUiHovered()) {
       if (vrTriggerWasPressedRef.current) {
         vrTriggerWasPressedRef.current = false
         setVrTriggerAimArc(null)
@@ -470,12 +491,18 @@ export function DartboardStation3D({
       vrLastOriginRef.current = originTuple
       vrLastAimVelRef.current = vel
       vrTriggerWasPressedRef.current = true
-      setVrTriggerAimArc(sampleDartTrajectoryArc(originTuple, vel, boardPlaneZ, 16))
+      if (nowMs - lastAimArcUpdateRef.current >= 65) {
+        lastAimArcUpdateRef.current = nowMs
+        setVrTriggerAimArc(sampleDartTrajectoryArc(originTuple, vel, boardPlaneZ, 16))
+      }
     } else if (vrTriggerWasPressedRef.current) {
       vrTriggerWasPressedRef.current = false
       vrHandHistoryRef.current = []
       setVrTriggerAimArc(null)
       if (vrLastOriginRef.current && vrLastAimVelRef.current) {
+        lastVrTriggerThrowAtRef.current = nowMs
+        playSpatialUiFeedback('dart-throw')
+        triggerXRHapticPulse(chosenSource, 0.55, 40)
         onLaunchDartShot(vrLastOriginRef.current, vrLastAimVelRef.current, dartboardCenter)
       }
     }
@@ -513,6 +540,7 @@ export function DartboardStation3D({
       dartboardCenter[2] - 0.028,
     ]
     const vel = computeBallisticDartVelocity(throwOriginWorld, targetWorld, 1.06)
+    playSpatialUiFeedback('dart-throw')
     onLaunchDartShot(throwOriginWorld, vel, dartboardCenter)
   }
 
@@ -607,6 +635,10 @@ export function DartboardStation3D({
             setPointerDragging(false)
             const start = dragStartWorldRef.current
             dragStartWorldRef.current = null
+            // Avoid duplicate throw if VR controller trigger release already launched a dart
+            if (performance.now() - lastVrTriggerThrowAtRef.current < 350) {
+              return
+            }
             if (start) {
               const flickY = Math.max(-0.06, Math.min(0.06, (e.point.y - start[1]) * 0.25))
               fireDartTowardBoardPoint(e.point, [0, flickY])

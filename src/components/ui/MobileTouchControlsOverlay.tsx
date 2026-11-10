@@ -23,13 +23,13 @@ export interface MobileTouchControlsOverlayProps {
 }
 
 const ROOM_PILLS: ReadonlyArray<{ id: LoungeWingId; label: string }> = [
-  { id: 'main-lounge', label: '🎬 Theater' },
-  { id: 'library', label: '🔥 Library' },
-  { id: 'shooting-range', label: '🎯 Range' },
-  { id: 'outdoor-deck', label: '🏔 Deck' },
-  { id: 'command-center', label: '🛰 Control' },
-  { id: 'game-room', label: '🕹 Game Rm' },
-  { id: 'boardroom', label: '💼 Board' },
+  { id: 'main-lounge', label: '🎬 Main Theater' },
+  { id: 'library', label: '🔥 Quiet Library' },
+  { id: 'shooting-range', label: '🎯 Shooting Range' },
+  { id: 'outdoor-deck', label: '🏔 Lake Deck' },
+  { id: 'command-center', label: '🛰 Control Room' },
+  { id: 'game-room', label: '🕹 Game Room' },
+  { id: 'boardroom', label: '💼 Boardroom' },
 ]
 
 export function MobileTouchControlsOverlay({
@@ -95,14 +95,14 @@ export function MobileTouchControlsOverlay({
     >
       {/* Top Bar: Mode Switcher + Room Teleport Strip */}
       <div className="flex flex-col gap-1.5">
-        <div className="pointer-events-auto flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/15 bg-[#090d14]/90 px-3 py-2 shadow-xl backdrop-blur-md">
+        <div className="pointer-events-auto lounge-dock-bar flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/10 bg-slate-900/80 px-3 py-2 shadow-xl backdrop-blur-xl">
           <button
             id="btn-switch-to-pocket-2d"
             type="button"
             onClick={onSwitchToPocket2D}
-            className="flex items-center gap-1.5 rounded-xl bg-[#e5a93c] px-3 py-1.5 text-xs font-bold text-[#090c10] shadow transition active:scale-95"
+            className="lounge-btn flex items-center gap-1.5 rounded-xl bg-[#e5a93c] px-3 py-1.5 text-xs font-bold text-[#090c10] shadow-md shadow-[#e5a93c]/15 active:scale-95"
           >
-            <span>📱 Pocket 2D View</span>
+            <span>📱 Mobile Companion</span>
           </button>
 
           <div className="flex items-center gap-1.5">
@@ -110,27 +110,31 @@ export function MobileTouchControlsOverlay({
               id="btn-mobile-3d-mic"
               type="button"
               onClick={onToggleMute}
-              className={`rounded-xl px-2.5 py-1.5 text-xs font-semibold transition ${
+              className={`lounge-btn rounded-xl px-2.5 py-1.5 text-xs font-semibold ${
                 isMuted
-                  ? 'bg-red-500/25 text-red-200 border border-red-400/40'
-                  : 'bg-emerald-500/25 text-emerald-200 border border-emerald-400/40'
+                  ? 'border border-red-400/40 bg-red-500/25 text-red-200'
+                  : 'border border-emerald-400/40 bg-emerald-500/25 text-emerald-200'
               }`}
             >
-              {isMuted ? '🔇 Muted' : '🎙 Live'}
+              {isMuted ? '🔇 Mic Off' : '🎙 Mic On'}
             </button>
             <button
               id="btn-mobile-3d-stream-mute"
               type="button"
               onClick={onToggleStreamMute}
-              className="rounded-xl border border-white/15 bg-white/10 px-2.5 py-1.5 text-xs font-semibold text-[#f4f1ea]"
+              className="lounge-btn rounded-xl border border-white/10 bg-zinc-900/85 px-2.5 py-1.5 text-xs font-semibold text-[#f4f1ea] hover:bg-slate-800/85"
             >
-              {effectiveCinemaVolume > 0 ? '🔊 TV On' : '🔇 TV Off'}
+              {activeLoungeWing === 'library'
+                ? '🔇 Quiet Zone'
+                : effectiveCinemaVolume > 0
+                  ? '🔊 TV On'
+                  : '🔇 TV Off'}
             </button>
             <button
               id="btn-mobile-3d-copy-link"
               type="button"
               onClick={handleCopyMobileLink}
-              className="rounded-xl border border-sky-400/35 bg-sky-500/15 px-2.5 py-1.5 text-xs font-semibold text-sky-200"
+              className="lounge-btn rounded-xl border border-sky-400/35 bg-sky-500/15 px-2.5 py-1.5 text-xs font-semibold text-sky-200 hover:bg-sky-500/25"
             >
               {copiedLink ? '✓ Copied' : '🔗 Link'}
             </button>
@@ -138,7 +142,7 @@ export function MobileTouchControlsOverlay({
         </div>
 
         {/* One-Tap Room Teleport Strip */}
-        <div className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto rounded-2xl border border-white/10 bg-[#090d14]/80 px-2.5 py-1.5 backdrop-blur-md">
+        <div className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto rounded-2xl border border-white/10 bg-zinc-900/85 px-2.5 py-1.5 shadow-lg backdrop-blur-xl">
           {ROOM_PILLS.map((rm) => {
             const active = activeLoungeWing === rm.id
             return (
@@ -146,10 +150,10 @@ export function MobileTouchControlsOverlay({
                 key={rm.id}
                 type="button"
                 onClick={() => onJumpToWing(rm.id)}
-                className={`shrink-0 rounded-xl px-2.5 py-1 text-xs font-semibold transition ${
+                className={`lounge-btn shrink-0 rounded-xl px-2.5 py-1 text-xs font-semibold ${
                   active
-                    ? 'bg-[#e5a93c] text-[#090d14] font-bold'
-                    : 'bg-white/8 text-slate-200 hover:bg-white/15'
+                    ? 'bg-[#e5a93c] text-[#090d14] font-bold shadow-sm'
+                    : 'border border-white/10 bg-slate-900/80 text-slate-200 hover:bg-slate-800/90'
                 }`}
               >
                 {rm.label}
@@ -178,7 +182,7 @@ export function MobileTouchControlsOverlay({
             onPointerUp={resetStick}
             onPointerCancel={resetStick}
             style={{ touchAction: 'none' }}
-            className="relative flex h-28 w-28 items-center justify-center rounded-full border-2 border-white/25 bg-[#090d14]/75 shadow-2xl backdrop-blur-md"
+            className="relative flex h-28 w-28 items-center justify-center rounded-full border border-white/15 bg-slate-900/80 shadow-2xl backdrop-blur-xl"
           >
             <div className="pointer-events-none h-12 w-12 rounded-full border border-white/10 bg-white/5" />
             <div
@@ -192,7 +196,7 @@ export function MobileTouchControlsOverlay({
               }`}
             />
           </div>
-          <span className="rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-semibold text-slate-300">
+          <span className="rounded-full border border-white/10 bg-zinc-900/85 px-2.5 py-0.5 text-[10px] font-semibold text-slate-300 backdrop-blur-md">
             {flyMode ? '🕹 Fly Move · Drag Screen to Look' : '🕹 Walk · Drag Screen to Look'}
           </span>
         </div>
@@ -203,10 +207,10 @@ export function MobileTouchControlsOverlay({
             id="btn-mobile-3d-fly-toggle"
             type="button"
             onClick={onToggleFlyMode}
-            className={`rounded-2xl border px-3.5 py-2 text-xs font-bold shadow-xl backdrop-blur-md transition active:scale-95 ${
+            className={`lounge-btn rounded-2xl border px-3.5 py-2 text-xs font-bold shadow-xl backdrop-blur-xl active:scale-95 ${
               flyMode
                 ? 'border-sky-300 bg-sky-500 text-slate-950'
-                : 'border-white/20 bg-[#090d14]/85 text-[#f4f1ea]'
+                : 'border-white/15 bg-slate-900/85 text-[#f4f1ea]'
             }`}
           >
             {flyMode ? '🚀 Fly Mode: ON' : '🚀 Fly Mode: OFF'}

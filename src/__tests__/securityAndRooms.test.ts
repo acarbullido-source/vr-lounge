@@ -5,6 +5,9 @@ import { beforeEach, describe, it } from 'node:test'
 import {
   computeExpansionWingLayout,
   detectActiveLoungeWing,
+  loadPersistedBoardroomWhiteboard,
+  resolveExpansionWingState,
+  savePersistedBoardroomWhiteboard,
 } from '../constants/expansionRooms'
 import {
   createDefaultRoomCustomization,
@@ -22,6 +25,10 @@ import {
   signRealtimeEnvelope,
   verifyRealtimeEnvelope,
 } from '../services/identityAuth'
+import {
+  arrayBufferToBinaryString,
+  getNesEmulator,
+} from '../services/nesEmulator'
 import {
   generatePasscodeVerifierConfig,
   getConfiguredPasscodeVerifier,
@@ -638,5 +645,124 @@ describe('VR Lounge Security, E2EE, Anti-Impersonation & Physics Regression Suit
     )
     assert.equal(state.players.u_bob.hp, 4, 'Revived Spectral Ghost must return at 4 HP')
   })
+
+  it('9. persists Boardroom Whiteboard strokes across reloads and room updates until explicitly erased', () => {
+    const wingLayout = computeExpansionWingLayout(5.8)
+    const wbStation = wingLayout.wingSeats.find(
+      (s) => s.id === 'wing:boardroom-whiteboard',
+    )
+    assert.ok(
+      wbStation,
+      'Boardroom must include a dedicated standing station in front of the South Wall Whiteboard',
+    )
+
+    const sampleStrokes = [
+      {
+        id: 'wb-stroke-1',
+        tool: 'pen' as const,
+        color: '#2563EB',
+        size: 2 as const,
+        points: [0.12, 0.24, 0.35, 0.48, 0.62, 0.51],
+        author: 'Alice',
+        createdAt: 1000,
+      },
+      {
+        id: 'wb-stroke-2',
+        tool: 'eraser' as const,
+        color: '#F8FAFC',
+        size: 3 as const,
+        points: [0.3, 0.4, 0.38, 0.45],
+        author: 'Bob',
+        createdAt: 1200,
+      },
+    ]
+
+    savePersistedBoardroomWhiteboard({
+      strokes: sampleStrokes,
+      grid: true,
+      clearedAt: 0,
+      updatedAt: 1500,
+    })
+
+    const loaded = loadPersistedBoardroomWhiteboard()
+    assert.ok(loaded)
+    assert.equal(loaded.strokes.length, 2)
+    assert.equal(loaded.strokes[0].color, '#2563EB')
+    assert.equal(loaded.strokes[1].tool, 'eraser')
+
+    // Resolving default or unrelated wing state must preserve the drawn strokes
+    const hydratedFromDefault = resolveExpansionWingState(null)
+    assert.equal(
+      hydratedFromDefault.boardroomWhiteboardStrokes?.length,
+      2,
+      'Drawn whiteboard strokes must remain across reloads when wing state is initialized',
+    )
+
+    const hydratedAfterOtherRoomUpdate = resolveExpansionWingState({
+      libraryFireLit: false,
+      commandWeatherCityId: 'tokyo',
+    })
+    assert.equal(
+      hydratedAfterOtherRoomUpdate.boardroomWhiteboardStrokes?.length,
+      2,
+      'Updating unrelated wing state must never wipe the Boardroom Whiteboard',
+    )
+
+    // Explicit erase clears the whiteboard and persists the cleared timestamp
+    const explicitlyErased = resolveExpansionWingState({
+      boardroomWhiteboardStrokes: [],
+      boardroomWhiteboardClearedAt: 5000,
+    })
+    assert.equal(
+      explicitlyErased.boardroomWhiteboardStrokes?.length,
+      0,
+      'Explicitly erasing the whiteboard must clear all strokes',
+    )
+    assert.equal(loadPersistedBoardroomWhiteboard()?.strokes.length, 0)
+  })
+
+  it('10. exports compact NES state checkpoints and restores PPU vramMirrorTable + ptTile without freezing', async () => {
+    const romBuffer = readFileSync(
+      resolve(process.cwd(), 'public/roms/nes/lode-runner.nes'),
+    )
+    const arrayBuf = romBuffer.buffer.slice(
+      romBuffer.byteOffset,
+      romBuffer.byteOffset + romBuffer.byteLength,
+    )
+    const emu = getNesEmulator()
+    emu.setConsumerActive('screen', true)
+    const loadedRom = emu.loadBinaryNesRom(
+      arrayBufferToBinaryString(arrayBuf),
+      'lode-runner.nes',
+    )
+    assert.equal(loadedRom, true)
+    assert.equal(emu.isRomLoaded(), true)
+
+    // Advance several frames and simulate Player 1 pressing START
+    emu.setButtonState('start', true, 1)
+    for (let i = 0; i < 12; i++) {
+      emu.stepFrame(1 / 60)
+    }
+    emu.setButtonState('start', false, 1)
+
+    const checkpointB64 = await emu.exportCompressedState()
+    assert.ok(checkpointB64, 'exportCompressedState must produce a non-empty base64 string')
+    assert.ok(
+      checkpointB64.length < 32_000,
+      `Compressed NES checkpoint must stay compact (<32KB) for realtime transport, got ${checkpointB64.length} chars`,
+    )
+
+    // Import checkpoint and verify PPU and CPU continue stepping frames cleanly without freezing
+    const imported = await emu.importCompressedState(checkpointB64)
+    assert.equal(imported, true, 'importCompressedState must succeed')
+
+    for (let i = 0; i < 15; i++) {
+      emu.stepFrame(1 / 60)
+    }
+    assert.equal(emu.isRomLoaded(), true)
+    emu.setConsumerActive('screen', false)
+  })
 })
+
+
 

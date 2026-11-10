@@ -142,7 +142,7 @@ export function DeckCornhole3D({
       <group position={[pitchX, 0, southBoardZ]} rotation={[0, Math.PI, 0]}>
         <group position={[0, 0.19, 0]} rotation={[0.175, 0, 0]}>
           <RoundedBox args={[0.62, 0.045, 1.18]} radius={0.015} smoothness={2}>
-            <meshStandardMaterial color="#D6A86E" roughness={0.42} metalness={0.08} />
+            <meshStandardMaterial color="#D6A86E" roughness={0.35} metalness={0.1} />
           </RoundedBox>
           {/* Decorative Alpine Chevron Stripe */}
           <mesh position={[0, 0.024, 0.16]} rotation={[-Math.PI / 2, 0, 0]}>
@@ -177,7 +177,7 @@ export function DeckCornhole3D({
           }}
         >
           <RoundedBox args={[0.62, 0.045, 1.18]} radius={0.015} smoothness={2}>
-            <meshStandardMaterial color="#D6A86E" roughness={0.42} metalness={0.08} />
+            <meshStandardMaterial color="#D6A86E" roughness={0.35} metalness={0.1} />
           </RoundedBox>
           {/* Decorative Gold & Cyan Border */}
           <mesh position={[0, 0.024, 0.16]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
@@ -219,7 +219,7 @@ export function DeckCornhole3D({
               >
                 <meshStandardMaterial
                   color={bag.team === 'gold' ? '#F59E0B' : '#06B6D4'}
-                  roughness={0.75}
+                  roughness={0.85}
                 />
               </RoundedBox>
             ))}
@@ -235,7 +235,7 @@ export function DeckCornhole3D({
         <boxGeometry args={[0.11, 0.03, 0.11]} />
         <meshStandardMaterial
           color={state.activeTeam === 'gold' ? '#F59E0B' : '#06B6D4'}
-          roughness={0.7}
+          roughness={0.85}
         />
       </mesh>
 
@@ -248,11 +248,14 @@ export function DeckCornhole3D({
         {/* Timber Post */}
         <mesh position={[0, 0.62, 0]}>
           <cylinderGeometry args={[0.04, 0.05, 1.24, 12]} />
-          <meshStandardMaterial color="#3A2418" roughness={0.7} />
+          <meshStandardMaterial color="#3A2418" roughness={0.35} metalness={0.1} />
         </mesh>
 
         {/* Scoreboard Tablet */}
         <group position={[0, 1.22, 0.04]}>
+          <RoundedBox args={[1.02, 0.72, 0.03]} radius={0.028} smoothness={2} position={[0, 0, -0.005]}>
+            <meshStandardMaterial color="#1E293B" metalness={0.75} roughness={0.25} />
+          </RoundedBox>
           <RoundedBox args={[0.98, 0.68, 0.035]} radius={0.025} smoothness={2}>
             <meshBasicMaterial color="#09111E" />
           </RoundedBox>

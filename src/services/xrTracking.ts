@@ -111,3 +111,101 @@ export function isControllerButtonPressed(
   }
   return false
 }
+
+let activeSpatialUiHoverId: string | null = null
+
+/**
+ * Tracks whether a 3D UI button/control is currently hovered by the user's pointer ray
+ * so station trigger handlers (e.g. Shooting Range firearm trigger, Dartboard throw, NES A/B)
+ * never misfire while clicking 3D menus.
+ */
+export function setSpatialUiHovered(hovered: boolean, sourceId = 'ui'): void {
+  if (hovered) {
+    activeSpatialUiHoverId = sourceId
+  } else if (!activeSpatialUiHoverId || activeSpatialUiHoverId === sourceId) {
+    activeSpatialUiHoverId = null
+  }
+}
+
+export function isSpatialUiHovered(): boolean {
+  return activeSpatialUiHoverId !== null
+}
+
+let activeSpatialDrawingSurfaceId: string | null = null
+const spatialDrawingListeners = new Set<(active: boolean) => void>()
+
+/**
+ * Tracks when the user's pointer is hovering or actively drawing on a 3D whiteboard
+ * so desktop/mobile OrbitControls rotation pauses cleanly during freehand strokes.
+ */
+export function setSpatialDrawingSurfaceActive(
+  active: boolean,
+  sourceId = 'whiteboard',
+): void {
+  const prev = activeSpatialDrawingSurfaceId !== null
+  if (active) {
+    activeSpatialDrawingSurfaceId = sourceId
+  } else if (
+    !activeSpatialDrawingSurfaceId ||
+    activeSpatialDrawingSurfaceId === sourceId
+  ) {
+    activeSpatialDrawingSurfaceId = null
+  }
+  const next = activeSpatialDrawingSurfaceId !== null
+  if (prev !== next) {
+    for (const listener of spatialDrawingListeners) {
+      try {
+        listener(next)
+      } catch {
+        // Ignore listener error
+      }
+    }
+  }
+}
+
+export function isSpatialDrawingSurfaceActive(): boolean {
+  return activeSpatialDrawingSurfaceId !== null
+}
+
+export function onSpatialDrawingSurfaceChange(
+  listener: (active: boolean) => void,
+): () => void {
+  spatialDrawingListeners.add(listener)
+  return () => {
+    spatialDrawingListeners.delete(listener)
+  }
+}
+
+/**
+ * Fires a lightweight WebXR controller haptic pulse on the specified controller
+ * or XRInputSource (or any active controller with a haptic actuator).
+ */
+export function triggerXRHapticPulse(
+  controller?: XRControllerState | XRInputSource | null,
+  intensity = 0.28,
+  durationMs = 20,
+): void {
+  try {
+    if (!controller) return
+    const rawGamepad =
+      'inputSource' in controller
+        ? controller.inputSource?.gamepad
+        : controller.gamepad
+    const gamepad = rawGamepad as
+      | (Gamepad & {
+          hapticActuators?: ReadonlyArray<{
+            pulse?: (value: number, duration: number) => Promise<unknown> | void
+          }>
+        })
+      | undefined
+    const actuator = gamepad?.hapticActuators?.[0]
+    if (actuator?.pulse) {
+      void actuator.pulse(
+        Math.max(0.05, Math.min(1, intensity)),
+        Math.max(8, Math.min(200, durationMs)),
+      )
+    }
+  } catch {
+    // Ignore unsupported haptic actuators
+  }
+}

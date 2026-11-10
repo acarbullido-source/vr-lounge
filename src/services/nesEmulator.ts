@@ -455,8 +455,10 @@ const MAX_AUDIO_LEAD_SAMPLES = 4400
 
 const romBinaryCache = new Map<string, string>()
 
-export function arrayBufferToBinaryString(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer)
+export function arrayBufferToBinaryString(
+  buffer: ArrayBuffer | Uint8Array,
+): string {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer)
   const chunkSize = 0x8000
   let binary = ''
   for (let i = 0; i < bytes.length; i += chunkSize) {
@@ -586,6 +588,11 @@ class NesEmulatorSingleton {
   private lastSampleL = 0
   private lastSampleR = 0
   private isSteppingAudioCatchup = false
+  private isImportingState = false
+  private pendingImportRequest: {
+    compressedB64: string
+    expectedCartridgeId?: string
+  } | null = null
 
   // Explicit Controller Engagement & Two-Player Input Routing
   // engagedPlayerSlot = null when Quest controllers / keyboard are in normal VR locomotion mode;
@@ -631,11 +638,35 @@ class NesEmulatorSingleton {
     this.texture.generateMipmaps = false
 
     this.renderBootSplash('BOOTING JSNES 6502 HARDWARE CORE...')
-    if (typeof window !== 'undefined' && typeof fetch === 'function') {
+    if (
+      typeof window !== 'undefined' &&
+      typeof document !== 'undefined' &&
+      typeof fetch === 'function'
+    ) {
       void this.loadLibraryCartridge(this.activeCartridge.id)
       window.addEventListener('beforeunload', () => {
         this.persistBatterySram()
       })
+    }
+  }
+
+  private safeStepHardwareFrame(): boolean {
+    if (!this.nesCore) return false
+    const coreWithCrash = this.nesCore as unknown as {
+      crashed?: boolean
+      frame: () => void
+    }
+    if (coreWithCrash.crashed) {
+      coreWithCrash.crashed = false
+    }
+    try {
+      this.nesCore.frame()
+      this.framesSteppedOnCurrentCartridge++
+      return true
+    } catch (err) {
+      coreWithCrash.crashed = false
+      console.warn('Recovered from transient NES hardware frame exception:', err)
+      return false
     }
   }
 
@@ -729,6 +760,7 @@ class NesEmulatorSingleton {
           const len = outL.length
           const active =
             !this.paused &&
+            !this.isImportingState &&
             this.soundEnabled &&
             this.romLoaded &&
             this.nesCore !== null &&
@@ -742,14 +774,16 @@ class NesEmulatorSingleton {
             this.isSteppingAudioCatchup = true
             try {
               while (avail < len + 192 && catchupSteps < 2 && this.nesCore) {
-                this.nesCore.frame()
-                this.framesSteppedOnCurrentCartridge++
+                if (!this.safeStepHardwareFrame()) break
                 this.frameAccumulator = Math.max(
                   0,
                   this.frameAccumulator - 1 / 60.0988,
                 )
                 avail = (this.audioWriteIdx - this.audioReadIdx) & AUDIO_BUFFER_MASK
                 catchupSteps++
+              }
+              if (catchupSteps > 0) {
+                this.flushPendingFrameToTexture()
               }
             } finally {
               this.isSteppingAudioCatchup = false
@@ -968,7 +1002,7 @@ class NesEmulatorSingleton {
 
       // Step initial 60 frames (~1 second of 6502 boot) so the PPU finishes warm-up and renders the title screen immediately
       for (let i = 0; i < 60; i++) {
-        nes.frame()
+        this.safeStepHardwareFrame()
       }
       const bootBuffered = (this.audioWriteIdx - this.audioReadIdx) & AUDIO_BUFFER_MASK
       if (bootBuffered > TARGET_AUDIO_BUFFER_SAMPLES) {
@@ -1019,7 +1053,7 @@ class NesEmulatorSingleton {
       this.syncPapuSampleRate()
       this.ensureLoopRunning()
       for (let i = 0; i < 60; i++) {
-        nes.frame()
+        this.safeStepHardwareFrame()
       }
       const bootBuffered = (this.audioWriteIdx - this.audioReadIdx) & AUDIO_BUFFER_MASK
       if (bootBuffered > TARGET_AUDIO_BUFFER_SAMPLES) {
@@ -1036,14 +1070,67 @@ class NesEmulatorSingleton {
   }
 
   /**
-   * Exports the complete CPU + PPU + ROM mapper state as a GZIP-compressed Base64 string (~65 KB).
+   * Exports the complete CPU + PPU + ROM mapper state as a GZIP-compressed Base64 string.
    * Strips transient PPU framebuffers (`buffer`, `bgbuffer`, `pixrendered`, `scantile`, `vramMirrorTable`)
-   * so serialization is fast and compact enough for IndexedDB and WebRTC/MQTT sync.
+   * and redundant `ptTile` cache (reconstructed directly from `vramMem[0x0000..0x1FFF]` on import),
+   * and encodes `cpu.mem` and `ppu.vramMem[0..0x3FFF]` as binary Base64 so GZIP checkpoints stay under 20KB.
    */
   public async exportCompressedState(): Promise<string | null> {
     if (!this.romLoaded || !this.nesCore) return null
     try {
       const rawState = this.nesCore.toJSON() as unknown as Record<string, unknown>
+      const rawCpu = (rawState.cpu ?? {}) as Record<string, unknown>
+      const slimCpu: Record<string, unknown> = { ...rawCpu }
+      const liveCpuMem = (
+        this.nesCore as unknown as { cpu?: { mem?: Uint8Array } }
+      ).cpu?.mem
+      const romObj = (
+        this.nesCore as unknown as {
+          rom?: { rom?: Uint8Array[]; romCount?: number }
+        }
+      ).rom
+      if (liveCpuMem instanceof Uint8Array) {
+        delete slimCpu.mem
+        const prgBanks = romObj?.rom
+        const romCount = romObj?.romCount ?? 0
+        let matchedBanks: number[] | null = null
+        if (Array.isArray(prgBanks) && romCount > 0) {
+          matchedBanks = []
+          for (let w = 0; w < 4; w++) {
+            const winStart = 0x8000 + w * 0x2000
+            let found8k = -1
+            for (let b8 = 0; b8 < romCount * 2; b8++) {
+              const bank16 = prgBanks[b8 >> 1]
+              const off = (b8 & 1) * 0x2000
+              if (!bank16 || bank16.length < off + 0x2000) continue
+              let match = true
+              for (let k = 0; k < 0x2000; k++) {
+                if (liveCpuMem[winStart + k] !== bank16[off + k]) {
+                  match = false
+                  break
+                }
+              }
+              if (match) {
+                found8k = b8
+                break
+              }
+            }
+            if (found8k < 0) {
+              matchedBanks = null
+              break
+            }
+            matchedBanks.push(found8k)
+          }
+        }
+        if (matchedBanks) {
+          const ramSlice = liveCpuMem.subarray(0, 0x8000)
+          slimCpu.ramB64 = btoa(arrayBufferToBinaryString(ramSlice))
+          slimCpu.prgBanks8k = matchedBanks
+        } else {
+          slimCpu.memB64 = btoa(arrayBufferToBinaryString(liveCpuMem))
+        }
+      }
+
       const rawPpu = (rawState.ppu ?? {}) as Record<string, unknown>
       const slimPpu: Record<string, unknown> = { ...rawPpu }
       delete slimPpu.buffer
@@ -1051,9 +1138,19 @@ class NesEmulatorSingleton {
       delete slimPpu.pixrendered
       delete slimPpu.scantile
       delete slimPpu.vramMirrorTable
+      delete slimPpu.ptTile
+      const liveVramMem = (
+        this.nesCore as unknown as { ppu?: { vramMem?: Uint8Array } }
+      ).ppu?.vramMem
+      if (liveVramMem instanceof Uint8Array) {
+        delete slimPpu.vramMem
+        const vramSlice = liveVramMem.subarray(0, 0x4000)
+        slimPpu.vramMemB64 = btoa(arrayBufferToBinaryString(vramSlice))
+      }
 
       const slimState = {
         ...rawState,
+        cpu: slimCpu,
         ppu: slimPpu,
         cartridgeId: this.activeCartridge.id,
       }
@@ -1067,59 +1164,224 @@ class NesEmulatorSingleton {
 
   /**
    * Restores a GZIP-compressed Base64 state into the running `jsnes` instance and renders 1 frame.
+   * Automatically loads the matching cartridge ROM first if needed, and rebuilds PPU mirroring
+   * and pattern table tile caches on the post-`reset()` `PPU` instance.
    */
-  public async importCompressedState(compressedB64: string): Promise<boolean> {
-    if (!this.romLoaded || !this.nesCore || !compressedB64) return false
+  public async importCompressedState(
+    compressedB64: string,
+    expectedCartridgeId?: string,
+  ): Promise<boolean> {
+    if (!compressedB64) return false
+    if (this.isImportingState) {
+      this.pendingImportRequest = { compressedB64, expectedCartridgeId }
+      return true
+    }
+    this.isImportingState = true
+    try {
+      let currentB64 = compressedB64
+      let currentExpectedCart = expectedCartridgeId
+      let lastResult = false
+
+      while (currentB64) {
+        this.pendingImportRequest = null
+        lastResult = await this.applyCompressedStateInternal(
+          currentB64,
+          currentExpectedCart,
+        )
+        const nextReq = this.pendingImportRequest as {
+          compressedB64: string
+          expectedCartridgeId?: string
+        } | null
+        if (nextReq) {
+          currentB64 = nextReq.compressedB64
+          currentExpectedCart = nextReq.expectedCartridgeId
+        } else {
+          break
+        }
+      }
+      return lastResult
+    } finally {
+      this.isImportingState = false
+    }
+  }
+
+  private async applyCompressedStateInternal(
+    compressedB64: string,
+    expectedCartridgeId?: string,
+  ): Promise<boolean> {
     try {
       const jsonStr = await decompressBase64ToString(compressedB64)
       const snap = JSON.parse(jsonStr) as {
+        cartridgeId?: string
         cpu?: Record<string, unknown>
         mmap?: Record<string, unknown>
         ppu?: Record<string, unknown>
+        papu?: Record<string, unknown>
       }
       if (!snap || !snap.cpu || !snap.ppu) return false
 
-      const livePpu = (
+      const targetCartridgeId = expectedCartridgeId || snap.cartridgeId
+      if (
+        targetCartridgeId &&
+        targetCartridgeId !== 'custom-rom' &&
+        !this.customRomName &&
+        (this.activeCartridge.id !== targetCartridgeId ||
+          !this.romLoaded ||
+          !this.nesCore)
+      ) {
+        await this.loadLibraryCartridgeAsync(targetCartridgeId, {
+          skipAutoBatteryRestore: true,
+        })
+      }
+
+      if (!this.romLoaded || !this.nesCore) return false
+
+      if (
+        typeof snap.cpu.ramB64 === 'string' &&
+        Array.isArray(snap.cpu.prgBanks8k)
+      ) {
+        const bin = atob(snap.cpu.ramB64)
+        const memArr = new Array<number>(0x10000).fill(0)
+        for (let i = 0; i < bin.length && i < 0x8000; i++) {
+          memArr[i] = bin.charCodeAt(i) & 0xff
+        }
+        const romObj = (
+          this.nesCore as unknown as {
+            rom?: { rom?: Uint8Array[]; romCount?: number }
+          }
+        ).rom
+        const prgBanks = romObj?.rom
+        const romCount = romObj?.romCount ?? 0
+        if (Array.isArray(prgBanks) && romCount > 0) {
+          for (let w = 0; w < 4; w++) {
+            const b8 = Number(snap.cpu.prgBanks8k[w] ?? 0)
+            const bank16 = prgBanks[(b8 >> 1) % romCount]
+            const off = (b8 & 1) * 0x2000
+            if (bank16) {
+              const winStart = 0x8000 + w * 0x2000
+              for (let k = 0; k < 0x2000; k++) {
+                memArr[winStart + k] = bank16[off + k] ?? 0
+              }
+            }
+          }
+        }
+        snap.cpu.mem = memArr
+        delete snap.cpu.ramB64
+        delete snap.cpu.prgBanks8k
+      } else if (typeof snap.cpu.memB64 === 'string') {
+        const bin = atob(snap.cpu.memB64)
+        const memArr = new Array<number>(bin.length)
+        for (let i = 0; i < bin.length; i++) {
+          memArr[i] = bin.charCodeAt(i) & 0xff
+        }
+        snap.cpu.mem = memArr
+        delete snap.cpu.memB64
+      }
+
+      if (typeof snap.ppu.vramMemB64 === 'string') {
+        const bin = atob(snap.ppu.vramMemB64)
+        const fullVram = new Array<number>(0x8000).fill(0)
+        for (let i = 0; i < bin.length && i < 0x8000; i++) {
+          fullVram[i] = bin.charCodeAt(i) & 0xff
+        }
+        snap.ppu.vramMem = fullVram
+        delete snap.ppu.vramMemB64
+      }
+
+      // Provide clean typed arrays & placeholders for stripped fields before `nesCore.fromJSON(snap)`
+      snap.ppu.buffer = new Uint32Array(256 * 240)
+      snap.ppu.bgbuffer = new Uint32Array(256 * 240)
+      snap.ppu.pixrendered = new Uint32Array(256 * 240)
+      snap.ppu.scantile = new Array(32)
+      snap.ppu.validTileData = false
+      snap.ppu.vramMirrorTable = new Uint16Array(0x8000)
+
+      if (!Array.isArray(snap.ppu.ptTile) || snap.ppu.ptTile.length < 512) {
+        const emptyTile = {
+          opaque: [0, 0, 0, 0, 0, 0, 0, 0],
+          pix: new Array(64).fill(0),
+        }
+        snap.ppu.ptTile = new Array(512).fill(emptyTile)
+      }
+
+      this.nesCore.fromJSON(snap as never)
+
+      // IMPORTANT: `this.nesCore.fromJSON` calls `this.reset()`, creating a brand new `this.nesCore.ppu`.
+      // Always operate on the NEW post-reset PPU instance!
+      const newPpu = (
         this.nesCore as unknown as {
+          rom?: { getMirroringType?: () => number }
           ppu: Record<string, unknown> & {
+            vramMem?: Uint8Array
+            ntable1?: number[]
+            currentMirroring?: number
+            validTileData?: boolean
+            scantile?: unknown[]
+            ptTile?: Array<{
+              setScanline?: (sline: number, b1: number, b2: number) => void
+            }>
             setMirroring?: (m: unknown) => void
+            updatePalettes?: () => void
           }
         }
       ).ppu
 
-      // Preserve preallocated PPU framebuffers and lookup tables
-      const savedBuffer = livePpu.buffer
-      const savedBgBuffer = livePpu.bgbuffer
-      const savedPixRendered = livePpu.pixrendered
-      const savedScantile = livePpu.scantile
-      const savedVramMirrorTable = livePpu.vramMirrorTable
+      const savedNtable1 =
+        Array.isArray(newPpu.ntable1) && newPpu.ntable1.length === 4
+          ? [...newPpu.ntable1]
+          : null
 
-      snap.ppu.buffer = savedBuffer
-      snap.ppu.bgbuffer = savedBgBuffer
-      snap.ppu.pixrendered = savedPixRendered
-      snap.ppu.scantile = savedScantile
-      snap.ppu.vramMirrorTable = savedVramMirrorTable
-
-      this.nesCore.fromJSON(snap as never)
-      this.syncPapuSampleRate()
-
-      livePpu.buffer = savedBuffer
-      livePpu.bgbuffer = savedBgBuffer
-      livePpu.pixrendered = savedPixRendered
-      livePpu.scantile = savedScantile
-      livePpu.vramMirrorTable = savedVramMirrorTable
-
-      if (
-        typeof livePpu.setMirroring === 'function' &&
+      const desiredMirroring =
         snap.ppu.currentMirroring !== undefined
-      ) {
-        livePpu.setMirroring(snap.ppu.currentMirroring)
+          ? snap.ppu.currentMirroring
+          : (
+              this.nesCore as unknown as {
+                rom?: { getMirroringType?: () => number }
+              }
+            ).rom?.getMirroringType?.() ?? 0
+
+      if (typeof newPpu.setMirroring === 'function') {
+        // Reset currentMirroring to -1 first so setMirroring() does not early-return
+        // and properly populates vramMirrorTable (0x0000..0x7FFF mirror regions).
+        newPpu.currentMirroring = -1
+        newPpu.setMirroring(desiredMirroring)
       }
+      if (savedNtable1) {
+        newPpu.ntable1 = savedNtable1
+      }
+
+      // Rebuild all 512 pattern table tiles directly from vramMem[0x0000..0x1FFF]
+      if (newPpu.vramMem && Array.isArray(newPpu.ptTile)) {
+        const vram = newPpu.vramMem
+        for (let tIdx = 0; tIdx < 512; tIdx++) {
+          const tile = newPpu.ptTile[tIdx]
+          const base = tIdx << 4
+          if (tile && typeof tile.setScanline === 'function') {
+            for (let sl = 0; sl < 8; sl++) {
+              tile.setScanline(sl, vram[base + sl], vram[base + sl + 8])
+            }
+          }
+        }
+      }
+
+      if (typeof newPpu.updatePalettes === 'function') {
+        newPpu.updatePalettes()
+      }
+
+      newPpu.validTileData = false
+      newPpu.scantile = new Array(32)
+
+      this.syncPapuSampleRate()
+      this.audioReadIdx = this.audioWriteIdx
+      this.audioReadFrac = 0
 
       this.appliedP1Mask = 0
       this.appliedP2Mask = 0
-      this.nesCore.frame()
+      this.syncControllerStateToCore()
+
+      this.safeStepHardwareFrame()
       this.flushPendingFrameToTexture()
+      this.ensureLoopRunning()
       return true
     } catch (err) {
       console.warn('Failed to import NES save state:', err)
@@ -1500,11 +1762,15 @@ class NesEmulatorSingleton {
   public resetCartridge() {
     if (this.customRomName && this.nesCore) {
       this.nesCore.reset()
-      this.nesCore.frame()
+      this.safeStepHardwareFrame()
       this.flushPendingFrameToTexture()
       return
     }
     void this.loadLibraryCartridgeAsync(this.activeCartridge.id)
+  }
+
+  public isRomLoaded(): boolean {
+    return this.romLoaded && this.nesCore !== null
   }
 
   public getActiveCartridge(): NesCartridgeMeta {
@@ -1550,7 +1816,11 @@ class NesEmulatorSingleton {
       if (this.activeConsumers.size === 0) {
         this.persistBatterySram()
         this.paused = true
-        if (this.rafId !== null && typeof window !== 'undefined') {
+        if (
+          this.rafId !== null &&
+          typeof window !== 'undefined' &&
+          typeof window.cancelAnimationFrame === 'function'
+        ) {
           window.cancelAnimationFrame(this.rafId)
           this.rafId = null
         }
@@ -1612,7 +1882,13 @@ class NesEmulatorSingleton {
   private lastRenderLoopStepAt = 0
 
   private ensureLoopRunning() {
-    if (this.rafId !== null || typeof window === 'undefined') return
+    if (
+      this.rafId !== null ||
+      typeof window === 'undefined' ||
+      typeof window.requestAnimationFrame !== 'function'
+    ) {
+      return
+    }
     this.lastTick = performance.now()
     const loop = (now: number) => {
       if (this.paused && this.activeConsumers.size === 0) {
@@ -1639,6 +1915,9 @@ class NesEmulatorSingleton {
     if (typeof performance !== 'undefined') {
       this.lastRenderLoopStepAt = performance.now()
     }
+    if (!this.activeConsumers.has('screen')) {
+      this.setConsumerActive('screen', true)
+    }
     if (this.activeConsumers.size > 0 && this.paused) {
       this.paused = false
     }
@@ -1649,7 +1928,9 @@ class NesEmulatorSingleton {
     if (!this.activeConsumers.has('screen')) {
       this.pollQuestAndStandardGamepads(undefined, undefined, false)
     }
-    if (!this.romLoaded || !this.nesCore || this.paused) return
+    if (!this.romLoaded || !this.nesCore || this.paused || this.isImportingState) {
+      return
+    }
 
     const targetFrameTime = 1 / 60.0988
     // Accumulate full frame delta up to 2.8 NTSC frames so 72Hz (13.89ms) and 90Hz (11.11ms)
@@ -1662,8 +1943,9 @@ class NesEmulatorSingleton {
     let steps = 0
     while (this.frameAccumulator >= targetFrameTime && steps < 2) {
       this.frameAccumulator -= targetFrameTime
-      this.nesCore.frame()
-      this.framesSteppedOnCurrentCartridge++
+      if (!this.safeStepHardwareFrame()) {
+        break
+      }
       steps++
     }
 

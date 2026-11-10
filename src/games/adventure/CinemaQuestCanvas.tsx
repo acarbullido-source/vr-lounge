@@ -197,12 +197,19 @@ class CinemaQuestCanvasController {
     }
     if (this.activeConsumers.size > 0 && this.animTimer === null) {
       let lastTs = performance.now()
+      let lastRenderTs = 0
       this.animTimer = window.setInterval(() => {
         const now = performance.now()
-        const dt = Math.min(0.1, (now - lastTs) / 1000)
+        const isRollingNow =
+          this.state.lastDiceShowcase !== null &&
+          Date.now() - this.state.lastDiceShowcase.timestamp < 1600
+        const minIntervalMs = isRollingNow ? 33 : 100 // 30fps during d20 roll animation, 10fps when idle
+        if (now - lastRenderTs < minIntervalMs) return
+        const dt = Math.min(0.15, (now - lastTs) / 1000)
         lastTs = now
+        lastRenderTs = now
         this.renderFrame(dt)
-      }, 33) // 30fps graphic-novel loop
+      }, 33)
     } else if (this.activeConsumers.size === 0 && this.animTimer !== null) {
       window.clearInterval(this.animTimer)
       this.animTimer = null
@@ -239,6 +246,7 @@ class CinemaQuestCanvasController {
     if (uvX === null || uvY === null) {
       if (this.hoveredHotspotId !== null) {
         this.hoveredHotspotId = null
+        this.renderFrame(0.016)
       }
       return null
     }
@@ -246,6 +254,7 @@ class CinemaQuestCanvasController {
     const nextId = hit?.id ?? null
     if (nextId !== this.hoveredHotspotId) {
       this.hoveredHotspotId = nextId
+      this.renderFrame(0.016)
     }
     return hit
   }

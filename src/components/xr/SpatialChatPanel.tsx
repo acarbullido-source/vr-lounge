@@ -93,10 +93,21 @@ export function SpatialChatPanel({
       {/* Toggleable 3D Spatial Chat Panel beside the cinema screen */}
       {visible && (
         <group position={[panelX, Math.max(1.9, sy - 0.4), panelZ]} rotation={[0, sRot - 0.44, 0]}>
+          {/* Brushed Metallic Outer Bezel */}
+          <RoundedBox args={[2.41, 3.21, 0.036]} position={[0, 0, -0.006]} radius={0.09} smoothness={3}>
+            <meshStandardMaterial color="#1E293B" roughness={0.25} metalness={0.75} />
+          </RoundedBox>
+
           {/* Outer frame */}
           <RoundedBox args={[2.35, 3.15, 0.04]} radius={0.08} smoothness={3}>
-            <meshStandardMaterial color="#0D1118" roughness={0.68} metalness={0.24} />
+            <meshStandardMaterial color="#0D1118" roughness={0.45} metalness={0.34} />
           </RoundedBox>
+
+          {/* Top Amber Header Accent Strip */}
+          <mesh position={[0, 1.54, 0.025]}>
+            <boxGeometry args={[2.16, 0.01, 0.005]} />
+            <meshBasicMaterial color="#E5A93C" />
+          </mesh>
 
           {/* Header */}
           <Text
@@ -112,6 +123,7 @@ export function SpatialChatPanel({
           {/* Hide button */}
           <group
             position={[0.88, 1.36, 0.03]}
+            scale={hoveredBtn === 'close' ? 1.04 : 1}
             pointerEventsType={{ deny: 'grab' }}
             onPointerOver={() => setHoveredBtn('close')}
             onPointerOut={() => setHoveredBtn(null)}
@@ -139,7 +151,7 @@ export function SpatialChatPanel({
             <Text
               position={[0, 0.25, 0.03]}
               fontSize={0.09}
-              color="#8A867E"
+              color="#94A3B8"
               maxWidth={1.9}
               textAlign="center"
               anchorX="center"
@@ -164,7 +176,7 @@ export function SpatialChatPanel({
                   <Text
                     position={[0, -0.042, 0]}
                     fontSize={0.078}
-                    color={msg.isSystem ? '#C7C2B8' : '#F4F1EA'}
+                    color={msg.isSystem ? '#E2E8F0' : '#F4F1EA'}
                     maxWidth={1.95}
                     anchorX="left"
                     anchorY="middle"
@@ -181,10 +193,12 @@ export function SpatialChatPanel({
             {QUICK_REACTIONS.map((emoji, idx) => {
               const x = -0.82 + idx * 0.328
               const key = `rx-${emoji}`
+              const isHovered = hoveredBtn === key
               return (
                 <group
                   key={emoji}
                   position={[x, 0, 0]}
+                  scale={isHovered ? 1.04 : 1}
                   pointerEventsType={{ deny: 'grab' }}
                   onPointerOver={() => setHoveredBtn(key)}
                   onPointerOut={() => setHoveredBtn(null)}
@@ -195,7 +209,7 @@ export function SpatialChatPanel({
                 >
                   <RoundedBox args={[0.27, 0.24, 0.02]} radius={0.05} smoothness={2}>
                     <meshBasicMaterial
-                      color={hoveredBtn === key ? '#2A3447' : '#171D29'}
+                      color={isHovered ? '#2A3447' : '#171D29'}
                     />
                   </RoundedBox>
                   <Text position={[0, 0, 0.015]} fontSize={0.12} anchorX="center" anchorY="middle">
@@ -209,6 +223,7 @@ export function SpatialChatPanel({
           {/* Compose in VR Button */}
           <group
             position={[0, -1.39, 0.03]}
+            scale={hoveredBtn === 'compose' ? 1.04 : 1}
             pointerEventsType={{ deny: 'grab' }}
             onPointerOver={() => setHoveredBtn('compose')}
             onPointerOut={() => setHoveredBtn(null)}

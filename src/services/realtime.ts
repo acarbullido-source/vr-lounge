@@ -88,8 +88,10 @@ const PUBLIC_WSS_BROKERS = [
   'wss://broker.hivemq.com:8884/mqtt',
 ] as const
 
-const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim() ?? ''
-const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim() ?? ''
+const supabaseUrl =
+  (import.meta.env?.VITE_SUPABASE_URL as string | undefined)?.trim() ?? ''
+const supabaseAnonKey =
+  (import.meta.env?.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim() ?? ''
 
 let sharedSupabaseClient: SupabaseClient | null = null
 let supabaseKeepaliveSent = false
@@ -120,7 +122,7 @@ function getSupabaseClient(): SupabaseClient | null {
     sharedSupabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
       realtime: {
         params: {
-          eventsPerSecond: 40,
+          eventsPerSecond: 100,
         },
       },
     })
@@ -173,7 +175,7 @@ export class RoomRealtimeService {
   private heartbeatTimer: number | null = null
   private presenceMap = new Map<string, PresenceRecord>()
   private seenPacketIds = new Set<string>()
-  private lastAnnounceReplyAt = 0
+  private lastAnnounceReplyByPeer = new Map<string, number>()
   private supabaseReconnectTimer: number | null = null
   private supabaseFailCount = 0
   private destroyed = false
@@ -234,12 +236,18 @@ export class RoomRealtimeService {
     payload: unknown,
   ): Promise<{ envelope: RelayEnvelope; wirePacket: EncryptedWirePacket } | null> {
     if (!this.masterKeyHex) return null
-    const signed = await signRealtimeEnvelope(this.roomCode, {
+    const baseEnvelope = {
       id: shortPacketId(),
       type,
       senderId: this.localUserId,
       payload,
-    })
+    }
+    // High-frequency 20Hz pose-update packets are already authenticated & encrypted
+    // via room AES-256-GCM; skip redundant per-frame ECDSA P-256 signing overhead.
+    const signed: RelayEnvelope =
+      type === 'pose-update'
+        ? { ...baseEnvelope, ts: Date.now(), pubKey: '', sig: '' }
+        : await signRealtimeEnvelope(this.roomCode, baseEnvelope)
     const wirePacket = await encryptRoomPayload(
       this.masterKeyHex,
       this.roomCode,
@@ -256,6 +264,16 @@ export class RoomRealtimeService {
       rawPacket,
     )
     if (!decrypted) return null
+    if (decrypted.type === 'pose-update') {
+      if (
+        typeof decrypted.senderId !== 'string' ||
+        !decrypted.senderId ||
+        !decrypted.payload
+      ) {
+        return null
+      }
+      return decrypted
+    }
     const verified = await verifyRealtimeEnvelope(this.roomCode, decrypted)
     if (!verified) return null
     return decrypted
@@ -499,15 +517,15 @@ export class RoomRealtimeService {
         },
       )
 
-      if (!retainedVaultsOnly) {
-        client.subscribe(this.mqttTopic, { qos: 0 }, (err) => {
-          if (!err && !this.destroyed) {
-            this.callbacks.onConnectionStatus?.(true)
-            this.publishEncrypted('presence-announce', this.currentProfile)
-            this.requestRoomState()
-          }
-        })
-      }
+      // Always subscribe to the encrypted room bus topic so WebRTC signaling and
+      // presence packets have dual-path redundancy across Supabase and MQTT relay.
+      client.subscribe(this.mqttTopic, { qos: 0 }, (err) => {
+        if (!err && !this.destroyed && !retainedVaultsOnly) {
+          this.callbacks.onConnectionStatus?.(true)
+          this.publishEncrypted('presence-announce', this.currentProfile)
+          this.requestRoomState()
+        }
+      })
     })
 
     client.on('message', (topic, messageBuffer) => {
@@ -592,11 +610,7 @@ export class RoomRealtimeService {
   private handleRelayEnvelope(env: RelayEnvelope): void {
     if (!env || env.senderId === this.localUserId) return
 
-    if (
-      env.type !== 'pose-update' &&
-      env.type !== 'nes-event' &&
-      this.markPacketSeen(env.id)
-    ) {
+    if (env.type !== 'pose-update' && this.markPacketSeen(env.id)) {
       return
     }
 
@@ -617,13 +631,15 @@ export class RoomRealtimeService {
         this.emitPresenceRoster()
 
         const now = Date.now()
-        if (isBrandNewPeer && now - this.lastAnnounceReplyAt > 250) {
-          this.lastAnnounceReplyAt = now
+        const lastReplyToPeer = this.lastAnnounceReplyByPeer.get(verifiedProfile.userId) ?? 0
+        if (isBrandNewPeer || now - lastReplyToPeer > 3500) {
+          this.lastAnnounceReplyByPeer.set(verifiedProfile.userId, now)
           this.publishEncrypted('presence-announce', this.currentProfile)
         }
         break
       }
       case 'presence-leave': {
+        this.lastAnnounceReplyByPeer.delete(env.senderId)
         if (this.presenceMap.delete(env.senderId)) {
           this.emitPresenceRoster()
         }
@@ -660,6 +676,10 @@ export class RoomRealtimeService {
       case 'request-room-state': {
         const req = env.payload as { requesterId: string }
         if (req?.requesterId === env.senderId) {
+          // Immediately announce our presence so a joining or refreshing peer discovers
+          // all active members without waiting for the periodic presence heartbeat.
+          this.lastAnnounceReplyByPeer.set(req.requesterId, Date.now())
+          this.publishEncrypted('presence-announce', this.currentProfile)
           this.callbacks.onRoomStateRequest(req.requesterId)
         }
         break
@@ -742,8 +762,14 @@ export class RoomRealtimeService {
         })
       }
 
-      if (this.mqttClient?.connected && this.mode !== 'supabase') {
-        this.mqttClient.publish(this.mqttTopic, JSON.stringify(wirePacket), { qos: 0 })
+      // Publish all packets on MQTT in cloud-relay mode, AND also dual-publish
+      // critical WebRTC signaling & control packets in supabase mode for zero-drop reliability.
+      if (
+        this.mqttClient?.connected &&
+        (this.mode !== 'supabase' || type !== 'pose-update')
+      ) {
+        const qos = type === 'webrtc-signal' || type === 'presence-announce' ? 1 : 0
+        this.mqttClient.publish(this.mqttTopic, JSON.stringify(wirePacket), { qos })
       }
 
       if (

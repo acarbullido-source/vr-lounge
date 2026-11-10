@@ -87,6 +87,7 @@ function NesPillButton3D({
   return (
     <group
       position={position}
+      scale={hovered && !disabled ? 1.04 : 1}
       pointerEventsType={{ deny: 'grab' }}
       onPointerOver={(e) => {
         if (disabled) return
@@ -155,6 +156,7 @@ function NesCartridgeCard3D({
   return (
     <group
       position={position}
+      scale={hovered ? 1.03 : 1}
       pointerEventsType={{ deny: 'grab' }}
       onPointerOver={(e) => {
         e.stopPropagation()
@@ -352,9 +354,14 @@ export function NesLibraryBrowser3D({
       position={[0, 1.62, -1.58]}
       rotation={[-0.04, 0, 0]}
     >
+      {/* Brushed Metallic Outer NES Deck Bezel */}
+      <RoundedBox args={[1.792, 1.132, 0.022]} position={[0, 0, -0.004]} radius={0.04} smoothness={3}>
+        <meshStandardMaterial color="#1E293B" roughness={0.25} metalness={0.75} />
+      </RoundedBox>
+
       {/* Main 3D NES Deck Chassis */}
       <RoundedBox args={[1.76, 1.1, 0.026]} radius={0.036} smoothness={3}>
-        <meshStandardMaterial color="#0A0E17" roughness={0.58} metalness={0.3} />
+        <meshStandardMaterial color="#0A0E17" roughness={0.44} metalness={0.36} />
       </RoundedBox>
 
       {/* Top Nintendo Crimson & Gold Accent Bars */}

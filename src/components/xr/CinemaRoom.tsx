@@ -191,19 +191,31 @@ export function CinemaRoom({
   useEffect(() => {
     return () => {
       starGeometry.dispose()
+      curvedScreenGeo.dispose()
+      curvedFrameGeo.dispose()
+      flatScreenGeo.dispose()
+      flatFrameGeo.dispose()
     }
-  }, [starGeometry])
+  }, [
+    curvedFrameGeo,
+    curvedScreenGeo,
+    flatFrameGeo,
+    flatScreenGeo,
+    starGeometry,
+  ])
+
+  const hasUrlSyncMedia =
+    presenterState.screenMode === 'url-sync' &&
+    Boolean(presenterState.mediaUrl.trim())
 
   const isShowingVideo =
     presenterState.screenMode !== 'idle' &&
-    Boolean(presenterState.activePresenterId) &&
+    (Boolean(presenterState.activePresenterId) || hasUrlSyncMedia) &&
     hasVideoFrames &&
     !mediaError
 
   const isActivelyPlayingMedia =
-    (presenterState.screenMode === 'url-sync' &&
-      Boolean(presenterState.activePresenterId) &&
-      presenterState.isPlaying) ||
+    (hasUrlSyncMedia && presenterState.isPlaying) ||
     (presenterState.screenMode === 'tab-stream' &&
       Boolean(presenterState.activePresenterId))
 
@@ -220,65 +232,79 @@ export function CinemaRoom({
 
   // Smoothly interpolate mood brightness, colors & playback Auto-Dim at 72Hz/90Hz
   useFrame(({ clock }, delta) => {
-    const lerpAlpha = 1 - Math.exp(-5.0 * Math.min(delta, 0.1))
     const dimFactor =
       lighting.autoDimOnPlay && isActivelyPlayingMedia && !buildMode && !inWingSeat
         ? 0.32
         : 1.0
     const masterGain = Math.max(0.18, lighting.brightness * dimFactor)
+    const targetAmbientIntensity = 0.95 * masterGain
+    const ambientConverged =
+      ambientLightRef.current !== null &&
+      Math.abs(ambientLightRef.current.intensity - targetAmbientIntensity) < 0.002 &&
+      Math.abs(ambientLightRef.current.color.r - targetAmbientColor.r) < 0.003 &&
+      Math.abs(ambientLightRef.current.color.g - targetAmbientColor.g) < 0.003 &&
+      Math.abs(ambientLightRef.current.color.b - targetAmbientColor.b) < 0.003 &&
+      leftMoodLightRef.current !== null &&
+      Math.abs(leftMoodLightRef.current.color.r - targetAccentColor.r) < 0.003 &&
+      Math.abs(leftMoodLightRef.current.color.g - targetAccentColor.g) < 0.003 &&
+      Math.abs(leftMoodLightRef.current.color.b - targetAccentColor.b) < 0.003
 
-    if (ambientLightRef.current) {
-      ambientLightRef.current.intensity = THREE.MathUtils.lerp(
-        ambientLightRef.current.intensity,
-        0.95 * masterGain,
-        lerpAlpha,
-      )
-      ambientLightRef.current.color.lerp(targetAmbientColor, lerpAlpha)
-    }
+    const lerpAlpha = 1 - Math.exp(-5.0 * Math.min(delta, 0.1))
 
-    if (hemiLightRef.current) {
-      hemiLightRef.current.intensity = THREE.MathUtils.lerp(
-        hemiLightRef.current.intensity,
-        2.15 * masterGain,
-        lerpAlpha,
-      )
-      hemiLightRef.current.color.lerp(targetAmbientColor, lerpAlpha)
-    }
+    if (!ambientConverged) {
+      if (ambientLightRef.current) {
+        ambientLightRef.current.intensity = THREE.MathUtils.lerp(
+          ambientLightRef.current.intensity,
+          targetAmbientIntensity,
+          lerpAlpha,
+        )
+        ambientLightRef.current.color.lerp(targetAmbientColor, lerpAlpha)
+      }
 
-    if (dirLightRef.current) {
-      dirLightRef.current.intensity = THREE.MathUtils.lerp(
-        dirLightRef.current.intensity,
-        1.45 * masterGain,
-        lerpAlpha,
-      )
-      dirLightRef.current.color.lerp(targetAmbientColor, lerpAlpha)
-    }
+      if (hemiLightRef.current) {
+        hemiLightRef.current.intensity = THREE.MathUtils.lerp(
+          hemiLightRef.current.intensity,
+          2.15 * masterGain,
+          lerpAlpha,
+        )
+        hemiLightRef.current.color.lerp(targetAmbientColor, lerpAlpha)
+      }
 
-    if (leftMoodLightRef.current) {
-      leftMoodLightRef.current.intensity = THREE.MathUtils.lerp(
-        leftMoodLightRef.current.intensity,
-        9.5 * masterGain,
-        lerpAlpha,
-      )
-      leftMoodLightRef.current.color.lerp(targetAccentColor, lerpAlpha)
-    }
+      if (dirLightRef.current) {
+        dirLightRef.current.intensity = THREE.MathUtils.lerp(
+          dirLightRef.current.intensity,
+          1.45 * masterGain,
+          lerpAlpha,
+        )
+        dirLightRef.current.color.lerp(targetAmbientColor, lerpAlpha)
+      }
 
-    if (rightMoodLightRef.current) {
-      rightMoodLightRef.current.intensity = THREE.MathUtils.lerp(
-        rightMoodLightRef.current.intensity,
-        9.5 * masterGain,
-        lerpAlpha,
-      )
-      rightMoodLightRef.current.color.lerp(targetAccentColor, lerpAlpha)
-    }
+      if (leftMoodLightRef.current) {
+        leftMoodLightRef.current.intensity = THREE.MathUtils.lerp(
+          leftMoodLightRef.current.intensity,
+          9.5 * masterGain,
+          lerpAlpha,
+        )
+        leftMoodLightRef.current.color.lerp(targetAccentColor, lerpAlpha)
+      }
 
-    if (ceilingFillRef.current) {
-      ceilingFillRef.current.intensity = THREE.MathUtils.lerp(
-        ceilingFillRef.current.intensity,
-        7.5 * masterGain,
-        lerpAlpha,
-      )
-      ceilingFillRef.current.color.lerp(targetAmbientColor, lerpAlpha)
+      if (rightMoodLightRef.current) {
+        rightMoodLightRef.current.intensity = THREE.MathUtils.lerp(
+          rightMoodLightRef.current.intensity,
+          9.5 * masterGain,
+          lerpAlpha,
+        )
+        rightMoodLightRef.current.color.lerp(targetAccentColor, lerpAlpha)
+      }
+
+      if (ceilingFillRef.current) {
+        ceilingFillRef.current.intensity = THREE.MathUtils.lerp(
+          ceilingFillRef.current.intensity,
+          7.5 * masterGain,
+          lerpAlpha,
+        )
+        ceilingFillRef.current.color.lerp(targetAmbientColor, lerpAlpha)
+      }
     }
 
     if (screenGlowRef.current) {
@@ -288,11 +314,14 @@ export function CinemaRoom({
           Math.cos(clock.elapsedTime * 0.7) * 0.9
         screenGlowRef.current.intensity = 18.5 + wave
       } else {
-        screenGlowRef.current.intensity = THREE.MathUtils.lerp(
-          screenGlowRef.current.intensity,
-          11.5 * Math.max(0.45, masterGain),
-          lerpAlpha,
-        )
+        const targetGlow = 11.5 * Math.max(0.45, masterGain)
+        if (Math.abs(screenGlowRef.current.intensity - targetGlow) >= 0.005) {
+          screenGlowRef.current.intensity = THREE.MathUtils.lerp(
+            screenGlowRef.current.intensity,
+            targetGlow,
+            lerpAlpha,
+          )
+        }
       }
     }
   })
@@ -329,7 +358,16 @@ export function CinemaRoom({
   const handleFloorPointerMove = (e: ThreeEvent<PointerEvent>) => {
     if (!buildMode || !selectedItem || selectedEntry?.placementSurface !== 'floor') return
     e.stopPropagation()
-    setHoverReticle([e.point.x, e.point.y + 0.02, e.point.z])
+    const nextX = Number(e.point.x.toFixed(2))
+    const nextY = Number((e.point.y + 0.02).toFixed(2))
+    const nextZ = Number(e.point.z.toFixed(2))
+    setHoverReticle((prev) =>
+      prev &&
+      Math.abs(prev[0] - nextX) < 0.02 &&
+      Math.abs(prev[2] - nextZ) < 0.02
+        ? prev
+        : [nextX, nextY, nextZ],
+    )
     if (draggingPlacement) {
       applyFloorPlacement(e.point)
     }
@@ -423,8 +461,8 @@ export function CinemaRoom({
         name="lounge-main-floor"
         rotation={[-Math.PI / 2, 0, 0]}
         position={[0, 0, centerZ]}
-        onPointerMove={handleFloorPointerMove}
-        onPointerOut={() => setHoverReticle(null)}
+        onPointerMove={buildMode ? handleFloorPointerMove : undefined}
+        onPointerOut={buildMode ? () => setHoverReticle(null) : undefined}
         onDoubleClick={handleFloorDoubleClick}
         onPointerDown={(e) => {
           if (!buildMode || selectedEntry?.placementSurface !== 'floor') return
@@ -477,7 +515,7 @@ export function CinemaRoom({
             radius={0.04}
             smoothness={2}
             position={[0, 0.19, sizeSpec.balconyZ]}
-            onPointerMove={handleFloorPointerMove}
+            onPointerMove={buildMode ? handleFloorPointerMove : undefined}
             onDoubleClick={handleFloorDoubleClick}
             onClick={(e) => {
               if (!buildMode || selectedEntry?.placementSurface !== 'floor') return
@@ -985,7 +1023,7 @@ export function CinemaRoom({
         rotation={[0, screen.rotationY, 0]}
         scale={[screenScale, screenScale, screenScale]}
       >
-        {/* Brushed dark bezel behind screen */}
+        {/* Brushed dark metallic bezel behind screen */}
         <mesh
           geometry={screen.curved ? curvedFrameGeo : flatFrameGeo}
           position={[0, 0, -0.06]}
@@ -994,8 +1032,8 @@ export function CinemaRoom({
             color="#1A212E"
             emissive={lighting.accentColor}
             emissiveIntensity={isShowingVideo ? 0.04 : 0.15}
-            roughness={0.58}
-            metalness={0.35}
+            roughness={0.25}
+            metalness={0.75}
           />
         </mesh>
 
@@ -1094,6 +1132,7 @@ export function CinemaRoom({
                       0,
                       0,
                     ]}
+                    scale={ytBtnHovered ? 1.04 : 1}
                     pointerEventsType={{ deny: 'grab' }}
                     onPointerOver={(e) => {
                       e.stopPropagation()
@@ -1133,6 +1172,7 @@ export function CinemaRoom({
                       0,
                       0,
                     ]}
+                    scale={questBtnHovered ? 1.04 : 1}
                     pointerEventsType={{ deny: 'grab' }}
                     onPointerOver={(e) => {
                       e.stopPropagation()
@@ -1172,6 +1212,7 @@ export function CinemaRoom({
                       0,
                       0,
                     ]}
+                    scale={screenHovered ? 1.04 : 1}
                     pointerEventsType={{ deny: 'grab' }}
                     onClick={(e) => {
                       e.stopPropagation()

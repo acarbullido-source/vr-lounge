@@ -236,11 +236,12 @@ export function useBarGames({
     return () => window.clearTimeout(timer)
   }, [activePuttShot])
 
-  // Synchronously register bridge handlers so joinRoom / onBarGamesEvent never miss a packet
-  barGamesBridgeRef.current = {
-    onRoomJoined: (normalizedRoomCode, sendEvent) => {
-      roomCodeRef.current = normalizedRoomCode
-      announcedClubhouseRef.current = false
+  // Register bridge handlers in useEffect so React Compiler remains 100% pure during render
+  useEffect(() => {
+    barGamesBridgeRef.current = {
+      onRoomJoined: (normalizedRoomCode, sendEvent) => {
+        roomCodeRef.current = normalizedRoomCode
+        announcedClubhouseRef.current = false
 
       const freshDarts = createInitialDartsMatchState()
       const freshPutting = createInitialPuttingMatchState()
@@ -522,11 +523,12 @@ export function useBarGames({
       }
     },
 
-    onRoomLeft: () => {
-      setActiveDartShot(null)
-      setActivePuttShot(null)
-    },
-  }
+      onRoomLeft: () => {
+        setActiveDartShot(null)
+        setActivePuttShot(null)
+      },
+    }
+  }, [barGamesBridgeRef])
 
   const commitAdventure = useCallback(
     (next: AdventureQuestState) => {

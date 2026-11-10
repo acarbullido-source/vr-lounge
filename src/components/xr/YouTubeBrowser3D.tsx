@@ -198,6 +198,7 @@ function PillButton3D({
   return (
     <group
       position={position}
+      scale={hovered && !disabled ? 1.04 : 1}
       pointerEventsType={{ deny: 'grab' }}
       onPointerOver={(e) => {
         if (disabled) return
@@ -211,6 +212,20 @@ function PillButton3D({
         onClick()
       }}
     >
+      {(hovered || variant === 'active' || variant === 'amber') && !disabled && (
+        <RoundedBox
+          args={[width + 0.006, height + 0.006, 0.012]}
+          radius={0.018}
+          smoothness={2}
+          position={[0, 0, -0.0015]}
+        >
+          <meshBasicMaterial
+            color={variant === 'crimson' ? '#F87171' : '#E5A93C'}
+            transparent
+            opacity={hovered ? 0.78 : 0.36}
+          />
+        </RoundedBox>
+      )}
       <RoundedBox args={[width, height, 0.014]} radius={0.016} smoothness={2}>
         <meshBasicMaterial color={bg} />
       </RoundedBox>
@@ -620,9 +635,14 @@ export function YouTubeBrowser3D({
       position={[0, keyboardOpenForSearch ? 1.92 : 1.62, keyboardOpenForSearch ? -1.72 : -1.62]}
       rotation={[-0.04, 0, 0]}
     >
+      {/* Brushed Metallic Outer Browser Bezel */}
+      <RoundedBox args={[1.772, 1.092, 0.022]} position={[0, 0, -0.004]} radius={0.04} smoothness={3}>
+        <meshStandardMaterial color="#1E293B" roughness={0.25} metalness={0.75} />
+      </RoundedBox>
+
       {/* Main Spatial Browser Chassis */}
       <RoundedBox args={[1.74, 1.06, 0.026]} radius={0.036} smoothness={3}>
-        <meshStandardMaterial color="#0B0F17" roughness={0.62} metalness={0.28} />
+        <meshStandardMaterial color="#0B0F17" roughness={0.44} metalness={0.36} />
       </RoundedBox>
 
       {/* Top YouTube Crimson-to-Amber Accent Bar */}

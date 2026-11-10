@@ -250,3 +250,156 @@ export function playSoundboardEffect(
     }
   }
 }
+
+export type SpatialInteractionAudioKind =
+  | 'ui-click'
+  | 'ui-hover'
+  | 'dart-throw'
+  | 'dart-hit'
+  | 'putt-strike'
+  | 'putt-cup'
+  | 'dice-roll'
+  | 'card-flip'
+  | 'puck-slide'
+  | 'bag-toss'
+  | 'teleport'
+
+/**
+ * Lightweight procedural micro-audio cues for spatial VR/3D affordances.
+ */
+export function playSpatialUiFeedback(
+  kind: SpatialInteractionAudioKind,
+  volume = 0.22,
+): void {
+  const ctx = getSoundboardContext()
+  if (!ctx) return
+
+  const now = ctx.currentTime
+  const master = ctx.createGain()
+  master.gain.setValueAtTime(Math.max(0.02, Math.min(0.6, volume)), now)
+  master.connect(ctx.destination)
+
+  if (kind === 'ui-hover') {
+    const osc = ctx.createOscillator()
+    const g = ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(520, now)
+    osc.frequency.exponentialRampToValueAtTime(640, now + 0.028)
+    g.gain.setValueAtTime(0.08, now)
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.032)
+    osc.connect(g)
+    g.connect(master)
+    osc.start(now)
+    osc.stop(now + 0.035)
+    return
+  }
+
+  if (kind === 'ui-click') {
+    const osc = ctx.createOscillator()
+    const g = ctx.createGain()
+    osc.type = 'triangle'
+    osc.frequency.setValueAtTime(680, now)
+    osc.frequency.exponentialRampToValueAtTime(920, now + 0.045)
+    g.gain.setValueAtTime(0.18, now)
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.05)
+    osc.connect(g)
+    g.connect(master)
+    osc.start(now)
+    osc.stop(now + 0.055)
+    return
+  }
+
+  if (kind === 'dart-throw' || kind === 'bag-toss') {
+    const osc = ctx.createOscillator()
+    const g = ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(280, now)
+    osc.frequency.exponentialRampToValueAtTime(540, now + 0.09)
+    g.gain.setValueAtTime(0.16, now)
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.095)
+    osc.connect(g)
+    g.connect(master)
+    osc.start(now)
+    osc.stop(now + 0.1)
+    return
+  }
+
+  if (kind === 'dart-hit') {
+    const osc = ctx.createOscillator()
+    const g = ctx.createGain()
+    osc.type = 'triangle'
+    osc.frequency.setValueAtTime(145, now)
+    osc.frequency.exponentialRampToValueAtTime(58, now + 0.075)
+    g.gain.setValueAtTime(0.32, now)
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.08)
+    osc.connect(g)
+    g.connect(master)
+    osc.start(now)
+    osc.stop(now + 0.085)
+    return
+  }
+
+  if (kind === 'putt-strike' || kind === 'puck-slide') {
+    const osc = ctx.createOscillator()
+    const g = ctx.createGain()
+    osc.type = 'triangle'
+    osc.frequency.setValueAtTime(420, now)
+    osc.frequency.exponentialRampToValueAtTime(180, now + 0.055)
+    g.gain.setValueAtTime(0.28, now)
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.06)
+    osc.connect(g)
+    g.connect(master)
+    osc.start(now)
+    osc.stop(now + 0.065)
+    return
+  }
+
+  if (kind === 'putt-cup') {
+    const notes = [587.33, 880]
+    notes.forEach((f, idx) => {
+      const osc = ctx.createOscillator()
+      const g = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(f, now + idx * 0.065)
+      g.gain.setValueAtTime(0.26, now + idx * 0.065)
+      g.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.065 + 0.16)
+      osc.connect(g)
+      g.connect(master)
+      osc.start(now + idx * 0.065)
+      osc.stop(now + idx * 0.065 + 0.17)
+    })
+    return
+  }
+
+  if (kind === 'dice-roll' || kind === 'card-flip') {
+    const osc = ctx.createOscillator()
+    const g = ctx.createGain()
+    osc.type = 'triangle'
+    osc.frequency.setValueAtTime(kind === 'dice-roll' ? 340 : 620, now)
+    osc.frequency.exponentialRampToValueAtTime(
+      kind === 'dice-roll' ? 760 : 380,
+      now + 0.06,
+    )
+    g.gain.setValueAtTime(0.2, now)
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.065)
+    osc.connect(g)
+    g.connect(master)
+    osc.start(now)
+    osc.stop(now + 0.07)
+    return
+  }
+
+  if (kind === 'teleport') {
+    const osc = ctx.createOscillator()
+    const g = ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(320, now)
+    osc.frequency.exponentialRampToValueAtTime(640, now + 0.11)
+    g.gain.setValueAtTime(0.16, now)
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.12)
+    osc.connect(g)
+    g.connect(master)
+    osc.start(now)
+    osc.stop(now + 0.125)
+  }
+}

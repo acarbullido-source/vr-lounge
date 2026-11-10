@@ -16,7 +16,11 @@ import {
   isNesMediaUrl,
   parseNesCartridgeIdFromUrl,
 } from '../../services/nesEmulator'
+import { playSpatialUiFeedback } from '../../services/soundboardAudio'
+import { setSpatialUiHovered } from '../../services/xrTracking'
 import type {
+  LightingPresetId,
+  LoungeWingId,
   NesMultiplayerState,
   ParticipantProfile,
   PresenterState,
@@ -31,14 +35,18 @@ function formatClock(sec: number): string {
   return `${mins}:${rem.toString().padStart(2, '0')}`
 }
 
+export type SpatialDockTabId = 'media' | 'rooms' | 'social' | 'customize'
+
 interface DockButtonProps {
   label: string
   sublabel?: string
   position: [number, number, number]
   width?: number
   height?: number
+  fontSize?: number
   variant?: 'default' | 'primary' | 'danger' | 'active'
   disabled?: boolean
+  soundKind?: 'ui-click' | 'teleport' | 'dice-roll'
   onClick: () => void
   onPointerDown?: () => void
   onPointerUp?: () => void
@@ -49,14 +57,23 @@ function DockButton({
   sublabel,
   position,
   width = 0.25,
-  height = 0.11,
+  height = 0.095,
+  fontSize = 0.026,
   variant = 'default',
   disabled = false,
+  soundKind = 'ui-click',
   onClick,
   onPointerDown,
   onPointerUp,
 }: DockButtonProps) {
   const [hovered, setHovered] = useState(false)
+  const sourceId = `dock-btn-${label}`
+
+  useEffect(() => {
+    return () => {
+      setSpatialUiHovered(false, sourceId)
+    }
+  }, [sourceId])
 
   const bgColor = disabled
     ? '#131720'
@@ -85,14 +102,17 @@ function DockButton({
   return (
     <group
       position={position}
+      scale={hovered && !disabled ? 1.04 : 1}
       pointerEventsType={{ deny: 'grab' }}
       onPointerOver={(e) => {
         if (disabled) return
         e.stopPropagation()
         setHovered(true)
+        setSpatialUiHovered(true, sourceId)
       }}
       onPointerOut={() => {
         setHovered(false)
+        setSpatialUiHovered(false, sourceId)
         onPointerUp?.()
       }}
       onPointerDown={(e) => {
@@ -108,15 +128,36 @@ function DockButton({
       onClick={(e) => {
         if (disabled) return
         e.stopPropagation()
+        playSpatialUiFeedback(soundKind)
         onClick()
       }}
     >
-      <RoundedBox args={[width, height, 0.018]} radius={0.022} smoothness={3}>
+      {(hovered || variant === 'active' || variant === 'primary') && !disabled && (
+        <RoundedBox
+          args={[width + 0.008, height + 0.008, 0.015]}
+          radius={0.022}
+          smoothness={3}
+          position={[0, 0, -0.002]}
+        >
+          <meshBasicMaterial
+            color={
+              variant === 'danger'
+                ? '#F87171'
+                : variant === 'primary'
+                  ? '#FDE68A'
+                  : '#E5A93C'
+            }
+            transparent
+            opacity={hovered ? 0.78 : 0.36}
+          />
+        </RoundedBox>
+      )}
+      <RoundedBox args={[width, height, 0.018]} radius={0.02} smoothness={3}>
         <meshBasicMaterial color={bgColor} />
       </RoundedBox>
       <Text
-        position={[0, sublabel ? 0.014 : 0, 0.012]}
-        fontSize={0.029}
+        position={[0, sublabel ? 0.012 : 0, 0.012]}
+        fontSize={fontSize}
         color={textColor}
         anchorX="center"
         anchorY="middle"
@@ -125,9 +166,9 @@ function DockButton({
       </Text>
       {sublabel && (
         <Text
-          position={[0, -0.024, 0.012]}
-          fontSize={0.02}
-          color={variant === 'primary' ? '#1E2430' : '#9CA3AF'}
+          position={[0, -0.02, 0.012]}
+          fontSize={0.018}
+          color={variant === 'primary' ? '#1E2430' : '#CBD5E1'}
           anchorX="center"
           anchorY="middle"
         >
@@ -144,6 +185,7 @@ export interface SpatialControlDockProps {
   canTakeControl: boolean
   isMuted: boolean
   cinemaVolume: number
+  effectiveCinemaVolume?: number
   voiceVolume: number
   localCurrentTime: number
   localDuration: number
@@ -177,7 +219,11 @@ export interface SpatialControlDockProps {
   onToggleChatPanel: () => void
   onRecenterSeat: () => void
   localSeatId?: string
+  activeLoungeWing?: LoungeWingId
   onSelectSeat?: (seatId: string) => void
+  onJumpToWing?: (wingId: LoungeWingId) => void
+  activeLightingPreset?: string
+  onApplyLightingPreset?: (presetId: LightingPresetId) => void
   atGameStation?: boolean
   isFreeRoaming?: boolean
   flyMode?: boolean
@@ -205,6 +251,7 @@ export function SpatialControlDock({
   canTakeControl,
   isMuted,
   cinemaVolume,
+  effectiveCinemaVolume,
   voiceVolume,
   localCurrentTime,
   localDuration,
@@ -238,7 +285,11 @@ export function SpatialControlDock({
   onToggleChatPanel,
   onRecenterSeat,
   localSeatId,
+  activeLoungeWing = 'main-lounge',
   onSelectSeat,
+  onJumpToWing,
+  activeLightingPreset,
+  onApplyLightingPreset,
   atGameStation = false,
   isFreeRoaming = false,
   flyMode = false,
@@ -260,6 +311,7 @@ export function SpatialControlDock({
   onAdvanceAdventureScene,
 }: SpatialControlDockProps) {
   const [minimized, setMinimized] = useState(() => Boolean(isFreeRoaming))
+  const [activeTab, setActiveTab] = useState<SpatialDockTabId>('media')
   const prevRoamingRef = useRef(isFreeRoaming)
   const prevSummonVersionRef = useRef(dockSummonToggleVersion)
 
@@ -274,7 +326,7 @@ export function SpatialControlDock({
     prevRoamingRef.current = isFreeRoaming
   }, [atGameStation, isFreeRoaming])
 
-  // Quest B/Y button toggles the floating controls dock open/closed from anywhere
+  // Quest Left Y button toggles the floating controls dock open/closed from anywhere
   useEffect(() => {
     if (dockSummonToggleVersion !== prevSummonVersionRef.current) {
       prevSummonVersionRef.current = dockSummonToggleVersion
@@ -284,6 +336,34 @@ export function SpatialControlDock({
 
   const progressRatio =
     localDuration > 0 ? Math.max(0, Math.min(1, localCurrentTime / localDuration)) : 0
+  const displayedScreenVol = effectiveCinemaVolume ?? cinemaVolume
+  const isQuietZoneMuted =
+    effectiveCinemaVolume !== undefined &&
+    effectiveCinemaVolume === 0 &&
+    cinemaVolume > 0 &&
+    (activeLoungeWing === 'library' || activeLoungeWing === 'game-room')
+
+  const triggerNesLibraryOrCycle = () => {
+    if (onToggleNesLibrary) {
+      onToggleNesLibrary()
+      return
+    }
+    if (!isLocalPresenter && canTakeControl) {
+      onTakeControl()
+    }
+    const currentId = isNesMediaUrl(presenterState.mediaUrl)
+      ? parseNesCartridgeIdFromUrl(presenterState.mediaUrl)
+      : null
+    const currentIdx = currentId
+      ? NES_LIBRARY_CARTRIDGES.findIndex((g) => g.id === currentId)
+      : -1
+    const nextGame =
+      currentIdx >= 0
+        ? NES_LIBRARY_CARTRIDGES[(currentIdx + 1) % NES_LIBRARY_CARTRIDGES.length]
+        : NES_LIBRARY_CARTRIDGES[0]
+    getNesEmulator().loadLibraryCartridge(nextGame.id)
+    onSelectStreamUrl(`nes://${nextGame.id}`, `🕹 NES: ${nextGame.title}`)
+  }
 
   if (minimized) {
     return (
@@ -300,21 +380,21 @@ export function SpatialControlDock({
         <DockButton
           label={
             flyMode
-              ? '🚀 Flying · Controls ▲'
+              ? '🚀 Fly Mode · Control Dock ▲'
               : isFreeRoaming
-                ? '🚶 Walking · Controls ▲'
-                : 'Open Lounge Controls ▲'
+                ? '🚶 Walk Mode · Control Dock ▲'
+                : '🎛 Open Control Dock ▲'
           }
           sublabel={
             flyMode
-              ? 'Glance left wrist or press B/Y'
+              ? 'Glance left wrist or press Left Y'
               : isFreeRoaming
-                ? 'Tap or press B/Y'
-                : undefined
+                ? 'Tap or press Left Y'
+                : 'Tap to expand controls'
           }
           position={[0, 0, 0]}
-          width={0.5}
-          height={isFreeRoaming ? 0.098 : 0.09}
+          width={0.54}
+          height={isFreeRoaming ? 0.098 : 0.092}
           variant={flyMode ? 'primary' : 'active'}
           onClick={() => setMinimized(false)}
         />
@@ -376,92 +456,105 @@ export function SpatialControlDock({
         </group>
       )}
 
-      {/* Angled Brushed Console Chassis */}
-      <RoundedBox args={[1.28, 0.5, 0.026]} radius={0.036} smoothness={3}>
-        <meshStandardMaterial color="#0D1118" roughness={0.58} metalness={0.32} />
+      {/* Brushed Metallic Outer Console Bezel */}
+      <RoundedBox
+        args={[1.328, 0.668, 0.022]}
+        position={[0, -0.04, -0.004]}
+        radius={0.04}
+        smoothness={3}
+      >
+        <meshStandardMaterial color="#1E293B" roughness={0.25} metalness={0.75} />
+      </RoundedBox>
+
+      {/* Angled Brushed Console Chassis (Single Clean Unified Backplate) */}
+      <RoundedBox args={[1.3, 0.64, 0.026]} position={[0, -0.04, 0]} radius={0.036} smoothness={3}>
+        <meshStandardMaterial color="#0D1118" roughness={0.42} metalness={0.38} />
       </RoundedBox>
 
       {/* Top Amber Accent Hairline */}
-      <mesh position={[0, 0.244, 0.015]}>
-        <boxGeometry args={[1.18, 0.005, 0.004]} />
+      <mesh position={[0, 0.272, 0.015]}>
+        <boxGeometry args={[1.2, 0.005, 0.004]} />
         <meshBasicMaterial color="#E5A93C" />
       </mesh>
 
-      {/* Top Row: Presenter Control Handoff + YouTube VR Deck + Source Switchers + Build + Avatar + Minimize */}
+      {/* =====================================================================
+          ROW 1 (PERSISTENT PRIMARY BAR): Presenter, Mic, Screen/Voice Vol, Recenter, Hide
+          ===================================================================== */}
       <DockButton
-        label={isLocalPresenter ? 'Release' : 'Control'}
+        label={isLocalPresenter ? '👑 Release' : '👑 Take Control'}
         sublabel={
           isLocalPresenter
             ? 'Presenting'
             : presenterState.presenterName
-              ? `${presenterState.presenterName.slice(0, 9)}`
-              : 'Claim screen'
+              ? `Host: ${presenterState.presenterName.slice(0, 9)}`
+              : 'Claim Screen'
         }
-        position={[-0.505, 0.165, 0.016]}
-        width={0.185}
+        position={[-0.495, 0.205, 0.016]}
+        width={0.23}
+        height={0.088}
         variant={isLocalPresenter ? 'active' : 'primary'}
         disabled={!isLocalPresenter && !canTakeControl}
         onClick={isLocalPresenter ? onReleaseControl : onTakeControl}
       />
 
       <DockButton
-        label="▶ YouTube"
-        sublabel="VR Browse"
-        position={[-0.305, 0.165, 0.016]}
-        width={0.185}
-        variant={youtubeBrowserOpen ? 'primary' : 'danger'}
-        onClick={onToggleYouTubeBrowser}
+        label={isMuted ? '🔇 Mic Muted' : '🎙 Mic Live'}
+        sublabel={isMuted ? 'Tap to Unmute' : 'Voice Active'}
+        position={[-0.255, 0.205, 0.016]}
+        width={0.21}
+        height={0.088}
+        variant={isMuted ? 'danger' : 'active'}
+        onClick={onToggleMute}
       />
 
       <DockButton
-        label="URL / HLS"
-        sublabel="Direct Link"
-        position={[-0.115, 0.165, 0.016]}
-        width={0.165}
-        variant={keyboardMode === 'url' ? 'primary' : 'default'}
+        label={`🔊 Screen ${Math.round(displayedScreenVol * 100)}%`}
+        sublabel={isQuietZoneMuted ? '🔥 Quiet Zone (0%)' : 'Tap to Step Vol'}
+        position={[-0.025, 0.205, 0.016]}
+        width={0.22}
+        height={0.088}
+        variant={isQuietZoneMuted ? 'active' : 'default'}
         onClick={() => {
-          if (!isLocalPresenter && canTakeControl) {
-            onTakeControl()
-          }
-          onSetKeyboardMode(keyboardMode === 'url' ? null : 'url')
+          const next =
+            cinemaVolume >= 0.95 ? 0.25 : Math.min(1, Number((cinemaVolume + 0.25).toFixed(2)))
+          onChangeCinemaVolume(next)
         }}
       />
 
       <DockButton
-        label="Share Tab"
-        sublabel="PC WebRTC"
-        position={[0.06, 0.165, 0.016]}
-        width={0.155}
-        variant={presenterState.screenMode === 'tab-stream' && isLocalPresenter ? 'primary' : 'default'}
-        onClick={onStartTabShare}
+        label={`🗣 Voice ${Math.round(voiceVolume * 100)}%`}
+        sublabel="Voice Volume"
+        position={[0.195, 0.205, 0.016]}
+        width={0.195}
+        height={0.088}
+        onClick={() => {
+          const next =
+            voiceVolume >= 0.95 ? 0.25 : Math.min(1, Number((voiceVolume + 0.25).toFixed(2)))
+          onChangeVoiceVolume(next)
+        }}
       />
 
       <DockButton
-        label={buildModeOpen ? '🛠 Done' : '🛠 Build'}
-        sublabel="Room"
-        position={[0.23, 0.165, 0.016]}
-        width={0.155}
-        variant={buildModeOpen ? 'primary' : 'active'}
-        onClick={onToggleBuildMode}
+        label="🎯 Recenter"
+        sublabel="Align View"
+        position={[0.388, 0.205, 0.016]}
+        width={0.16}
+        height={0.088}
+        onClick={onRecenterSeat}
       />
 
       <DockButton
-        label={wardrobeOpen ? '👤 Done' : '👤 Avatar'}
-        sublabel="3D Mirror"
-        position={[0.4, 0.165, 0.016]}
-        width={0.155}
-        variant={wardrobeOpen ? 'primary' : 'active'}
-        onClick={() => onToggleWardrobe?.()}
-      />
-
-      <DockButton
-        label="Hide ▾"
-        position={[0.548, 0.165, 0.016]}
-        width={0.11}
+        label="▼ Hide"
+        sublabel="Left Y"
+        position={[0.548, 0.205, 0.016]}
+        width={0.13}
+        height={0.088}
         onClick={() => setMinimized(true)}
       />
 
-      {/* Second Row: Dedicated 3D NES Controller Engagement, Library & Save Deck when NES is Active, or Video Playback Transport */}
+      {/* =====================================================================
+          ROW 2 (CONTEXT-SENSITIVE TRANSPORT): NES Pad / Adventure Quest / Video Scrub
+          ===================================================================== */}
       {isNesMediaUrl(presenterState.mediaUrl) ? (
         (() => {
           const activeIds = new Set(participants.map((p) => p.userId))
@@ -487,8 +580,7 @@ export function SpatialControlDock({
           const isP2Locked = Boolean(p2Id && p2Id !== localUserId)
 
           return (
-            <group position={[0, 0.035, 0.016]}>
-              {/* Engage / Disengage Player 1 Controllers */}
+            <group position={[0, 0.095, 0.016]}>
               <DockButton
                 label={
                   isLocalP1
@@ -506,7 +598,7 @@ export function SpatialControlDock({
                 }
                 position={[-0.495, 0, 0]}
                 width={0.195}
-                height={0.092}
+                height={0.086}
                 variant={isLocalP1 ? 'primary' : isP1Locked ? 'default' : 'active'}
                 disabled={isP1Locked}
                 onClick={() => {
@@ -514,7 +606,6 @@ export function SpatialControlDock({
                 }}
               />
 
-              {/* Engage / Disengage Player 2 Controllers */}
               <DockButton
                 label={
                   isLocalP2
@@ -532,7 +623,7 @@ export function SpatialControlDock({
                 }
                 position={[-0.285, 0, 0]}
                 width={0.195}
-                height={0.092}
+                height={0.086}
                 variant={isLocalP2 ? 'primary' : isP2Locked ? 'default' : 'active'}
                 disabled={isP2Locked}
                 onClick={() => {
@@ -540,39 +631,36 @@ export function SpatialControlDock({
                 }}
               />
 
-              {/* Open 3D VR NES ROM Library (36 Games) */}
               <DockButton
                 label={nesLibraryOpen ? '🕹 Hide ROMs' : '🕹 36 ROMs'}
-                sublabel="VR Library"
+                sublabel="NES Console"
                 position={[-0.088, 0, 0]}
                 width={0.165}
-                height={0.092}
+                height={0.086}
                 variant={nesLibraryOpen ? 'primary' : 'danger'}
                 onClick={() => {
                   onToggleNesLibrary?.()
                 }}
               />
 
-              {/* START */}
               <DockButton
                 label="START"
                 sublabel="Play/Pause"
                 position={[0.072, 0, 0]}
                 width={0.118}
-                height={0.092}
+                height={0.086}
                 variant="primary"
                 onPointerDown={() => getNesEmulator().setButtonState('start', true)}
                 onPointerUp={() => getNesEmulator().setButtonState('start', false)}
                 onClick={() => getNesEmulator().tapButton('start')}
               />
 
-              {/* B & A Action Buttons */}
               <DockButton
                 label="B"
                 sublabel="Fire/Run"
                 position={[0.19, 0, 0]}
                 width={0.095}
-                height={0.092}
+                height={0.086}
                 variant="danger"
                 onPointerDown={() => getNesEmulator().setButtonState('b', true)}
                 onPointerUp={() => getNesEmulator().setButtonState('b', false)}
@@ -583,20 +671,19 @@ export function SpatialControlDock({
                 sublabel="Jump"
                 position={[0.295, 0, 0]}
                 width={0.095}
-                height={0.092}
+                height={0.086}
                 variant="danger"
                 onPointerDown={() => getNesEmulator().setButtonState('a', true)}
                 onPointerUp={() => getNesEmulator().setButtonState('a', false)}
                 onClick={() => getNesEmulator().tapButton('a')}
               />
 
-              {/* Save State & Load State */}
               <DockButton
                 label="💾 Save"
                 sublabel="Slot 1"
                 position={[0.41, 0, 0]}
                 width={0.112}
-                height={0.092}
+                height={0.086}
                 variant="active"
                 onClick={() => {
                   void getNesEmulator().saveSlot('slot-1')
@@ -607,7 +694,7 @@ export function SpatialControlDock({
                 sublabel="Resume"
                 position={[0.532, 0, 0]}
                 width={0.112}
-                height={0.092}
+                height={0.086}
                 variant="default"
                 onClick={() => {
                   void getNesEmulator().resumeMostRecentSave()
@@ -626,14 +713,13 @@ export function SpatialControlDock({
             myHero?.abilityUsedInAct !== null &&
             myHero?.abilityUsedInAct !== undefined
           return (
-            <group position={[0, 0.035, 0.016]}>
-              {/* Cycle 4 Story Quest Campaigns */}
+            <group position={[0, 0.095, 0.016]}>
               <DockButton
                 label="🗺 Campaign"
                 sublabel="Switch Quest"
                 position={[-0.495, 0, 0]}
                 width={0.185}
-                height={0.092}
+                height={0.086}
                 variant="active"
                 onClick={() => {
                   const currIdx = ADVENTURE_CAMPAIGN_LIST.findIndex(
@@ -654,7 +740,6 @@ export function SpatialControlDock({
                 }}
               />
 
-              {/* Cycle Class Archetype */}
               <DockButton
                 label={
                   arch === 'vanguard'
@@ -668,7 +753,7 @@ export function SpatialControlDock({
                 sublabel="Tap Switch Class"
                 position={[-0.295, 0, 0]}
                 width={0.185}
-                height={0.092}
+                height={0.086}
                 variant="default"
                 onClick={() => {
                   const order: AdventureArchetypeId[] = [
@@ -682,19 +767,17 @@ export function SpatialControlDock({
                 }}
               />
 
-              {/* Class Ability */}
               <DockButton
                 label="⚡ Ability"
                 sublabel={abilityUsed ? 'Used' : 'Class Power'}
                 position={[-0.105, 0, 0]}
                 width={0.165}
-                height={0.092}
+                height={0.086}
                 variant={abilityUsed ? 'default' : 'active'}
                 disabled={abilityUsed}
                 onClick={() => onUseAdventureAbility?.()}
               />
 
-              {/* Roll D20 */}
               <DockButton
                 label={myHero?.isGhost ? '👻 Ghost D20' : '🎲 Roll D20'}
                 sublabel={
@@ -704,18 +787,18 @@ export function SpatialControlDock({
                 }
                 position={[0.11, 0, 0]}
                 width={0.23}
-                height={0.092}
+                height={0.086}
                 variant="primary"
+                soundKind="dice-roll"
                 onClick={() => onRollAdventureD20?.()}
               />
 
-              {/* Next Scene */}
               <DockButton
                 label="▶ Next Scene"
                 sublabel="Advance Party"
                 position={[0.395, 0, 0]}
                 width={0.28}
-                height={0.092}
+                height={0.086}
                 variant={adventureState?.phase === 'resolution' ? 'primary' : 'active'}
                 onClick={() => onAdvanceAdventureScene?.()}
               />
@@ -723,12 +806,12 @@ export function SpatialControlDock({
           )
         })()
       ) : (
-        <>
+        <group position={[0, 0.095, 0.016]}>
           <DockButton
             label={presenterState.isPlaying ? 'Pause ❚❚' : 'Play ▶'}
-            position={[-0.48, 0.035, 0.016]}
+            position={[-0.48, 0, 0]}
             width={0.23}
-            height={0.092}
+            height={0.086}
             variant={isLocalPresenter ? 'primary' : 'default'}
             disabled={!isLocalPresenter || presenterState.screenMode !== 'url-sync'}
             onClick={onTogglePlayPause}
@@ -736,51 +819,48 @@ export function SpatialControlDock({
 
           <DockButton
             label="-15s"
-            position={[-0.29, 0.035, 0.016]}
+            position={[-0.29, 0, 0]}
             width={0.11}
-            height={0.092}
+            height={0.086}
             disabled={!isLocalPresenter || presenterState.screenMode !== 'url-sync'}
             onClick={() => onSeekRelative(-15)}
           />
 
           <DockButton
             label="+15s"
-            position={[-0.16, 0.035, 0.016]}
+            position={[-0.16, 0, 0]}
             width={0.11}
-            height={0.092}
+            height={0.086}
             disabled={!isLocalPresenter || presenterState.screenMode !== 'url-sync'}
             onClick={() => onSeekRelative(15)}
           />
 
           {/* Interactive 3D Scrub Bar */}
           <group
-            position={[0.25, 0.035, 0.016]}
+            position={[0.25, 0, 0]}
             pointerEventsType={{ deny: 'grab' }}
             onClick={(e) => {
               if (!isLocalPresenter || presenterState.screenMode !== 'url-sync') return
               e.stopPropagation()
+              playSpatialUiFeedback('ui-click')
               const localPt = e.object.worldToLocal(e.point.clone())
               const frac = Math.max(0, Math.min(1, (localPt.x + 0.31) / 0.62))
               onSeekFraction(frac)
             }}
           >
-            <RoundedBox args={[0.64, 0.088, 0.012]} radius={0.018} smoothness={2}>
+            <RoundedBox args={[0.64, 0.084, 0.012]} radius={0.018} smoothness={2}>
               <meshBasicMaterial color="#131822" />
             </RoundedBox>
-            {/* Track groove */}
             <mesh position={[0, -0.014, 0.008]}>
               <planeGeometry args={[0.56, 0.014]} />
               <meshBasicMaterial color="#273142" />
             </mesh>
-            {/* Progress fill */}
-            <mesh
-              position={[-0.28 + (0.56 * progressRatio) / 2, -0.014, 0.01]}
-            >
+            <mesh position={[-0.28 + (0.56 * progressRatio) / 2, -0.014, 0.01]}>
               <planeGeometry args={[Math.max(0.008, 0.56 * progressRatio), 0.014]} />
               <meshBasicMaterial color="#E5A93C" />
             </mesh>
             <Text
-              position={[0, 0.016, 0.01]}
+              position={[0, 0.015, 0.01]}
               fontSize={0.022}
               color="#C7C2B8"
               anchorX="center"
@@ -791,146 +871,112 @@ export function SpatialControlDock({
                 : `${formatClock(localCurrentTime)} / ${formatClock(localDuration)}`}
             </Text>
           </group>
-        </>
+        </group>
       )}
 
-      {/* Third Row: Mic Mute, Cinema vs Voice Audio Mixers, Chat & Recenter Seat */}
-      <DockButton
-        label={isMuted ? 'Mic Muted' : 'Mic Live'}
-        position={[-0.48, -0.09, 0.016]}
-        width={0.23}
-        height={0.092}
-        variant={isMuted ? 'danger' : 'active'}
-        onClick={onToggleMute}
-      />
-
-      {/* Screen Volume Stepper */}
-      <DockButton
-        label={`Screen ${Math.round(cinemaVolume * 100)}%`}
-        sublabel="Tap to cycle"
-        position={[-0.21, -0.09, 0.016]}
-        width={0.25}
-        height={0.092}
-        onClick={() => {
-          const next = cinemaVolume >= 0.95 ? 0.25 : Math.min(1, Number((cinemaVolume + 0.25).toFixed(2)))
-          onChangeCinemaVolume(next)
-        }}
-      />
-
-      {/* Spatial Voice Volume Stepper */}
-      <DockButton
-        label={`Voice ${Math.round(voiceVolume * 100)}%`}
-        sublabel="Spatial Gain"
-        position={[0.06, -0.09, 0.016]}
-        width={0.25}
-        height={0.092}
-        onClick={() => {
-          const next = voiceVolume >= 0.95 ? 0.25 : Math.min(1, Number((voiceVolume + 0.25).toFixed(2)))
-          onChangeVoiceVolume(next)
-        }}
-      />
-
-      {/* Toggle 3D Chat Panel */}
-      <DockButton
-        label={chatPanelOpen ? 'Chat On' : 'Chat Off'}
-        position={[0.3, -0.09, 0.016]}
-        width={0.18}
-        height={0.092}
-        variant={chatPanelOpen ? 'active' : 'default'}
-        onClick={onToggleChatPanel}
-      />
-
-      {/* Recenter Seat */}
-      <DockButton
-        label="Recenter"
-        sublabel="Seat Align"
-        position={[0.5, -0.09, 0.016]}
-        width={0.18}
-        height={0.092}
-        onClick={onRecenterSeat}
-      />
-
-      {/* Bottom Row: Quick Floating Emoji Reactions + Chat Compose */}
-      <group position={[0, -0.198, 0.016]}>
-        {QUICK_REACTIONS.map((emoji, idx) => (
-          <DockButton
-            key={emoji}
-            label={emoji}
-            position={[-0.51 + idx * 0.155, 0, 0]}
-            width={0.135}
-            height={0.074}
-            onClick={() => onSendReaction(emoji)}
-          />
-        ))}
+      {/* =====================================================================
+          ROW 3 (LEVEL 2 CATEGORY TABS): Media | Rooms & Stations | Social | Customize
+          ===================================================================== */}
+      <group position={[0, -0.005, 0.016]}>
         <DockButton
-          label="Type Chat ⌨"
-          position={[0.45, 0, 0]}
-          width={0.26}
+          label="🎬 Media & Games"
+          position={[-0.456, 0, 0]}
+          width={0.295}
           height={0.074}
-          variant={keyboardMode === 'chat' ? 'primary' : 'default'}
-          onClick={() => onSetKeyboardMode(keyboardMode === 'chat' ? null : 'chat')}
+          fontSize={0.024}
+          variant={activeTab === 'media' ? 'primary' : 'active'}
+          onClick={() => setActiveTab('media')}
+        />
+        <DockButton
+          label="🚪 Rooms & Stations"
+          position={[-0.148, 0, 0]}
+          width={0.295}
+          height={0.074}
+          fontSize={0.024}
+          variant={activeTab === 'rooms' ? 'primary' : 'active'}
+          onClick={() => setActiveTab('rooms')}
+        />
+        <DockButton
+          label="💬 Social & Avatar"
+          position={[0.16, 0, 0]}
+          width={0.295}
+          height={0.074}
+          fontSize={0.024}
+          variant={activeTab === 'social' ? 'primary' : 'active'}
+          onClick={() => setActiveTab('social')}
+        />
+        <DockButton
+          label="🛠 Customize"
+          position={[0.462, 0, 0]}
+          width={0.28}
+          height={0.074}
+          fontSize={0.024}
+          variant={activeTab === 'customize' ? 'primary' : 'active'}
+          onClick={() => setActiveTab('customize')}
         />
       </group>
 
-      {/* VR Bar Games, Free-Roam & Lounge Station Quick-Hop Strip */}
-      {onSelectSeat && (
-        <group position={[0, -0.305, 0.016]}>
-          <RoundedBox args={[1.24, 0.088, 0.018]} radius={0.022} smoothness={2}>
-            <meshBasicMaterial color="#0A0E15" />
-          </RoundedBox>
+      {/* =====================================================================
+          ROWS 4 & 5 (LEVEL 2 PROGRESSIVE DISCLOSURE TAB DRAWER)
+          ===================================================================== */}
+      {activeTab === 'media' && (
+        <group position={[0, -0.105, 0.016]}>
+          {/* Media Sub-Row A: Screen Sources & Interactive Experiences */}
           <DockButton
-            label="🚶 Walk"
-            position={[-0.495, 0, 0.008]}
-            width={0.185}
-            height={0.068}
-            variant={localSeatId === FREE_ROAM_SEAT_ID ? 'primary' : 'active'}
-            onClick={() => onSelectSeat(FREE_ROAM_SEAT_ID)}
+            label="▶ YouTube VR"
+            sublabel="Search & Browse"
+            position={[-0.485, 0, 0]}
+            width={0.235}
+            height={0.088}
+            variant={youtubeBrowserOpen ? 'primary' : 'danger'}
+            onClick={onToggleYouTubeBrowser}
           />
           <DockButton
-            label="🛋 Sofa"
-            position={[-0.297, 0, 0.008]}
-            width={0.185}
-            height={0.068}
+            label="🔗 Stream URL"
+            sublabel="MP4 / HLS Link"
+            position={[-0.24, 0, 0]}
+            width={0.225}
+            height={0.088}
+            variant={keyboardMode === 'url' ? 'primary' : 'default'}
+            onClick={() => {
+              if (!isLocalPresenter && canTakeControl) {
+                onTakeControl()
+              }
+              onSetKeyboardMode(keyboardMode === 'url' ? null : 'url')
+            }}
+          />
+          <DockButton
+            label="🖥 Share Tab"
+            sublabel="PC WebRTC"
+            position={[-0.005, 0, 0]}
+            width={0.215}
+            height={0.088}
             variant={
-              localSeatId &&
-              localSeatId !== FREE_ROAM_SEAT_ID &&
-              !localSeatId.startsWith('station:') &&
-              !localSeatId.startsWith('game-table:') &&
-              !localSeatId.startsWith('wing:')
+              presenterState.screenMode === 'tab-stream' && isLocalPresenter
                 ? 'primary'
                 : 'default'
             }
-            onClick={() => onSelectSeat('furn-sofa-front:0')}
+            onClick={onStartTabShare}
           />
           <DockButton
-            label="🎯 Darts"
-            position={[-0.099, 0, 0.008]}
-            width={0.185}
-            height={0.068}
-            variant={localSeatId === 'station:darts-oche' ? 'primary' : 'default'}
-            onClick={() => onSelectSeat('station:darts-oche')}
+            label={nesLibraryOpen ? '🕹 Hide NES' : '🕹 NES Console'}
+            sublabel="36 Classic ROMs"
+            position={[0.225, 0, 0]}
+            width={0.225}
+            height={0.088}
+            variant={
+              nesLibraryOpen || isNesMediaUrl(presenterState.mediaUrl)
+                ? 'primary'
+                : 'danger'
+            }
+            onClick={triggerNesLibraryOrCycle}
           />
           <DockButton
-            label="⛳ Putting"
-            position={[0.099, 0, 0.008]}
-            width={0.185}
-            height={0.068}
-            variant={localSeatId === 'station:putting-tee' ? 'primary' : 'default'}
-            onClick={() => onSelectSeat('station:putting-tee')}
-          />
-          <DockButton
-            label="🎲 Table"
-            position={[0.297, 0, 0.008]}
-            width={0.185}
-            height={0.068}
-            variant={localSeatId?.startsWith('game-table:') ? 'primary' : 'default'}
-            onClick={() => onSelectSeat('game-table:seat-0')}
-          />
-          <DockButton
-            label="⚔️ Quest"
-            position={[0.495, 0, 0.008]}
-            width={0.185}
-            height={0.068}
+            label="⚔️ Story Quest"
+            sublabel="4 Co-Op Campaigns"
+            position={[0.475, 0, 0]}
+            width={0.245}
+            height={0.088}
             variant={isAdventureMediaUrl(presenterState.mediaUrl) ? 'primary' : 'active'}
             onClick={() => {
               if (onStartStoryQuest) {
@@ -945,148 +991,403 @@ export function SpatialControlDock({
             }}
           />
 
-          {/* Clubhouse Expansion Wing Rooms + 36-ROM NES Quick-Hop Strip */}
-          <RoundedBox
-            args={[1.24, 0.084, 0.018]}
-            position={[0, -0.096, 0]}
-            radius={0.022}
-            smoothness={2}
-          >
-            <meshBasicMaterial color="#080C13" />
-          </RoundedBox>
+          {/* Media Sub-Row B: Main Theater Stations & Bar Games Quick-Hop */}
+          {onSelectSeat && (
+            <group position={[0, -0.105, 0]}>
+              <DockButton
+                label="🚶 Walk Mode"
+                sublabel="Free Roam"
+                position={[-0.495, 0, 0]}
+                width={0.185}
+                height={0.084}
+                variant={localSeatId === FREE_ROAM_SEAT_ID ? 'primary' : 'active'}
+                onClick={() => onSelectSeat(FREE_ROAM_SEAT_ID)}
+              />
+              <DockButton
+                label="🛋 Main Sofa"
+                sublabel="Theater Seat"
+                position={[-0.297, 0, 0]}
+                width={0.185}
+                height={0.084}
+                variant={
+                  localSeatId &&
+                  localSeatId !== FREE_ROAM_SEAT_ID &&
+                  !localSeatId.startsWith('station:') &&
+                  !localSeatId.startsWith('game-table:') &&
+                  !localSeatId.startsWith('wing:')
+                    ? 'primary'
+                    : 'default'
+                }
+                onClick={() => onSelectSeat('furn-sofa-front:0')}
+              />
+              <DockButton
+                label="🎯 Pro Darts"
+                sublabel="301 / 501 / Cricket"
+                position={[-0.099, 0, 0]}
+                width={0.185}
+                height={0.084}
+                variant={localSeatId === 'station:darts-oche' ? 'primary' : 'default'}
+                onClick={() => onSelectSeat('station:darts-oche')}
+              />
+              <DockButton
+                label="⛳ Putting"
+                sublabel="Golf Green"
+                position={[0.099, 0, 0]}
+                width={0.185}
+                height={0.084}
+                variant={localSeatId === 'station:putting-tee' ? 'primary' : 'default'}
+                onClick={() => onSelectSeat('station:putting-tee')}
+              />
+              <DockButton
+                label="🎲 Game Table"
+                sublabel="21 / Poker / RPG"
+                position={[0.297, 0, 0]}
+                width={0.185}
+                height={0.084}
+                variant={localSeatId?.startsWith('game-table:') ? 'primary' : 'default'}
+                onClick={() => onSelectSeat('game-table:seat-0')}
+              />
+              <DockButton
+                label={flyMode ? '🚀 Fly: ON' : '🚀 Fly Mode'}
+                sublabel="3D Free-Flight"
+                position={[0.495, 0, 0]}
+                width={0.185}
+                height={0.084}
+                variant={flyMode ? 'primary' : 'active'}
+                onClick={() => onToggleFlyMode?.()}
+              />
+            </group>
+          )}
+        </group>
+      )}
+
+      {activeTab === 'rooms' && (
+        <group position={[0, -0.105, 0.016]}>
+          {/* Rooms Sub-Row A: 8-Room Teleport Strip */}
+          <DockButton
+            label="🎬 Theater"
+            position={[-0.525, 0, 0]}
+            width={0.14}
+            height={0.088}
+            fontSize={0.022}
+            variant={activeLoungeWing === 'main-lounge' ? 'primary' : 'default'}
+            soundKind="teleport"
+            onClick={() =>
+              onJumpToWing
+                ? onJumpToWing('main-lounge')
+                : onSelectSeat?.('furn-sofa-front:0')
+            }
+          />
+          <DockButton
+            label="🏛 Hallway"
+            position={[-0.375, 0, 0]}
+            width={0.14}
+            height={0.088}
+            fontSize={0.022}
+            variant={activeLoungeWing === 'hallway' ? 'primary' : 'default'}
+            soundKind="teleport"
+            onClick={() =>
+              onJumpToWing
+                ? onJumpToWing('hallway')
+                : onSelectSeat?.(FREE_ROAM_SEAT_ID)
+            }
+          />
           <DockButton
             label="💼 Board"
-            position={[-0.51, -0.096, 0.008]}
-            width={0.158}
-            height={0.064}
-            variant={localSeatId?.startsWith('wing:boardroom') ? 'primary' : 'default'}
-            onClick={() => onSelectSeat('wing:boardroom-head')}
+            position={[-0.225, 0, 0]}
+            width={0.14}
+            height={0.088}
+            fontSize={0.022}
+            variant={
+              activeLoungeWing === 'boardroom' ||
+              localSeatId?.startsWith('wing:boardroom')
+                ? 'primary'
+                : 'default'
+            }
+            soundKind="teleport"
+            onClick={() =>
+              onJumpToWing
+                ? onJumpToWing('boardroom')
+                : onSelectSeat?.('wing:boardroom-head')
+            }
           />
           <DockButton
             label="🔥 Library"
-            position={[-0.34, -0.096, 0.008]}
-            width={0.158}
-            height={0.064}
-            variant={localSeatId?.startsWith('wing:library') ? 'primary' : 'default'}
-            onClick={() => onSelectSeat('wing:library-chair-1')}
+            position={[-0.075, 0, 0]}
+            width={0.14}
+            height={0.088}
+            fontSize={0.022}
+            variant={
+              activeLoungeWing === 'library' ||
+              localSeatId?.startsWith('wing:library')
+                ? 'primary'
+                : 'default'
+            }
+            soundKind="teleport"
+            onClick={() =>
+              onJumpToWing
+                ? onJumpToWing('library')
+                : onSelectSeat?.('wing:library-chair-1')
+            }
+          />
+          <DockButton
+            label="🛰 Control"
+            position={[0.075, 0, 0]}
+            width={0.14}
+            height={0.088}
+            fontSize={0.022}
+            variant={
+              activeLoungeWing === 'command-center' ||
+              localSeatId?.startsWith('wing:command')
+                ? 'primary'
+                : 'default'
+            }
+            soundKind="teleport"
+            onClick={() =>
+              onJumpToWing
+                ? onJumpToWing('command-center')
+                : onSelectSeat?.('wing:command-seat-1')
+            }
           />
           <DockButton
             label="🕹 Game Rm"
-            position={[-0.17, -0.096, 0.008]}
-            width={0.158}
-            height={0.064}
-            variant={localSeatId?.startsWith('wing:gameroom') ? 'primary' : 'default'}
-            onClick={() => onSelectSeat('wing:gameroom-holo-1')}
+            position={[0.225, 0, 0]}
+            width={0.14}
+            height={0.088}
+            fontSize={0.022}
+            variant={
+              activeLoungeWing === 'game-room' ||
+              localSeatId?.startsWith('wing:gameroom')
+                ? 'primary'
+                : 'default'
+            }
+            soundKind="teleport"
+            onClick={() =>
+              onJumpToWing
+                ? onJumpToWing('game-room')
+                : onSelectSeat?.('wing:gameroom-holo-1')
+            }
           />
           <DockButton
             label="🎯 Range"
-            position={[0, -0.096, 0.008]}
-            width={0.158}
-            height={0.064}
-            variant={localSeatId?.startsWith('wing:shooting') ? 'primary' : 'default'}
-            onClick={() => onSelectSeat('wing:shooting-booth-2')}
-          />
-          <DockButton
-            label="🛰 Command"
-            position={[0.17, -0.096, 0.008]}
-            width={0.158}
-            height={0.064}
-            variant={localSeatId?.startsWith('wing:command') ? 'primary' : 'default'}
-            onClick={() => onSelectSeat('wing:command-seat-1')}
+            position={[0.375, 0, 0]}
+            width={0.14}
+            height={0.088}
+            fontSize={0.022}
+            variant={
+              activeLoungeWing === 'shooting-range' ||
+              localSeatId?.startsWith('wing:shooting')
+                ? 'primary'
+                : 'default'
+            }
+            soundKind="teleport"
+            onClick={() =>
+              onJumpToWing
+                ? onJumpToWing('shooting-range')
+                : onSelectSeat?.('wing:shooting-booth-2')
+            }
           />
           <DockButton
             label="🏔 Deck"
-            position={[0.34, -0.096, 0.008]}
-            width={0.158}
-            height={0.064}
-            variant={localSeatId?.startsWith('wing:deck') ? 'primary' : 'default'}
-            onClick={() => onSelectSeat('wing:deck-chair-1')}
-          />
-          <DockButton
-            label={nesLibraryOpen ? '🕹 Hide NES' : '🕹 NES ROMs'}
-            position={[0.51, -0.096, 0.008]}
-            width={0.158}
-            height={0.064}
+            position={[0.525, 0, 0]}
+            width={0.14}
+            height={0.088}
+            fontSize={0.022}
             variant={
-              nesLibraryOpen || isNesMediaUrl(presenterState.mediaUrl)
+              activeLoungeWing === 'outdoor-deck' ||
+              localSeatId?.startsWith('wing:deck')
                 ? 'primary'
-                : 'danger'
+                : 'default'
             }
-            onClick={() => {
-              if (onToggleNesLibrary) {
-                onToggleNesLibrary()
-                return
-              }
-              if (!isLocalPresenter && canTakeControl) {
-                onTakeControl()
-              }
-              const currentId = isNesMediaUrl(presenterState.mediaUrl)
-                ? parseNesCartridgeIdFromUrl(presenterState.mediaUrl)
-                : null
-              const currentIdx = currentId
-                ? NES_LIBRARY_CARTRIDGES.findIndex((g) => g.id === currentId)
-                : -1
-              const nextGame =
-                currentIdx >= 0
-                  ? NES_LIBRARY_CARTRIDGES[(currentIdx + 1) % NES_LIBRARY_CARTRIDGES.length]
-                  : NES_LIBRARY_CARTRIDGES[0]
-              getNesEmulator().loadLibraryCartridge(nextGame.id)
-              onSelectStreamUrl(
-                `nes://${nextGame.id}`,
-                `🕹 NES: ${nextGame.title}`,
-              )
-            }}
+            soundKind="teleport"
+            onClick={() =>
+              onJumpToWing
+                ? onJumpToWing('outdoor-deck')
+                : onSelectSeat?.('wing:deck-chair-1')
+            }
           />
 
-          {/* 3D Untethered Flight, Floor Recovery & Wrist HUD Toggle Strip */}
-          {onToggleFlyMode && (
-            <>
-              <RoundedBox
-                args={[1.24, 0.08, 0.018]}
-                position={[0, -0.188, 0]}
-                radius={0.022}
-                smoothness={2}
-              >
-                <meshBasicMaterial color="#070A10" />
-              </RoundedBox>
+          {/* Rooms Sub-Row B: Locomotion, Flight, Floor Recovery & Stations */}
+          <group position={[0, -0.105, 0]}>
+            <DockButton
+              label="🚶 Walk Mode"
+              sublabel="Free Roam"
+              position={[-0.455, 0, 0]}
+              width={0.28}
+              height={0.084}
+              variant={localSeatId === FREE_ROAM_SEAT_ID ? 'primary' : 'active'}
+              onClick={() => onSelectSeat?.(FREE_ROAM_SEAT_ID)}
+            />
+            <DockButton
+              label={flyMode ? '🚀 Fly Mode: ON' : '🚀 Fly Mode: OFF'}
+              sublabel={flyMode ? 'R-Stick Ascend/Descend' : 'Untethered 3D Flight'}
+              position={[-0.14, 0, 0]}
+              width={0.31}
+              height={0.084}
+              variant={flyMode ? 'primary' : 'active'}
+              onClick={() => onToggleFlyMode?.()}
+            />
+            <DockButton
+              label="⬇ Drop to Floor"
+              sublabel="Reset Y = 0"
+              position={[0.165, 0, 0]}
+              width={0.26}
+              height={0.084}
+              onClick={() => onDropToFloor?.()}
+            />
+            <DockButton
+              label={wristHudHidden ? '⌚ Wrist HUD: OFF' : '⌚ Wrist HUD: ON'}
+              sublabel={wristHudHidden ? 'Tap to Show' : 'Tap to Hide'}
+              position={[0.455, 0, 0]}
+              width={0.28}
+              height={0.084}
+              variant={wristHudHidden ? 'default' : 'active'}
+              onClick={() => onToggleWristHud?.()}
+            />
+          </group>
+        </group>
+      )}
+
+      {activeTab === 'social' && (
+        <group position={[0, -0.105, 0.016]}>
+          {/* Social Sub-Row A: Floating Emoji Reactions + Type Chat */}
+          {QUICK_REACTIONS.map((emoji, idx) => (
+            <DockButton
+              key={emoji}
+              label={emoji}
+              position={[-0.51 + idx * 0.155, 0, 0]}
+              width={0.135}
+              height={0.086}
+              onClick={() => onSendReaction(emoji)}
+            />
+          ))}
+          <DockButton
+            label="⌨ Type Chat"
+            sublabel="3D Keyboard"
+            position={[0.45, 0, 0]}
+            width={0.26}
+            height={0.086}
+            variant={keyboardMode === 'chat' ? 'primary' : 'default'}
+            onClick={() => onSetKeyboardMode(keyboardMode === 'chat' ? null : 'chat')}
+          />
+
+          {/* Social Sub-Row B: 3D Chat Panel, Avatar Wardrobe & Audio Controls */}
+          <group position={[0, -0.105, 0]}>
+            <DockButton
+              label={chatPanelOpen ? '💬 Chat Wall: ON' : '💬 Chat Wall: OFF'}
+              sublabel="3D Spatial Chat"
+              position={[-0.43, 0, 0]}
+              width={0.32}
+              height={0.084}
+              variant={chatPanelOpen ? 'primary' : 'default'}
+              onClick={onToggleChatPanel}
+            />
+            <DockButton
+              label={wardrobeOpen ? '👤 Close Mirror' : '👤 Avatar & Wardrobe'}
+              sublabel="3D Vanity Mirror"
+              position={[-0.075, 0, 0]}
+              width={0.34}
+              height={0.084}
+              variant={wardrobeOpen ? 'primary' : 'active'}
+              onClick={() => onToggleWardrobe?.()}
+            />
+            <DockButton
+              label={isMuted ? '🔇 Unmute Mic' : '🎙 Mute Mic'}
+              sublabel="Voice Status"
+              position={[0.245, 0, 0]}
+              width={0.25}
+              height={0.084}
+              variant={isMuted ? 'danger' : 'active'}
+              onClick={onToggleMute}
+            />
+            <DockButton
+              label={`🗣 Voice ${Math.round(voiceVolume * 100)}%`}
+              sublabel="Step Gain"
+              position={[0.49, 0, 0]}
+              width={0.2}
+              height={0.084}
+              onClick={() => {
+                const next =
+                  voiceVolume >= 0.95
+                    ? 0.25
+                    : Math.min(1, Number((voiceVolume + 0.25).toFixed(2)))
+                onChangeVoiceVolume(next)
+              }}
+            />
+          </group>
+        </group>
+      )}
+
+      {activeTab === 'customize' && (
+        <group position={[0, -0.105, 0.016]}>
+          {/* Customize Sub-Row A: Build Mode, Avatar Mirror & Lighting Presets */}
+          <DockButton
+            label={buildModeOpen ? '🛠 Exit Build Mode' : '🛠 Room Builder'}
+            sublabel="Spawn & Move Decor"
+            position={[-0.45, 0, 0]}
+            width={0.29}
+            height={0.088}
+            variant={buildModeOpen ? 'primary' : 'active'}
+            onClick={onToggleBuildMode}
+          />
+          <DockButton
+            label={wardrobeOpen ? '👤 Exit Mirror' : '👤 Avatar Mirror'}
+            sublabel="Customize Look"
+            position={[-0.145, 0, 0]}
+            width={0.28}
+            height={0.088}
+            variant={wardrobeOpen ? 'primary' : 'active'}
+            onClick={() => onToggleWardrobe?.()}
+          />
+          <DockButton
+            label={wristHudHidden ? '⌚ Wrist HUD: OFF' : '⌚ Wrist HUD: ON'}
+            sublabel="Left Wrist Watch"
+            position={[0.155, 0, 0]}
+            width={0.28}
+            height={0.088}
+            variant={wristHudHidden ? 'default' : 'active'}
+            onClick={() => onToggleWristHud?.()}
+          />
+          <DockButton
+            label={flyMode ? '🚀 Fly Mode: ON' : '🚀 Fly Mode: OFF'}
+            sublabel="3D Free-Flight"
+            position={[0.45, 0, 0]}
+            width={0.28}
+            height={0.088}
+            variant={flyMode ? 'primary' : 'active'}
+            onClick={() => onToggleFlyMode?.()}
+          />
+
+          {/* Customize Sub-Row B: 5 Standardized Lighting Presets */}
+          <group position={[0, -0.105, 0]}>
+            {(
+              [
+                { id: 'movie', label: '🎬 Movie Dim', x: -0.48 },
+                { id: 'cozy', label: '🛋 Cozy Hangout', x: -0.24 },
+                { id: 'neon-pub', label: '⚡ Neon Pub', x: 0 },
+                { id: 'daylight', label: '☀️ Studio Bright', x: 0.24 },
+                { id: 'midnight-lofi', label: '🌙 Lo-Fi', x: 0.48 },
+              ] as const
+            ).map((preset) => (
               <DockButton
-                label={flyMode ? '🚀 Fly Mode: ON' : '🚀 Fly Mode: OFF'}
-                sublabel={flyMode ? '3D Free-Flight' : 'Soar Above Lounge'}
-                position={[-0.425, -0.188, 0.008]}
-                width={0.35}
-                height={0.064}
-                variant={flyMode ? 'primary' : 'active'}
-                onClick={onToggleFlyMode}
+                key={preset.id}
+                label={preset.label}
+                sublabel="Lighting Mood"
+                position={[preset.x, 0, 0]}
+                width={0.225}
+                height={0.084}
+                fontSize={0.022}
+                variant={activeLightingPreset === preset.id ? 'primary' : 'default'}
+                onClick={() => {
+                  if (onApplyLightingPreset) {
+                    onApplyLightingPreset(preset.id)
+                  } else {
+                    onToggleBuildMode()
+                  }
+                }}
               />
-              <DockButton
-                label="⬇ Drop Floor"
-                sublabel="Reset Y = 0"
-                position={[-0.095, -0.188, 0.008]}
-                width={0.27}
-                height={0.064}
-                variant="default"
-                onClick={() => onDropToFloor?.()}
-              />
-              <DockButton
-                label="🎯 Recenter"
-                sublabel="Align Horizon"
-                position={[0.185, -0.188, 0.008]}
-                width={0.25}
-                height={0.064}
-                variant="default"
-                onClick={onRecenterSeat}
-              />
-              <DockButton
-                label={wristHudHidden ? '⌚ Wrist: OFF' : '⌚ Wrist: ON'}
-                sublabel={wristHudHidden ? 'Tap to Show' : 'Tap to Hide'}
-                position={[0.465, -0.188, 0.008]}
-                width={0.27}
-                height={0.064}
-                variant={wristHudHidden ? 'default' : 'active'}
-                onClick={() => onToggleWristHud?.()}
-              />
-            </>
-          )}
+            ))}
+          </group>
         </group>
       )}
     </group>

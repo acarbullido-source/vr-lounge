@@ -29,7 +29,34 @@ export interface AvatarManagerProps {
   spectralGhostUserIds?: string[]
   remoteVoiceStreams: Record<string, MediaStream>
   voiceVolume: number
+  selectedSpeakerId?: string
   broadcastPose: (pose: AvatarPose6DoF) => void
+}
+
+const activeVoiceAudioElements = new Set<HTMLAudioElement>()
+const activeAudioContexts = new Set<AudioContext>()
+let globalVoiceUnlockInstalled = false
+
+function ensureGlobalVoiceUnlockListener(): void {
+  if (globalVoiceUnlockInstalled || typeof window === 'undefined') return
+  globalVoiceUnlockInstalled = true
+
+  const resumeAllVoiceOutputs = () => {
+    for (const audioEl of activeVoiceAudioElements) {
+      if (audioEl.paused && audioEl.srcObject) {
+        void audioEl.play().catch(() => undefined)
+      }
+    }
+    for (const ctx of activeAudioContexts) {
+      if (ctx.state === 'suspended') {
+        void ctx.resume().catch(() => undefined)
+      }
+    }
+  }
+
+  window.addEventListener('pointerdown', resumeAllVoiceOutputs, { passive: true })
+  window.addEventListener('keydown', resumeAllVoiceOutputs, { passive: true })
+  window.addEventListener('touchstart', resumeAllVoiceOutputs, { passive: true })
 }
 
 function resolveParticipantSeat(
@@ -68,6 +95,7 @@ interface RemoteAvatarProps {
   voiceStream: MediaStream | undefined
   listener: THREE.AudioListener
   voiceVolume: number
+  selectedSpeakerId?: string
 }
 
 function RemoteAvatar({
@@ -79,6 +107,7 @@ function RemoteAvatar({
   voiceStream,
   listener,
   voiceVolume,
+  selectedSpeakerId,
 }: RemoteAvatarProps) {
   const headGroupRef = useRef<THREE.Group>(null)
   const torsoGroupRef = useRef<THREE.Group>(null)
@@ -88,9 +117,17 @@ function RemoteAvatar({
   const speakRingRef = useRef<THREE.Mesh>(null)
   const hoverRingRef = useRef<THREE.Group>(null)
   const speakLevelRef = useRef(0)
-  const positionalAudioRef = useRef<THREE.PositionalAudio | null>(null)
+  const voiceAudioRef = useRef<HTMLAudioElement | null>(null)
+  const distanceGainRef = useRef(1)
+  const voiceVolumeRef = useRef(voiceVolume)
+  const isMutedRef = useRef(participant.isMuted)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const freqBinsRef = useRef<Uint8Array<ArrayBuffer> | null>(null)
+
+  useEffect(() => {
+    voiceVolumeRef.current = voiceVolume
+    isMutedRef.current = participant.isMuted
+  }, [participant.isMuted, voiceVolume])
 
   const cust = resolveAvatarCustomization(participant.avatarCustomization)
   const hasTallHat =
@@ -114,75 +151,121 @@ function RemoteAvatar({
   const tmpQuat = useMemo(() => new THREE.Quaternion(), [])
   const tmpEuler = useMemo(() => new THREE.Euler(0, 0, 0, 'YXZ'), [])
 
-  // Attach WebRTC voice MediaStream to THREE.PositionalAudio + Web Audio AnalyserNode
+  // Attach WebRTC voice MediaStream to native HTML <audio> output + decoupled Web Audio AnalyserNode
   useEffect(() => {
-    const headObj = headGroupRef.current
-    if (!headObj || !voiceStream) {
+    if (!voiceStream) {
+      voiceAudioRef.current = null
       analyserRef.current = null
       freqBinsRef.current = null
       return
     }
 
-    // Hidden muted DOM <audio> keeps Chromium/Quest WebRTC jitter buffer active
-    const keepAliveAudio = document.createElement('audio')
-    keepAliveAudio.srcObject = voiceStream
-    keepAliveAudio.muted = true
-    keepAliveAudio.setAttribute('playsinline', 'true')
-    void keepAliveAudio.play().catch(() => undefined)
+    ensureGlobalVoiceUnlockListener()
 
-    let posAudio: THREE.PositionalAudio | null = null
+    // Primary audible voice playback via native HTMLAudioElement (immune to Web Audio
+    // AudioContext suspension & works even when Three.js Canvas frameloop="never" on mobile)
+    const voiceAudio = document.createElement('audio')
+    voiceAudio.srcObject = voiceStream
+    voiceAudio.autoplay = true
+    voiceAudio.muted = false
+    voiceAudio.setAttribute('playsinline', 'true')
+    const initialVol = isMutedRef.current
+      ? 0
+      : Math.min(1, Math.max(0, voiceVolumeRef.current * distanceGainRef.current))
+    voiceAudio.volume = initialVol
+
+    if (selectedSpeakerId) {
+      const sinkCapable = voiceAudio as HTMLAudioElement & {
+        setSinkId?: (sinkId: string) => Promise<void>
+      }
+      if (typeof sinkCapable.setSinkId === 'function') {
+        void sinkCapable.setSinkId(selectedSpeakerId).catch(() => undefined)
+      }
+    }
+
+    voiceAudioRef.current = voiceAudio
+    activeVoiceAudioElements.add(voiceAudio)
+
+    const tryPlayVoice = () => {
+      if (voiceAudio.srcObject) {
+        void voiceAudio.play().catch(() => undefined)
+      }
+    }
+    tryPlayVoice()
+
+    const audioTrack = voiceStream.getAudioTracks()[0]
+    if (audioTrack) {
+      audioTrack.addEventListener('unmute', tryPlayVoice)
+    }
+
+    let sourceNode: MediaStreamAudioSourceNode | null = null
     let analyser: AnalyserNode | null = null
 
     try {
-      const ctx = listener.context
+      const ctx = listener.context as AudioContext
+      activeAudioContexts.add(ctx)
       if (ctx.state === 'suspended') {
         void ctx.resume().catch(() => undefined)
       }
 
-      posAudio = new THREE.PositionalAudio(listener)
-      posAudio.setRefDistance(2.2)
-      posAudio.setRolloffFactor(1.15)
-      posAudio.setDistanceModel('inverse')
-      posAudio.setMediaStreamSource(voiceStream)
-      posAudio.setVolume(participant.isMuted ? 0 : voiceVolume)
-      headObj.add(posAudio)
-      positionalAudioRef.current = posAudio
-
+      // Connect ONLY to AnalyserNode (not ctx.destination) so speaking ring & mouth animate
+      // without causing double audio or muting when AudioContext is suspended.
+      sourceNode = ctx.createMediaStreamSource(voiceStream)
       analyser = ctx.createAnalyser()
       analyser.fftSize = 64
       analyser.smoothingTimeConstant = 0.6
-      if (posAudio.source) {
-        posAudio.source.connect(analyser)
-      }
+      sourceNode.connect(analyser)
       analyserRef.current = analyser
       freqBinsRef.current = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount))
     } catch (err) {
-      console.warn('PositionalAudio attach warning:', err)
+      console.warn('Voice analyser attach warning:', err)
     }
 
     return () => {
-      keepAliveAudio.pause()
-      keepAliveAudio.srcObject = null
+      if (audioTrack) {
+        audioTrack.removeEventListener('unmute', tryPlayVoice)
+      }
+      activeVoiceAudioElements.delete(voiceAudio)
+      voiceAudio.pause()
+      voiceAudio.srcObject = null
+      if (voiceAudioRef.current === voiceAudio) {
+        voiceAudioRef.current = null
+      }
       analyserRef.current = null
       freqBinsRef.current = null
-      if (posAudio) {
+      if (sourceNode) {
         try {
-          posAudio.disconnect()
+          sourceNode.disconnect()
         } catch {
           // Ignore already disconnected
         }
-        headObj.remove(posAudio)
       }
-      positionalAudioRef.current = null
     }
-  }, [listener, participant.isMuted, participant.userId, voiceStream, voiceVolume])
+  }, [listener, participant.userId, selectedSpeakerId, voiceStream])
 
-  // Dynamically update PositionalAudio gain when volume slider or mute state changes
+  // Dynamically update voice <audio> volume when volume slider or mute state changes
   useEffect(() => {
-    if (positionalAudioRef.current) {
-      positionalAudioRef.current.setVolume(participant.isMuted ? 0 : voiceVolume)
+    const audioEl = voiceAudioRef.current
+    if (!audioEl) return
+    audioEl.volume = participant.isMuted
+      ? 0
+      : Math.min(1, Math.max(0, voiceVolume * distanceGainRef.current))
+    if (!participant.isMuted && audioEl.paused && audioEl.srcObject) {
+      void audioEl.play().catch(() => undefined)
     }
   }, [participant.isMuted, voiceVolume])
+
+  // Dynamically switch audio output device (setSinkId) when selectedSpeakerId changes
+  useEffect(() => {
+    const audioEl = voiceAudioRef.current
+    if (!audioEl || !selectedSpeakerId) return
+    const sinkCapable = audioEl as HTMLAudioElement & {
+      setSinkId?: (sinkId: string) => Promise<void>
+    }
+    if (typeof sinkCapable.setSinkId === 'function') {
+      void sinkCapable.setSinkId(selectedSpeakerId).catch(() => undefined)
+    }
+  }, [selectedSpeakerId])
 
   useFrame(({ camera }, delta) => {
     const alpha = 1 - Math.exp(-14 * Math.min(delta, 0.1))
@@ -204,6 +287,21 @@ function RemoteAvatar({
     if (headGroupRef.current) {
       headGroupRef.current.position.lerp(targetHeadPos, alpha)
       headGroupRef.current.quaternion.slerp(targetHeadQuat, alpha)
+
+      // Gentle Clubhouse-wide proximity curve:
+      // 100% volume within 12m, tapering smoothly to a 78% floor across distant rooms/wings
+      // so participants never become inaudible when exploring other rooms or game stations.
+      const dist = camera.position.distanceTo(headGroupRef.current.position)
+      const nextGain =
+        dist <= 12 ? 1 : Math.max(0.78, 1 - ((dist - 12) / 30) * 0.22)
+      if (Math.abs(nextGain - distanceGainRef.current) > 0.015) {
+        distanceGainRef.current = nextGain
+        if (voiceAudioRef.current) {
+          voiceAudioRef.current.volume = isMutedRef.current
+            ? 0
+            : Math.min(1, Math.max(0, voiceVolumeRef.current * nextGain))
+        }
+      }
     }
 
     // Torso follows head horizontally with yaw-only orientation
@@ -454,6 +552,7 @@ export function AvatarManager({
   spectralGhostUserIds = [],
   remoteVoiceStreams,
   voiceVolume,
+  selectedSpeakerId,
   broadcastPose,
 }: AvatarManagerProps) {
   const { camera, gl } = useThree()
@@ -686,6 +785,7 @@ export function AvatarManager({
           voiceStream={remoteVoiceStreams[remote.userId]}
           listener={audioListener}
           voiceVolume={voiceVolume}
+          selectedSpeakerId={selectedSpeakerId}
         />
       ))}
     </group>

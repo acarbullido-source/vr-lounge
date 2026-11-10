@@ -333,6 +333,7 @@ export function CompanionOverlay({
   const [urlDrawerOpen, setUrlDrawerOpen] = useState(false)
   const [buildDrawerOpen, setBuildDrawerOpen] = useState(false)
   const [nesModalOpen, setNesModalOpen] = useState(false)
+  const [nesInlinePadOpen, setNesInlinePadOpen] = useState(true)
   const [drawerTab, setDrawerTab] = useState<
     'youtube' | 'my-youtube' | 'youtube-tv' | 'direct'
   >('youtube')
@@ -998,7 +999,10 @@ export function CompanionOverlay({
         </div>
 
         {/* Center Presenter Status Pill */}
-        <div className="lounge-dock-bar hidden items-center gap-2.5 rounded-xl px-3.5 py-2 text-xs md:flex">
+        <div
+          id="presenter-status-pill"
+          className="lounge-dock-bar flex items-center gap-2.5 rounded-xl px-3.5 py-2 text-xs"
+        >
           <Radio
             className={`h-3.5 w-3.5 ${
               presenterState.activePresenterId ? 'text-[#e5a93c]' : 'text-[#8a867e]'
@@ -1045,7 +1049,7 @@ export function CompanionOverlay({
           )}
         </div>
 
-        {/* Right Utility Actions: Walk Free Toggle, Fly Mode Toggle, Mobile View, Seat Selector, Enter VR, Leave */}
+        {/* Right Utility Actions: Walk Mode Toggle, Fly Mode Toggle, Mobile Companion, Seat Selector, Enter VR, Leave */}
         <div className="lounge-dock-bar flex items-center gap-2 rounded-xl px-2.5 py-1.5">
           <button
             id="btn-hud-free-roam"
@@ -1077,8 +1081,8 @@ export function CompanionOverlay({
             }}
             title={
               localProfile.seatId === FREE_ROAM_SEAT_ID
-                ? 'Walking freely (WASD / Double-click floor) — click to sit on nearest open chair'
-                : 'Stand up and walk freely around the lounge (WASD / Arrows / Double-click floor)'
+                ? 'Walk Mode active (WASD / Double-click floor) — click to sit on nearest open chair'
+                : 'Enter Walk Mode to move freely around the lounge (WASD / Arrows / Double-click floor)'
             }
             className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
               localProfile.seatId === FREE_ROAM_SEAT_ID
@@ -1088,7 +1092,7 @@ export function CompanionOverlay({
           >
             <Footprints className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">
-              {localProfile.seatId === FREE_ROAM_SEAT_ID ? 'Walking' : 'Walk Free'}
+              {localProfile.seatId === FREE_ROAM_SEAT_ID ? 'Walk Mode: ON' : 'Walk Mode'}
             </span>
           </button>
 
@@ -1104,7 +1108,7 @@ export function CompanionOverlay({
                   : 'border-[#f4f1ea]/12 bg-[#141922] text-[#c7c2b8] hover:border-sky-400/50 hover:text-[#f4f1ea]'
               }`}
             >
-              <span>{flyMode ? '🚀 Fly: ON' : '🚀 Fly'}</span>
+              <span>{flyMode ? '🚀 Fly Mode: ON' : '🚀 Fly Mode'}</span>
             </button>
           )}
 
@@ -1113,10 +1117,10 @@ export function CompanionOverlay({
               id="btn-hud-drop-floor"
               type="button"
               onClick={onDropToFloor}
-              title="Drop back to floor level (Y = 0)"
+              title="Drop to Floor level (Y = 0)"
               className="inline-flex items-center gap-1 rounded-lg border border-amber-400/40 bg-amber-500/15 px-2 py-1 text-xs font-semibold text-amber-200 transition hover:bg-amber-500/25"
             >
-              <span>⬇ Floor</span>
+              <span>⬇ Drop to Floor</span>
             </button>
           )}
 
@@ -1132,7 +1136,7 @@ export function CompanionOverlay({
                   : 'border-[#f4f1ea]/12 bg-[#141922] text-[#8e887e] hover:border-[#e5a93c]/45 hover:text-[#f4f1ea]'
               }`}
             >
-              <span>{wristHudHidden ? '⌚ Wrist: OFF' : '⌚ Wrist: ON'}</span>
+              <span>{wristHudHidden ? '⌚ Wrist HUD: OFF' : '⌚ Wrist HUD: ON'}</span>
             </button>
           )}
 
@@ -1141,10 +1145,10 @@ export function CompanionOverlay({
               id="btn-hud-open-mobile-pocket"
               type="button"
               onClick={() => onOpenMobileMode('pocket-2d')}
-              title="Open Phone-Optimized Pocket Companion View"
+              title="Open Mobile Companion View"
               className="inline-flex items-center gap-1 rounded-lg border border-[#f4f1ea]/12 bg-[#141922] px-2 py-1 text-xs font-medium text-[#c7c2b8] hover:border-[#e5a93c]/45 hover:text-[#f4f1ea]"
             >
-              <span>📱 Pocket</span>
+              <span>📱 Mobile Companion</span>
             </button>
           )}
 
@@ -1163,24 +1167,44 @@ export function CompanionOverlay({
             onChange={(e) => onSelectSeat(e.target.value)}
             className="lounge-input max-w-[185px] truncate rounded-lg px-2.5 py-1 text-xs"
           >
-            <option value={FREE_ROAM_SEAT_ID}>🚶 Free Roam (Walk Around)</option>
-            {computedSeats.map((seat) => {
-              const isExclusiveChair =
-                !seat.stationKind ||
-                seat.stationKind === 'seat' ||
-                seat.stationKind === 'game-table'
-              const takenByOther =
-                isExclusiveChair &&
-                participants.some((p) => {
-                  if (p.userId === localProfile.userId) return false
-                  if (p.seatId === FREE_ROAM_SEAT_ID) return false
-                  if (p.seatId) return p.seatId === seat.id
-                  return p.seatIndex >= 0 && p.seatIndex === seat.index
-                })
+            <option value={FREE_ROAM_SEAT_ID}>🚶 Walk Mode (Free Roam)</option>
+            {(
+              [
+                ['main-lounge', '🎬 Main Theater & Stations'],
+                ['boardroom', '💼 Executive Boardroom'],
+                ['library', '🔥 Quiet Library'],
+                ['command-center', '🛰 Control Room'],
+                ['game-room', '🕹 Game Room'],
+                ['shooting-range', '🎯 Shooting Range'],
+                ['outdoor-deck', '🏔 Outdoor Lake Deck'],
+              ] as const
+            ).map(([wingId, groupLabel]) => {
+              const wingSeats = computedSeats.filter(
+                (s) => (s.roomWing ?? 'main-lounge') === wingId,
+              )
+              if (wingSeats.length === 0) return null
               return (
-                <option key={seat.id} value={seat.id} disabled={takenByOther}>
-                  {seat.label} {takenByOther ? '(Taken)' : ''}
-                </option>
+                <optgroup key={wingId} label={groupLabel}>
+                  {wingSeats.map((seat) => {
+                    const isExclusiveChair =
+                      !seat.stationKind ||
+                      seat.stationKind === 'seat' ||
+                      seat.stationKind === 'game-table'
+                    const takenByOther =
+                      isExclusiveChair &&
+                      participants.some((p) => {
+                        if (p.userId === localProfile.userId) return false
+                        if (p.seatId === FREE_ROAM_SEAT_ID) return false
+                        if (p.seatId) return p.seatId === seat.id
+                        return p.seatIndex >= 0 && p.seatIndex === seat.index
+                      })
+                    return (
+                      <option key={seat.id} value={seat.id} disabled={takenByOther}>
+                        {seat.label} {takenByOther ? '(Taken)' : ''}
+                      </option>
+                    )
+                  })}
+                </optgroup>
               )
             })}
           </select>
@@ -1189,7 +1213,7 @@ export function CompanionOverlay({
             id="btn-hud-recenter"
             type="button"
             onClick={onRecenterSeat}
-            title="Recenter camera on your lounge seat"
+            title="🎯 Recenter View on your lounge seat"
             className="rounded-lg p-1.5 text-[#c7c2b8] transition hover:bg-[#f4f1ea]/10 hover:text-[#f4f1ea]"
           >
             <RotateCcw className="h-4 w-4" />
@@ -1828,47 +1852,86 @@ export function CompanionOverlay({
         }}
       />
 
-      {/* Subtle Free-Roam Controls Hint Pill (Desktop only, non-blocking) */}
-      {localProfile.seatId === FREE_ROAM_SEAT_ID &&
+      {/* Dynamic Mode & Locomotion Hint Pill (Desktop only, non-blocking) */}
+      {(localProfile.seatId === FREE_ROAM_SEAT_ID || buildMode || flyMode) &&
         !inVRSession &&
-        !buildDrawerOpen &&
         !urlDrawerOpen &&
         !barGamesOpen &&
         !wardrobeOpen &&
         !clubhouseOpen && (
-          <div className="pointer-events-none mx-auto mb-2 flex items-center gap-2 rounded-full border border-[#38bdf8]/35 bg-[#080a0d]/85 px-3.5 py-1 text-[11px] text-[#cbd5e1] shadow-lg backdrop-blur-md">
+          <div
+            id="free-roam-controls-hint"
+            className="pointer-events-none mx-auto mb-2 flex items-center gap-2 rounded-full border border-[#38bdf8]/35 bg-[#080a0d]/85 px-3.5 py-1 text-[11px] text-[#cbd5e1] shadow-lg backdrop-blur-md"
+          >
             <Footprints className="h-3.5 w-3.5 text-[#38bdf8]" />
-            <span>
-              <strong className="font-semibold text-[#7dd3fc]">Free Roam</strong> ·{' '}
-              <kbd className="rounded bg-[#1e293b] px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
-                WASD
-              </kbd>{' '}
-              /{' '}
-              <kbd className="rounded bg-[#1e293b] px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
-                Arrows
-              </kbd>{' '}
-              to walk ·{' '}
-              <kbd className="rounded bg-[#1e293b] px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
-                Shift
-              </kbd>{' '}
-              faster · Double-click floor to glide · Click any chair to sit
-            </span>
+            {buildMode ? (
+              <span>
+                <strong className="font-semibold text-[#22d3ee]">
+                  🛠 Build Mode Active
+                </strong>{' '}
+                · Click furniture to select · Drag floor to move ·{' '}
+                <kbd className="rounded bg-[#1e293b] px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
+                  R
+                </kbd>{' '}
+                rotate ·{' '}
+                <kbd className="rounded bg-[#1e293b] px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
+                  Del
+                </kbd>{' '}
+                remove
+              </span>
+            ) : flyMode ? (
+              <span>
+                <strong className="font-semibold text-sky-300">🚀 Fly Mode</strong> ·{' '}
+                <kbd className="rounded bg-[#1e293b] px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
+                  WASD
+                </kbd>{' '}
+                fly ·{' '}
+                <kbd className="rounded bg-[#1e293b] px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
+                  Space/E
+                </kbd>{' '}
+                ascend ·{' '}
+                <kbd className="rounded bg-[#1e293b] px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
+                  C/Q
+                </kbd>{' '}
+                descend ·{' '}
+                <kbd className="rounded bg-[#1e293b] px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
+                  F
+                </kbd>{' '}
+                exit flight
+              </span>
+            ) : (
+              <span>
+                <strong className="font-semibold text-[#7dd3fc]">🚶 Walk Mode</strong> ·{' '}
+                <kbd className="rounded bg-[#1e293b] px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
+                  WASD
+                </kbd>{' '}
+                /{' '}
+                <kbd className="rounded bg-[#1e293b] px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
+                  Arrows
+                </kbd>{' '}
+                to walk ·{' '}
+                <kbd className="rounded bg-[#1e293b] px-1 py-0.5 font-mono text-[10px] text-[#f4f1ea]">
+                  Shift
+                </kbd>{' '}
+                sprint · Double-click floor to teleport · Click any chair to sit
+              </span>
+            )}
           </div>
         )}
 
       {/* Bottom Companion Presenter & Watch-Party Dock */}
-      <footer className="pointer-events-auto lounge-dock-bar mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-2.5 rounded-2xl px-3.5 py-2.5">
-        {/* Left: Presenter Handoff + Tab Share + URL Player + Customize Room + Games + Rooms + Avatar */}
+      <footer className="pointer-events-auto lounge-dock-bar mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-2.5 rounded-2xl border border-white/10 bg-slate-900/80 px-3.5 py-2.5 shadow-2xl">
+        {/* Left: Presenter Handoff + Tab Share + URL Player + Room Builder + Games + Rooms + Avatar */}
         <div className="flex flex-wrap items-center gap-2">
           <button
             id="btn-take-or-release-control"
             type="button"
             disabled={!isLocalPresenter && !canTakeControl}
             onClick={isLocalPresenter ? onReleaseControl : onTakeControl}
-            className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold transition ${
+            className={`lounge-btn inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold ${
               isLocalPresenter
                 ? 'border border-[#e5a93c]/60 bg-[#e5a93c]/15 text-[#e5a93c]'
-                : 'bg-[#e5a93c] text-[#080a0d] hover:bg-[#f2be5c] disabled:opacity-45'
+                : 'bg-[#e5a93c] text-[#080a0d] shadow-md shadow-[#e5a93c]/15 hover:bg-[#f2be5c] disabled:opacity-45'
             }`}
           >
             <Sparkles className="h-3.5 w-3.5" />
@@ -1886,10 +1949,10 @@ export function CompanionOverlay({
                 void onStartTabShare()
               }
             }}
-            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition ${
+            className={`lounge-btn inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium ${
               isSharingTab
                 ? 'border-[#e05a47] bg-[#e05a47]/20 text-[#f4f1ea]'
-                : 'border-[#f4f1ea]/12 bg-[#141922] text-[#f4f1ea] hover:border-[#e5a93c]/50 disabled:opacity-45'
+                : 'border-white/10 bg-zinc-900/85 text-[#f4f1ea] hover:border-[#e5a93c]/50 hover:bg-slate-800/85 disabled:opacity-45'
             }`}
           >
             <MonitorUp className="h-3.5 w-3.5 text-[#e5a93c]" />
@@ -1910,14 +1973,14 @@ export function CompanionOverlay({
                 return next
               })
             }}
-            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition ${
+            className={`lounge-btn inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium ${
               urlDrawerOpen
                 ? 'border-[#e5a93c] bg-[#e5a93c]/15 text-[#f4f1ea]'
-                : 'border-[#f4f1ea]/12 bg-[#141922] text-[#f4f1ea] hover:border-[#e5a93c]/50'
+                : 'border-white/10 bg-zinc-900/85 text-[#f4f1ea] hover:border-[#e5a93c]/50 hover:bg-slate-800/85'
             }`}
           >
             <Tv className="h-3.5 w-3.5 text-[#e5a93c]" />
-            <span>YouTube &amp; Streams</span>
+            <span>🎬 Play &amp; Streams</span>
           </button>
 
           <button
@@ -1937,14 +2000,14 @@ export function CompanionOverlay({
                 return next
               })
             }}
-            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition ${
+            className={`lounge-btn inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium ${
               buildDrawerOpen || buildMode
                 ? 'border-[#22d3ee] bg-[#22d3ee]/15 text-[#22d3ee]'
-                : 'border-[#f4f1ea]/12 bg-[#141922] text-[#f4f1ea] hover:border-[#22d3ee]/60'
+                : 'border-white/10 bg-zinc-900/85 text-[#f4f1ea] hover:border-[#22d3ee]/60 hover:bg-slate-800/85'
             }`}
           >
             <Hammer className="h-3.5 w-3.5 text-[#22d3ee]" />
-            <span>Customize Room</span>
+            <span>🛠 Room Builder</span>
           </button>
 
           {onToggleBarGames && (
@@ -1961,14 +2024,14 @@ export function CompanionOverlay({
                 }
                 onToggleBarGames()
               }}
-              className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition ${
+              className={`lounge-btn inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium ${
                 barGamesOpen
                   ? 'border-[#e5a93c] bg-[#e5a93c]/18 text-[#fde68a]'
-                  : 'border-[#f4f1ea]/12 bg-[#141922] text-[#f4f1ea] hover:border-[#e5a93c]/60'
+                  : 'border-white/10 bg-zinc-900/85 text-[#f4f1ea] hover:border-[#e5a93c]/60 hover:bg-slate-800/85'
               }`}
             >
               <Dices className="h-3.5 w-3.5 text-[#e5a93c]" />
-              <span>Games &amp; Props</span>
+              <span>🎲 Games &amp; Props</span>
             </button>
           )}
 
@@ -1986,14 +2049,14 @@ export function CompanionOverlay({
                 }
                 onToggleClubhouse()
               }}
-              className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition ${
+              className={`lounge-btn inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium ${
                 clubhouseOpen
                   ? 'border-[#34d399] bg-[#34d399]/18 text-[#a7f3d0]'
-                  : 'border-[#f4f1ea]/12 bg-[#141922] text-[#f4f1ea] hover:border-[#34d399]/60'
+                  : 'border-white/10 bg-zinc-900/85 text-[#f4f1ea] hover:border-[#34d399]/60 hover:bg-slate-800/85'
               }`}
             >
               <Compass className="h-3.5 w-3.5 text-[#34d399]" />
-              <span>Rooms &amp; Ops</span>
+              <span>🚪 Rooms &amp; Ops</span>
             </button>
           )}
 
@@ -2011,17 +2074,17 @@ export function CompanionOverlay({
                 }
                 onToggleWardrobe()
               }}
-              className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition ${
+              className={`lounge-btn inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium ${
                 wardrobeOpen
                   ? 'border-[#c084fc] bg-[#c084fc]/18 text-[#e9d5ff]'
-                  : 'border-[#f4f1ea]/12 bg-[#141922] text-[#f4f1ea] hover:border-[#c084fc]/60'
+                  : 'border-white/10 bg-zinc-900/85 text-[#f4f1ea] hover:border-[#c084fc]/60 hover:bg-slate-800/85'
               }`}
             >
               <User
                 className="h-3.5 w-3.5"
                 style={{ color: wardrobeOpen ? '#d8b4fe' : localProfile.avatarColor }}
               />
-              <span>Avatar</span>
+              <span>👤 Avatar Mirror</span>
             </button>
           )}
 
@@ -2029,10 +2092,10 @@ export function CompanionOverlay({
             id="btn-dock-open-nes-console"
             type="button"
             onClick={() => setNesModalOpen(true)}
-            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition ${
+            className={`lounge-btn inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold ${
               isNesMediaUrl(presenterState.mediaUrl) || nesModalOpen
                 ? 'border-red-500 bg-red-600/25 text-red-100 shadow-sm shadow-red-500/20'
-                : 'border-red-500/40 bg-[#141922] text-red-200 hover:border-red-400 hover:bg-red-950/35'
+                : 'border-red-500/40 bg-zinc-900/85 text-red-200 hover:border-red-400 hover:bg-red-950/35'
             }`}
           >
             <span>🕹</span>
@@ -2064,7 +2127,7 @@ export function CompanionOverlay({
             return (
               <div
                 data-testid="companion-nes-live-controller-bar"
-                className="flex flex-1 flex-wrap items-center justify-center gap-1.5 rounded-xl border border-red-500/40 bg-[#0c111d] px-2.5 py-1.5 min-w-[280px]"
+                className="flex flex-1 flex-wrap items-center justify-center gap-1.5 rounded-xl border border-red-500/40 bg-zinc-950/85 px-2.5 py-1.5 min-w-[260px]"
               >
                 {/* Engage P1 / P2 Exclusive Lock Buttons */}
                 <button
@@ -2081,7 +2144,7 @@ export function CompanionOverlay({
                   onClick={() => {
                     onClaimNesPlayerSlot?.(isLocalP1 ? null : 1)
                   }}
-                  className={`rounded-md border px-2 py-1 text-[10px] font-bold transition ${
+                  className={`lounge-btn rounded-md border px-2 py-1 text-[10px] font-bold ${
                     isLocalP1
                       ? 'border-emerald-400 bg-emerald-500/25 text-emerald-200'
                       : isP1Locked
@@ -2110,7 +2173,7 @@ export function CompanionOverlay({
                   onClick={() => {
                     onClaimNesPlayerSlot?.(isLocalP2 ? null : 2)
                   }}
-                  className={`rounded-md border px-2 py-1 text-[10px] font-bold transition ${
+                  className={`lounge-btn rounded-md border px-2 py-1 text-[10px] font-bold ${
                     isLocalP2
                       ? 'border-emerald-400 bg-emerald-500/25 text-emerald-200'
                       : isP2Locked
@@ -2146,7 +2209,7 @@ export function CompanionOverlay({
                       false,
                     )
                   }}
-                  className="max-w-[150px] rounded-lg border border-red-500/40 bg-[#141c2e] px-2 py-1 text-[11px] font-semibold text-amber-300 focus:outline-none"
+                  className="max-w-[150px] rounded-lg border border-red-500/40 bg-slate-900 px-2 py-1 text-[11px] font-semibold text-amber-300 focus:outline-none"
                 >
                   {NES_LIBRARY_CARTRIDGES.map((c) => (
                     <option key={c.id} value={c.id}>
@@ -2155,102 +2218,131 @@ export function CompanionOverlay({
                   ))}
                 </select>
 
-            {/* Live D-Pad Buttons */}
-            {(
-              [
-                ['left', '◀'],
-                ['up', '▲'],
-                ['down', '▼'],
-                ['right', '▶'],
-              ] as const
-            ).map(([btnId, label]) => (
-              <button
-                key={btnId}
-                type="button"
-                onPointerDown={() => getNesEmulator().setButtonState(btnId as NesButtonId, true)}
-                onPointerUp={() => getNesEmulator().setButtonState(btnId as NesButtonId, false)}
-                onPointerLeave={() => getNesEmulator().setButtonState(btnId as NesButtonId, false)}
-                onClick={() => getNesEmulator().tapButton(btnId as NesButtonId)}
-                className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-600 bg-slate-800 text-xs font-bold text-slate-100 hover:bg-slate-700 active:scale-95"
-              >
-                {label}
-              </button>
-            ))}
+                {/* Progressive Disclosure Toggle for Inline Touch Pad */}
+                <button
+                  id="btn-toggle-nes-inline-pad"
+                  type="button"
+                  onClick={() => setNesInlinePadOpen((v) => !v)}
+                  title={
+                    nesInlinePadOpen
+                      ? 'Collapse inline D-Pad & A/B buttons'
+                      : 'Expand inline D-Pad & A/B buttons'
+                  }
+                  className="lounge-btn rounded-md border border-white/10 bg-slate-900 px-2 py-1 text-[10px] font-semibold text-slate-300 hover:border-slate-400 hover:text-white"
+                >
+                  {nesInlinePadOpen ? '🎛 Pad ▲' : '🎛 Pad ▼'}
+                </button>
 
-            {/* SELECT & START */}
-            <button
-              type="button"
-              onPointerDown={() => getNesEmulator().setButtonState('select', true)}
-              onPointerUp={() => getNesEmulator().setButtonState('select', false)}
-              onPointerLeave={() => getNesEmulator().setButtonState('select', false)}
-              onClick={() => getNesEmulator().tapButton('select')}
-              className="rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-[10px] font-bold text-slate-200 hover:bg-slate-700"
-            >
-              SEL
-            </button>
-            <button
-              type="button"
-              onPointerDown={() => getNesEmulator().setButtonState('start', true)}
-              onPointerUp={() => getNesEmulator().setButtonState('start', false)}
-              onPointerLeave={() => getNesEmulator().setButtonState('start', false)}
-              onClick={() => getNesEmulator().tapButton('start')}
-              className="rounded-md border border-amber-400 bg-amber-500/20 px-2 py-1 text-[10px] font-extrabold text-amber-300 hover:bg-amber-500/35"
-            >
-              START
-            </button>
+                {nesInlinePadOpen && (
+                  <>
+                    {/* Live D-Pad Buttons */}
+                    {(
+                      [
+                        ['left', '◀'],
+                        ['up', '▲'],
+                        ['down', '▼'],
+                        ['right', '▶'],
+                      ] as const
+                    ).map(([btnId, label]) => (
+                      <button
+                        key={btnId}
+                        type="button"
+                        onPointerDown={() =>
+                          getNesEmulator().setButtonState(btnId as NesButtonId, true)
+                        }
+                        onPointerUp={() =>
+                          getNesEmulator().setButtonState(btnId as NesButtonId, false)
+                        }
+                        onPointerLeave={() =>
+                          getNesEmulator().setButtonState(btnId as NesButtonId, false)
+                        }
+                        onClick={() => getNesEmulator().tapButton(btnId as NesButtonId)}
+                        className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-600 bg-slate-800 text-xs font-bold text-slate-100 hover:bg-slate-700 active:scale-95"
+                      >
+                        {label}
+                      </button>
+                    ))}
 
-            {/* B & A Action Buttons */}
-            <button
-              type="button"
-              onPointerDown={() => getNesEmulator().setButtonState('b', true)}
-              onPointerUp={() => getNesEmulator().setButtonState('b', false)}
-              onPointerLeave={() => getNesEmulator().setButtonState('b', false)}
-              onClick={() => getNesEmulator().tapButton('b')}
-              className="flex h-7 w-7 items-center justify-center rounded-full border border-red-300 bg-red-600 text-xs font-extrabold text-white shadow hover:bg-red-500 active:scale-95"
-            >
-              B
-            </button>
-            <button
-              type="button"
-              onPointerDown={() => getNesEmulator().setButtonState('a', true)}
-              onPointerUp={() => getNesEmulator().setButtonState('a', false)}
-              onPointerLeave={() => getNesEmulator().setButtonState('a', false)}
-              onClick={() => getNesEmulator().tapButton('a')}
-              className="flex h-7 w-7 items-center justify-center rounded-full border border-red-300 bg-red-600 text-xs font-extrabold text-white shadow hover:bg-red-500 active:scale-95"
-            >
-              A
-            </button>
+                    {/* SELECT & START */}
+                    <button
+                      type="button"
+                      onPointerDown={() => getNesEmulator().setButtonState('select', true)}
+                      onPointerUp={() => getNesEmulator().setButtonState('select', false)}
+                      onPointerLeave={() =>
+                        getNesEmulator().setButtonState('select', false)
+                      }
+                      onClick={() => getNesEmulator().tapButton('select')}
+                      className="rounded-md border border-slate-600 bg-slate-800 px-2 py-1 text-[10px] font-bold text-slate-200 hover:bg-slate-700"
+                    >
+                      SEL
+                    </button>
+                    <button
+                      type="button"
+                      onPointerDown={() => getNesEmulator().setButtonState('start', true)}
+                      onPointerUp={() => getNesEmulator().setButtonState('start', false)}
+                      onPointerLeave={() =>
+                        getNesEmulator().setButtonState('start', false)
+                      }
+                      onClick={() => getNesEmulator().tapButton('start')}
+                      className="rounded-md border border-amber-400 bg-amber-500/20 px-2 py-1 text-[10px] font-extrabold text-amber-300 hover:bg-amber-500/35"
+                    >
+                      START
+                    </button>
 
-            {/* Quick Save & Resume Buttons */}
-            <button
-              type="button"
-              title="Quick Save NES State (Slot 1 + Cloud Vault)"
-              onClick={() => {
-                void getNesEmulator()
-                  .saveSlot('slot-1')
-                  .then((saved) => {
-                    if (saved) onShareNesSaveSlot?.(saved)
-                  })
-              }}
-              className="rounded-md border border-emerald-500/45 bg-emerald-950/50 px-2 py-1 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-900/60"
-            >
-              💾 Save
-            </button>
-            <button
-              type="button"
-              title="Resume Latest Saved NES State"
-              onClick={() => {
-                void getNesEmulator()
-                  .resumeMostRecentSave()
-                  .then((restored) => {
-                    if (restored) onShareNesCheckpoint?.()
-                  })
-              }}
-              className="rounded-md border border-sky-500/45 bg-sky-950/50 px-2 py-1 text-[10px] font-semibold text-sky-200 hover:bg-sky-900/60"
-            >
-              📂 Load
-            </button>
-          </div>
+                    {/* B & A Action Buttons */}
+                    <button
+                      type="button"
+                      onPointerDown={() => getNesEmulator().setButtonState('b', true)}
+                      onPointerUp={() => getNesEmulator().setButtonState('b', false)}
+                      onPointerLeave={() => getNesEmulator().setButtonState('b', false)}
+                      onClick={() => getNesEmulator().tapButton('b')}
+                      className="flex h-7 w-7 items-center justify-center rounded-full border border-red-300 bg-red-600 text-xs font-extrabold text-white shadow hover:bg-red-500 active:scale-95"
+                    >
+                      B
+                    </button>
+                    <button
+                      type="button"
+                      onPointerDown={() => getNesEmulator().setButtonState('a', true)}
+                      onPointerUp={() => getNesEmulator().setButtonState('a', false)}
+                      onPointerLeave={() => getNesEmulator().setButtonState('a', false)}
+                      onClick={() => getNesEmulator().tapButton('a')}
+                      className="flex h-7 w-7 items-center justify-center rounded-full border border-red-300 bg-red-600 text-xs font-extrabold text-white shadow hover:bg-red-500 active:scale-95"
+                    >
+                      A
+                    </button>
+
+                    {/* Quick Save & Resume Buttons */}
+                    <button
+                      type="button"
+                      title="Quick Save NES State (Slot 1 + Cloud Vault)"
+                      onClick={() => {
+                        void getNesEmulator()
+                          .saveSlot('slot-1')
+                          .then((saved) => {
+                            if (saved) onShareNesSaveSlot?.(saved)
+                          })
+                      }}
+                      className="rounded-md border border-emerald-500/45 bg-emerald-950/50 px-2 py-1 text-[10px] font-semibold text-emerald-200 hover:bg-emerald-900/60"
+                    >
+                      💾 Save
+                    </button>
+                    <button
+                      type="button"
+                      title="Resume Latest Saved NES State"
+                      onClick={() => {
+                        void getNesEmulator()
+                          .resumeMostRecentSave()
+                          .then((restored) => {
+                            if (restored) onShareNesCheckpoint?.()
+                          })
+                      }}
+                      className="rounded-md border border-sky-500/45 bg-sky-950/50 px-2 py-1 text-[10px] font-semibold text-sky-200 hover:bg-sky-900/60"
+                    >
+                      📂 Load
+                    </button>
+                  </>
+                )}
+              </div>
             )
           })()
         ) : (
@@ -2262,7 +2354,7 @@ export function CompanionOverlay({
                 type="button"
                 disabled={!isLocalPresenter}
                 onClick={onTogglePlayPause}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#f4f1ea]/10 text-[#f4f1ea] transition hover:bg-[#e5a93c] hover:text-[#080a0d] disabled:opacity-40"
+                className="lounge-btn flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-zinc-900/85 text-[#f4f1ea] hover:bg-[#e5a93c] hover:text-[#080a0d] disabled:opacity-40"
               >
                 {presenterState.isPlaying ? (
                   <Pause className="h-3.5 w-3.5" />
@@ -2294,10 +2386,10 @@ export function CompanionOverlay({
             id="btn-companion-mute"
             type="button"
             onClick={onToggleMute}
-            className={`relative inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-medium transition ${
+            className={`lounge-btn relative inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium ${
               localProfile.isMuted
-                ? 'bg-[#e05a47]/20 text-[#e05a47]'
-                : 'bg-[#141922] text-[#f4f1ea] hover:bg-[#1e2634]'
+                ? 'border-[#e05a47]/40 bg-[#e05a47]/20 text-[#e05a47]'
+                : 'border-white/10 bg-zinc-900/85 text-[#f4f1ea] hover:bg-slate-800/85'
             }`}
           >
             {localProfile.isMuted ? (
@@ -2321,18 +2413,18 @@ export function CompanionOverlay({
             type="button"
             title="Screen & Spatial Voice Volume Mixer"
             onClick={() => setAudioPopoverOpen((v) => !v)}
-            className="rounded-xl bg-[#141922] p-2 text-[#c7c2b8] transition hover:text-[#f4f1ea]"
+            className="lounge-btn rounded-xl border border-white/10 bg-zinc-900/85 p-2 text-[#c7c2b8] hover:bg-slate-800/85 hover:text-[#f4f1ea]"
           >
             <Headphones className="h-4 w-4" />
           </button>
 
-          <div className="hidden items-center gap-1 rounded-xl bg-[#080a0d]/60 px-1.5 py-1 lg:flex">
+          <div className="hidden items-center gap-1 rounded-xl border border-white/10 bg-zinc-950/75 px-1.5 py-1 lg:flex">
             {QUICK_REACTIONS.map((emoji) => (
               <button
                 key={emoji}
                 type="button"
                 onClick={() => onSendReaction(emoji)}
-                className="rounded-lg px-1.5 py-0.5 text-sm transition hover:scale-125 hover:bg-[#f4f1ea]/10"
+                className="rounded-lg px-1.5 py-0.5 text-sm transition hover:scale-125 hover:bg-white/10"
               >
                 {emoji}
               </button>
@@ -2343,7 +2435,7 @@ export function CompanionOverlay({
             id="btn-toggle-companion-chat"
             type="button"
             onClick={() => setChatDrawerOpen((v) => !v)}
-            className="relative inline-flex items-center gap-1.5 rounded-xl bg-[#141922] px-3 py-2 text-xs font-medium text-[#f4f1ea] transition hover:bg-[#1e2634]"
+            className="lounge-btn relative inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-zinc-900/85 px-3 py-2 text-xs font-medium text-[#f4f1ea] hover:bg-slate-800/85"
           >
             <MessageSquare className="h-3.5 w-3.5 text-[#e5a93c]" />
             <span className="hidden sm:inline">Chat</span>

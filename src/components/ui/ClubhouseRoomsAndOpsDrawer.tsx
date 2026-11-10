@@ -239,19 +239,19 @@ export function ClubhouseRoomsAndOpsDrawer({
     <div
       id="clubhouse-rooms-ops-drawer"
       style={{ zIndex: 45 }}
-      className="pointer-events-auto fixed inset-x-0 bottom-20 mx-auto w-[95vw] max-w-4xl rounded-2xl border border-[#f4f1ea]/14 bg-[#0b0f17]/95 p-4 text-[#f4f1ea] shadow-2xl backdrop-blur-xl sm:p-5"
+      className="pointer-events-auto lounge-panel fixed inset-x-0 bottom-20 mx-auto w-[95vw] max-w-4xl rounded-3xl border border-white/10 bg-slate-900/80 p-4 text-[#f4f1ea] shadow-2xl backdrop-blur-2xl sm:p-5"
     >
       {/* Header & Tabs */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#f4f1ea]/10 pb-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
         <div className="flex items-center gap-2">
           <button
             id="btn-clubhouse-tab-rooms"
             type="button"
             onClick={() => onChangeTab('rooms')}
-            className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold transition ${
+            className={`lounge-btn inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold ${
               activeTab === 'rooms'
-                ? 'bg-[#e5a93c] text-[#080a0d]'
-                : 'bg-[#141b27] text-[#c7c2b8] hover:text-[#f4f1ea]'
+                ? 'bg-[#e5a93c] text-[#080a0d] shadow-sm'
+                : 'border border-white/10 bg-zinc-900/85 text-[#c7c2b8] hover:bg-slate-800/85 hover:text-[#f4f1ea]'
             }`}
           >
             <Compass className="h-3.5 w-3.5" />
@@ -262,14 +262,14 @@ export function ClubhouseRoomsAndOpsDrawer({
             id="btn-clubhouse-tab-ops"
             type="button"
             onClick={() => onChangeTab('command-ops')}
-            className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold transition ${
+            className={`lounge-btn inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold ${
               activeTab === 'command-ops'
-                ? 'bg-[#38bdf8] text-[#080a0d]'
-                : 'bg-[#141b27] text-[#c7c2b8] hover:text-[#f4f1ea]'
+                ? 'bg-[#38bdf8] text-[#080a0d] shadow-sm'
+                : 'border border-white/10 bg-zinc-900/85 text-[#c7c2b8] hover:bg-slate-800/85 hover:text-[#f4f1ea]'
             }`}
           >
             <Satellite className="h-3.5 w-3.5" />
-            <span>Command &amp; Control Feeds</span>
+            <span>Control Room &amp; Feeds</span>
           </button>
         </div>
 
@@ -277,25 +277,26 @@ export function ClubhouseRoomsAndOpsDrawer({
           id="btn-close-clubhouse-drawer"
           type="button"
           onClick={onClose}
-          className="rounded-lg p-1 text-[#8a867e] transition hover:bg-[#f4f1ea]/10 hover:text-[#f4f1ea]"
+          className="lounge-btn rounded-lg p-1.5 text-[#8a867e] hover:bg-white/10 hover:text-[#f4f1ea]"
         >
           <X className="h-4 w-4" />
         </button>
       </div>
 
       {/* Clubhouse-Wide Lighting & Brightness Bar (Active Across All Rooms & Wing) */}
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#e5a93c]/25 bg-[#121926] px-3.5 py-2.5">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-zinc-900/85 px-3.5 py-2.5 shadow-inner">
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="mr-1 inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-[#e5a93c]">
+          <span className="mr-1 inline-flex items-center gap-1 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-[#e5a93c]">
             <Sun className="h-3.5 w-3.5" />
             Lighting Mood
           </span>
           {(
             [
               { id: 'daylight', label: '☀️ Studio Bright' },
-              { id: 'cozy', label: '🕯 Cozy Hangout' },
+              { id: 'cozy', label: '🛋 Cozy Hangout' },
               { id: 'neon-pub', label: '⚡ Neon Pub' },
               { id: 'movie', label: '🎬 Movie Dim' },
+              { id: 'midnight-lofi', label: '🌙 Midnight Lo-Fi' },
             ] as Array<{ id: LightingPresetId; label: string }>
           ).map((p) => {
             const active = roomCustomization.lighting.preset === p.id
@@ -305,10 +306,10 @@ export function ClubhouseRoomsAndOpsDrawer({
                 id={`btn-wing-light-${p.id}`}
                 type="button"
                 onClick={() => onApplyLightingPreset(p.id)}
-                className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${
+                className={`lounge-btn rounded-lg px-2.5 py-1 text-[11px] font-semibold ${
                   active
-                    ? 'bg-[#e5a93c] text-[#080a0d]'
-                    : 'bg-[#090f19] text-[#cbd5e1] hover:bg-[#1a2436] hover:text-[#f4f1ea]'
+                    ? 'bg-[#e5a93c] text-[#080a0d] shadow-sm'
+                    : 'border border-white/10 bg-slate-900/85 text-[#cbd5e1] hover:bg-slate-800/90 hover:text-[#f4f1ea]'
                 }`}
               >
                 {p.label}
@@ -379,7 +380,7 @@ export function ClubhouseRoomsAndOpsDrawer({
 
                   {/* Room-Specific Quick Vibe Controls */}
                   {dest.id === 'boardroom' && (
-                    <div className="mt-2.5 flex items-center gap-1.5">
+                    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                       <button
                         id="btn-boardroom-toggle-mode"
                         type="button"
@@ -391,11 +392,13 @@ export function ClubhouseRoomsAndOpsDrawer({
                                 : 'agenda',
                           })
                         }
-                        className="rounded-lg border border-[#f4f1ea]/12 bg-[#0b1019] px-2 py-1 text-[10px] text-[#cbd5e1] hover:border-[#e5a93c]/50"
+                        className="lounge-btn rounded-lg border border-white/10 bg-zinc-900/85 px-2 py-1 text-[10px] text-[#cbd5e1] hover:border-[#e5a93c]/50"
                       >
                         {wingState.boardroomScreenMode === 'mirror-lounge'
                           ? '📺 Mirroring Lounge'
-                          : `📊 Slide ${wingState.boardroomAgendaIndex + 1}/${BOARDROOM_STRATEGY_SLIDES.length}`}
+                          : wingState.boardroomScreenMode === 'whiteboard'
+                            ? '📝 Whiteboard Mode'
+                            : `📊 Slide ${wingState.boardroomAgendaIndex + 1}/${BOARDROOM_STRATEGY_SLIDES.length}`}
                       </button>
                       <button
                         id="btn-boardroom-next-slide"
@@ -408,9 +411,23 @@ export function ClubhouseRoomsAndOpsDrawer({
                               BOARDROOM_STRATEGY_SLIDES.length,
                           })
                         }
-                        className="rounded-lg border border-[#f4f1ea]/12 bg-[#0b1019] px-2 py-1 text-[10px] text-[#cbd5e1] hover:border-[#e5a93c]/50"
+                        className="lounge-btn rounded-lg border border-white/10 bg-zinc-900/85 px-2 py-1 text-[10px] text-[#cbd5e1] hover:border-[#e5a93c]/50"
                       >
                         ⏭ Next Slide
+                      </button>
+                      <button
+                        id="btn-boardroom-whiteboard"
+                        type="button"
+                        onClick={() => {
+                          onUpdateWingState({
+                            boardroomScreenMode: 'whiteboard',
+                          })
+                          onSelectSeat('wing:boardroom-whiteboard')
+                          onClose()
+                        }}
+                        className="lounge-btn rounded-lg border border-[#34d399]/35 bg-[#34d399]/15 px-2 py-1 text-[10px] font-semibold text-[#34d399] hover:bg-[#34d399]/25"
+                      >
+                        📝 Wall Whiteboard
                       </button>
                     </div>
                   )}

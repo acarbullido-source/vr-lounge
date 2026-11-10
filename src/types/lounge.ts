@@ -263,9 +263,23 @@ export type CommandNewsCategoryId = 'top' | 'tech' | 'space' | 'markets'
 
 export type SportsLeagueId = 'nfl' | 'nba' | 'mlb' | 'nhl' | 'mls' | 'ncaaf'
 
+export interface BoardroomWhiteboardStroke {
+  id: string
+  tool: 'pen' | 'eraser'
+  color: string
+  size: 1 | 2 | 3
+  /** Normalized [u0, v0, u1, v1, ...] coordinates in [0..1] (top-left origin) */
+  points: number[]
+  author?: string
+  createdAt: number
+}
+
 export interface ExpansionWingSyncedState {
-  boardroomScreenMode: 'agenda' | 'mirror-lounge'
+  boardroomScreenMode: 'agenda' | 'mirror-lounge' | 'whiteboard'
   boardroomAgendaIndex: number
+  boardroomWhiteboardStrokes?: BoardroomWhiteboardStroke[]
+  boardroomWhiteboardGrid?: boolean
+  boardroomWhiteboardClearedAt?: number
   libraryFireLit: boolean
   outdoorSkyPreset: OutdoorSkyPresetId
   commandScreenMode: 'mirror-lounge' | 'ops-stream'

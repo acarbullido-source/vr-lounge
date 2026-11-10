@@ -67,6 +67,7 @@ function Btn3D({
   return (
     <group
       position={position}
+      scale={hovered ? 1.04 : 1}
       pointerEventsType={{ deny: 'grab' }}
       onPointerOver={(e) => {
         e.stopPropagation()
@@ -78,6 +79,20 @@ function Btn3D({
         onClick()
       }}
     >
+      {(hovered || active) && (
+        <RoundedBox
+          args={[width + 0.008, height + 0.008, 0.014]}
+          radius={0.022}
+          smoothness={2}
+          position={[0, 0, -0.002]}
+        >
+          <meshBasicMaterial
+            color={danger ? '#F87171' : active ? '#FDE68A' : '#22D3EE'}
+            transparent
+            opacity={hovered ? 0.75 : 0.35}
+          />
+        </RoundedBox>
+      )}
       <RoundedBox args={[width, height, 0.016]} radius={0.02} smoothness={2}>
         <meshBasicMaterial color={fill} />
       </RoundedBox>
@@ -95,7 +110,7 @@ function Btn3D({
         <Text
           position={[0, -0.022, 0.012]}
           fontSize={0.019}
-          color={active ? '#1F2937' : '#9CA3AF'}
+          color={active ? '#1F2937' : '#CBD5E1'}
           anchorX="center"
           anchorY="middle"
         >
@@ -156,9 +171,14 @@ export function BuildModePanel3D({
       position={[-1.08, 1.32, -1.16]}
       rotation={[0, 0.42, 0]}
     >
+      {/* Brushed Metallic Outer Studio Bezel */}
+      <RoundedBox args={[1.372, 1.112, 0.02]} position={[0, 0, -0.004]} radius={0.044} smoothness={3}>
+        <meshStandardMaterial color="#1E293B" roughness={0.25} metalness={0.75} />
+      </RoundedBox>
+
       {/* Main Studio Backing Chassis */}
       <RoundedBox args={[1.34, 1.08, 0.024]} radius={0.04} smoothness={3}>
-        <meshStandardMaterial color="#0B0F17" roughness={0.62} metalness={0.28} />
+        <meshStandardMaterial color="#0B0F17" roughness={0.44} metalness={0.36} />
       </RoundedBox>
 
       {/* Cyan Builder Accent Strip */}

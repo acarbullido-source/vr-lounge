@@ -8,6 +8,10 @@ interface PeerEntry {
   makingOffer: boolean
   ignoreOffer: boolean
   isSettingRemoteAnswerPending: boolean
+  needsNegotiation: boolean
+  lastOfferSentAt: number
+  lastRenegotiateReqAt: number
+  remoteVoiceTrack: MediaStreamTrack | null
   pendingCandidates: RTCIceCandidateInit[]
   voiceSender: RTCRtpSender | null
   screenSenders: RTCRtpSender[]
@@ -267,8 +271,13 @@ export function useWebRTC({
   const localMicTrackRef = useRef<MediaStreamTrack | null>(null)
   const localScreenStreamRef = useRef<MediaStream | null>(null)
   const screenShareQualityRef = useRef<ScreenShareQualityMode>(screenShareQuality)
+  const isMutedRef = useRef(isMuted)
   const sendSignalRef = useRef(sendSignal)
   const onEndedCallbackRef = useRef(onScreenShareEndedByBrowser)
+
+  useEffect(() => {
+    isMutedRef.current = isMuted
+  }, [isMuted])
 
   useEffect(() => {
     sendSignalRef.current = sendSignal
@@ -300,6 +309,81 @@ export function useWebRTC({
     return () => mediaDevices.removeEventListener('devicechange', handleChange)
   }, [refreshDevices])
 
+  // Serialized per-peer SDP offer generator that queues negotiation whenever signalingState !== 'stable'
+  const negotiatePeer = useCallback(
+    async (entry: PeerEntry, forceIceRestart = false) => {
+      const { pc, userId: remoteUserId } = entry
+      if (pc.signalingState === 'closed') return
+
+      // Ensure local microphone track is attached before generating an offer
+      if (
+        localMicTrackRef.current &&
+        localMicTrackRef.current.readyState === 'live' &&
+        localVoiceContainerRef.current &&
+        !entry.voiceSender
+      ) {
+        try {
+          entry.voiceSender = pc.addTrack(
+            localMicTrackRef.current,
+            localVoiceContainerRef.current,
+          )
+        } catch {
+          // Ignore if track already attached
+        }
+      }
+
+      if (
+        entry.makingOffer ||
+        entry.isSettingRemoteAnswerPending ||
+        pc.signalingState !== 'stable'
+      ) {
+        entry.needsNegotiation = true
+        return
+      }
+
+      entry.needsNegotiation = false
+      try {
+        entry.makingOffer = true
+        if (forceIceRestart) {
+          try {
+            pc.restartIce()
+          } catch {
+            // Ignore on older browsers
+          }
+        }
+        await pc.setLocalDescription()
+        if (pc.localDescription) {
+          entry.lastOfferSentAt = Date.now()
+          sendSignalRef.current({
+            kind: 'webrtc-offer',
+            fromUserId: localUserId,
+            toUserId: remoteUserId,
+            sdp: {
+              type: pc.localDescription.type,
+              sdp: pc.localDescription.sdp,
+            },
+            timestamp: Date.now(),
+          })
+        }
+      } catch {
+        // Glare or transient state — re-queue so it runs as soon as signalingState returns to 'stable'
+        entry.needsNegotiation = true
+      } finally {
+        entry.makingOffer = false
+        if (
+          entry.needsNegotiation &&
+          pc.signalingState === 'stable' &&
+          !entry.isSettingRemoteAnswerPending
+        ) {
+          queueMicrotask(() => {
+            void negotiatePeer(entry)
+          })
+        }
+      }
+    },
+    [localUserId],
+  )
+
   // Acquire & switch microphone track
   const acquireMicrophone = useCallback(
     async (deviceId?: string) => {
@@ -322,7 +406,7 @@ export function useWebRTC({
         const newTrack = rawStream.getAudioTracks()[0] ?? null
         if (!newTrack) return null
 
-        newTrack.enabled = !isMuted
+        newTrack.enabled = !isMutedRef.current
 
         if (!localVoiceContainerRef.current) {
           localVoiceContainerRef.current = new MediaStream()
@@ -339,13 +423,23 @@ export function useWebRTC({
         setMicPermissionError(null)
         void refreshDevices()
 
-        // Replace or attach voice track across active peers
+        // Replace or attach voice track across active peers and guarantee negotiation
         for (const entry of peersRef.current.values()) {
+          if (entry.pc.signalingState === 'closed') continue
           if (entry.voiceSender) {
             await entry.voiceSender.replaceTrack(newTrack).catch(() => undefined)
-          } else if (entry.pc.signalingState !== 'closed') {
-            entry.voiceSender = entry.pc.addTrack(newTrack, localVoiceContainerRef.current)
+          } else {
+            try {
+              entry.voiceSender = entry.pc.addTrack(
+                newTrack,
+                localVoiceContainerRef.current,
+              )
+            } catch {
+              // Ignore if track already attached
+            }
           }
+          entry.needsNegotiation = true
+          void negotiatePeer(entry)
         }
 
         return newTrack
@@ -356,26 +450,30 @@ export function useWebRTC({
         return null
       }
     },
-    [isMuted, refreshDevices],
+    [negotiatePeer, refreshDevices],
   )
 
-  // Toggle mute instantaneously on existing track
+  // Toggle mute instantaneously on existing track, or acquire mic if unmuting without a live track
   useEffect(() => {
-    if (localMicTrackRef.current) {
+    if (localMicTrackRef.current && localMicTrackRef.current.readyState === 'live') {
       localMicTrackRef.current.enabled = !isMuted
+    } else if (joined && !isMuted) {
+      void acquireMicrophone(selectedMicId || undefined)
     }
-  }, [isMuted])
+  }, [acquireMicrophone, isMuted, joined, selectedMicId])
 
   // Acquire mic when joining or switching selectedMicId (defer slightly during VR entry
-  // so a 2D browser mic permission modal never interrupts Meta Quest Browser's XR transition)
+  // so a 2D browser mic permission modal never interrupts Meta Quest Browser's XR transition).
+  // Acquiring upfront even if initially muted ensures every peer connection negotiates
+  // the audio transceiver on initial join.
   useEffect(() => {
-    if (!joined || isMuted) return
+    if (!joined) return
     const delayMs = inVRSession ? 1800 : 80
     const timer = window.setTimeout(() => {
       void acquireMicrophone(selectedMicId || undefined)
     }, delayMs)
     return () => window.clearTimeout(timer)
-  }, [acquireMicrophone, inVRSession, isMuted, joined, selectedMicId])
+  }, [acquireMicrophone, inVRSession, joined, selectedMicId])
 
   // Local microphone VU / speaking ring analyser
   useEffect(() => {
@@ -429,6 +527,7 @@ export function useWebRTC({
         entry.disconnectTimer = null
       }
       entry.pc.onnegotiationneeded = null
+      entry.pc.onsignalingstatechange = null
       entry.pc.onicecandidate = null
       entry.pc.ontrack = null
       entry.pc.close()
@@ -483,6 +582,10 @@ export function useWebRTC({
         makingOffer: false,
         ignoreOffer: false,
         isSettingRemoteAnswerPending: false,
+        needsNegotiation: false,
+        lastOfferSentAt: 0,
+        lastRenegotiateReqAt: 0,
+        remoteVoiceTrack: null,
         pendingCandidates: [],
         voiceSender: null,
         screenSenders: [],
@@ -490,7 +593,11 @@ export function useWebRTC({
       }
 
       // Attach local mic track if ready
-      if (localMicTrackRef.current && localVoiceContainerRef.current) {
+      if (
+        localMicTrackRef.current &&
+        localMicTrackRef.current.readyState === 'live' &&
+        localVoiceContainerRef.current
+      ) {
         entry.voiceSender = pc.addTrack(
           localMicTrackRef.current,
           localVoiceContainerRef.current,
@@ -534,47 +641,42 @@ export function useWebRTC({
         }
       }
 
-      pc.onnegotiationneeded = async () => {
-        try {
-          entry.makingOffer = true
-          await pc.setLocalDescription()
-          if (pc.localDescription) {
-            sendSignalRef.current({
-              kind: 'webrtc-offer',
-              fromUserId: localUserId,
-              toUserId: remoteUserId,
-              sdp: {
-                type: pc.localDescription.type,
-                sdp: pc.localDescription.sdp,
-              },
-              timestamp: Date.now(),
-            })
+      pc.onnegotiationneeded = () => {
+        void negotiatePeer(entry)
+      }
+
+      pc.onsignalingstatechange = () => {
+        if (pc.signalingState === 'stable') {
+          entry.lastOfferSentAt = 0
+          if (
+            entry.needsNegotiation ||
+            (localMicTrackRef.current &&
+              localMicTrackRef.current.readyState === 'live' &&
+              !entry.voiceSender)
+          ) {
+            void negotiatePeer(entry)
           }
-        } catch {
-          // Glare or transient state handled by perfect negotiation
-        } finally {
-          entry.makingOffer = false
         }
       }
 
       pc.ontrack = (ev) => {
-        const stream = ev.streams[0] ?? new MediaStream([ev.track])
+        const rawStream = ev.streams[0] ?? new MediaStream([ev.track])
         const isScreenStream =
-          ev.track.kind === 'video' || stream.getVideoTracks().length > 0
+          ev.track.kind === 'video' || rawStream.getVideoTracks().length > 0
 
         if (isScreenStream) {
           setRemoteScreenStreams((prev) => ({
             ...prev,
-            [remoteUserId]: stream,
+            [remoteUserId]: rawStream,
           }))
 
           const cleanupIfEnded = () => {
-            const activeTracks = stream
+            const activeTracks = rawStream
               .getTracks()
               .filter((t) => t.readyState === 'live')
             if (activeTracks.length === 0) {
               setRemoteScreenStreams((prev) => {
-                if (prev[remoteUserId] !== stream) return prev
+                if (prev[remoteUserId] !== rawStream) return prev
                 const next = { ...prev }
                 delete next[remoteUserId]
                 return next
@@ -582,12 +684,20 @@ export function useWebRTC({
             }
           }
           ev.track.addEventListener('ended', cleanupIfEnded)
-          stream.addEventListener('removetrack', cleanupIfEnded)
-        } else {
-          setRemoteVoiceStreams((prev) => ({
-            ...prev,
-            [remoteUserId]: stream,
-          }))
+          rawStream.addEventListener('removetrack', cleanupIfEnded)
+        } else if (ev.track.kind === 'audio') {
+          entry.remoteVoiceTrack = ev.track
+          // Always wrap voice track in a fresh MediaStream instance so React effects
+          // in AvatarManager reliably re-bind when a peer renegotiates or replaces their mic.
+          const publishVoiceStream = () => {
+            if (ev.track.readyState === 'ended') return
+            setRemoteVoiceStreams((prev) => ({
+              ...prev,
+              [remoteUserId]: new MediaStream([ev.track]),
+            }))
+          }
+          publishVoiceStream()
+          ev.track.onunmute = publishVoiceStream
         }
       }
 
@@ -605,7 +715,7 @@ export function useWebRTC({
             window.clearTimeout(entry.disconnectTimer)
             entry.disconnectTimer = null
           }
-          pc.restartIce()
+          void negotiatePeer(entry, true)
           return
         }
         if (state === 'disconnected' && entry.disconnectTimer == null) {
@@ -615,16 +725,16 @@ export function useWebRTC({
               pc.connectionState === 'disconnected' ||
               pc.connectionState === 'failed'
             ) {
-              pc.restartIce()
+              void negotiatePeer(entry, true)
             }
-          }, 4500)
+          }, 4000)
         }
       }
 
       peersRef.current.set(remoteUserId, entry)
       return entry
     },
-    [localUserId],
+    [localUserId, negotiatePeer],
   )
 
   // Reconcile peer connections whenever participant roster changes
@@ -651,7 +761,7 @@ export function useWebRTC({
     }
   }, [closePeer, getOrCreatePeer, joined, localUserId, participants])
 
-  // Incoming WebRTC SDP & ICE signal handler (Perfect Negotiation)
+  // Incoming WebRTC SDP & ICE signal handler (Perfect Negotiation + Self-Healing Renegotiation)
   const handleWebRTCSignal = useCallback(
     async (signal: WebRTCSignalMessage) => {
       if (!joined || signal.toUserId !== localUserId) return
@@ -659,6 +769,12 @@ export function useWebRTC({
       const { pc } = entry
 
       try {
+        if (signal.kind === 'webrtc-request-renegotiate') {
+          entry.needsNegotiation = true
+          void negotiatePeer(entry)
+          return
+        }
+
         if (signal.kind === 'webrtc-offer' && signal.sdp) {
           const readyForOffer =
             !entry.makingOffer &&
@@ -668,7 +784,37 @@ export function useWebRTC({
           entry.ignoreOffer = !entry.isPolite && offerCollision
           if (entry.ignoreOffer) return
 
+          // If we are the Polite peer and rolling back a local offer (or if we have a local mic
+          // track not yet negotiated), ensure we follow up with our own offer once stable.
+          if (
+            offerCollision ||
+            (localMicTrackRef.current &&
+              localMicTrackRef.current.readyState === 'live' &&
+              !entry.voiceSender)
+          ) {
+            entry.needsNegotiation = true
+          }
+
           await pc.setRemoteDescription(signal.sdp)
+
+          // Attach local mic track before creating the answer if not yet attached
+          if (
+            localMicTrackRef.current &&
+            localMicTrackRef.current.readyState === 'live' &&
+            localVoiceContainerRef.current &&
+            !entry.voiceSender
+          ) {
+            try {
+              entry.voiceSender = pc.addTrack(
+                localMicTrackRef.current,
+                localVoiceContainerRef.current,
+              )
+              entry.needsNegotiation = true
+            } catch {
+              // Ignore if already attached
+            }
+          }
+
           while (entry.pendingCandidates.length > 0) {
             const candidate = entry.pendingCandidates.shift()
             if (candidate) {
@@ -689,6 +835,10 @@ export function useWebRTC({
               timestamp: Date.now(),
             })
           }
+
+          if (entry.needsNegotiation && pc.signalingState === 'stable') {
+            void negotiatePeer(entry)
+          }
         } else if (signal.kind === 'webrtc-answer' && signal.sdp) {
           entry.isSettingRemoteAnswerPending = true
           try {
@@ -696,11 +846,15 @@ export function useWebRTC({
           } finally {
             entry.isSettingRemoteAnswerPending = false
           }
+          entry.lastOfferSentAt = 0
           while (entry.pendingCandidates.length > 0) {
             const candidate = entry.pendingCandidates.shift()
             if (candidate) {
               await pc.addIceCandidate(candidate).catch(() => undefined)
             }
+          }
+          if (entry.needsNegotiation && pc.signalingState === 'stable') {
+            void negotiatePeer(entry)
           }
         } else if (signal.kind === 'webrtc-ice' && signal.candidate) {
           if (!pc.remoteDescription) {
@@ -717,10 +871,107 @@ export function useWebRTC({
         }
       } catch (err) {
         console.warn('WebRTC signaling recovery:', err)
+        entry.needsNegotiation = true
       }
     },
-    [getOrCreatePeer, joined, localUserId],
+    [getOrCreatePeer, joined, localUserId, negotiatePeer],
   )
+
+  // Periodic Full-Mesh Audio & Signaling Watchdog (recovers dropped offers/answers or missing mic tracks)
+  useEffect(() => {
+    if (!joined) return
+    const timer = window.setInterval(() => {
+      const now = Date.now()
+      const micTrack = localMicTrackRef.current
+      const micLive = Boolean(micTrack && micTrack.readyState === 'live')
+
+      for (const peer of participants) {
+        if (peer.userId === localUserId) continue
+        const entry = getOrCreatePeer(peer.userId)
+        const { pc } = entry
+        if (pc.signalingState === 'closed') continue
+
+        // 1. Ensure local mic track is attached & negotiated with every peer
+        if (micLive && micTrack && localVoiceContainerRef.current) {
+          if (!entry.voiceSender) {
+            try {
+              entry.voiceSender = pc.addTrack(micTrack, localVoiceContainerRef.current)
+              entry.needsNegotiation = true
+            } catch {
+              // Ignore
+            }
+          } else if (entry.voiceSender.track !== micTrack) {
+            void entry.voiceSender.replaceTrack(micTrack).catch(() => undefined)
+            entry.needsNegotiation = true
+          }
+        }
+
+        // 2. Recover if stuck in 'have-local-offer' for > 4.5s due to a dropped signal packet
+        if (
+          pc.signalingState === 'have-local-offer' &&
+          entry.lastOfferSentAt > 0 &&
+          now - entry.lastOfferSentAt > 4500
+        ) {
+          entry.lastOfferSentAt = now
+          void pc
+            .setLocalDescription({ type: 'rollback' })
+            .catch(() => undefined)
+            .finally(() => {
+              entry.needsNegotiation = true
+              void negotiatePeer(entry, true)
+            })
+          continue
+        }
+
+        // 3. Drain any queued negotiation once signalingState is stable
+        if (pc.signalingState === 'stable' && entry.needsNegotiation) {
+          void negotiatePeer(entry)
+          continue
+        }
+
+        // 4. If connection is still 'new' or 'failed', kick off negotiation
+        if (
+          (pc.connectionState === 'new' || pc.connectionState === 'failed') &&
+          pc.signalingState === 'stable' &&
+          now - entry.lastOfferSentAt > 4000
+        ) {
+          if (!entry.isPolite) {
+            void negotiatePeer(entry, pc.connectionState === 'failed')
+          } else if (now - entry.lastRenegotiateReqAt > 4500) {
+            entry.lastRenegotiateReqAt = now
+            sendSignalRef.current({
+              kind: 'webrtc-request-renegotiate',
+              fromUserId: localUserId,
+              toUserId: peer.userId,
+              timestamp: now,
+            })
+          }
+          continue
+        }
+
+        // 5. If remote peer is unmuted (or connected) and we still lack a live incoming voice track,
+        // request the remote peer to re-offer their audio track.
+        const hasLiveRemoteAudio = Boolean(
+          entry.remoteVoiceTrack && entry.remoteVoiceTrack.readyState === 'live',
+        )
+        if (
+          !hasLiveRemoteAudio &&
+          !peer.isMuted &&
+          now - entry.lastRenegotiateReqAt > 5500
+        ) {
+          entry.lastRenegotiateReqAt = now
+          sendSignalRef.current({
+            kind: 'webrtc-request-renegotiate',
+            fromUserId: localUserId,
+            toUserId: peer.userId,
+            timestamp: now,
+          })
+        }
+      }
+    }, 3200)
+
+    return () => window.clearInterval(timer)
+  }, [getOrCreatePeer, joined, localUserId, negotiatePeer, participants])
 
   const setScreenShareQuality = useCallback((nextQuality: ScreenShareQualityMode) => {
     screenShareQualityRef.current = nextQuality
@@ -772,6 +1023,10 @@ export function useWebRTC({
         }
       }
       entry.screenSenders = []
+      if (entry.pc.signalingState !== 'closed') {
+        entry.needsNegotiation = true
+        void negotiatePeer(entry)
+      }
     }
 
     for (const track of activeStream.getTracks()) {
@@ -782,7 +1037,7 @@ export function useWebRTC({
     localScreenStreamRef.current = null
     setLocalScreenStream(null)
     setHasScreenAudioTrack(false)
-  }, [])
+  }, [negotiatePeer])
 
   // Automatically release getDisplayMedia if another participant claims Presenter Control
   useEffect(() => {
@@ -879,6 +1134,8 @@ export function useWebRTC({
               applyScreenBitrateCap(sender, totalPeers, activeQuality)
               entry.screenSenders.push(sender)
             }
+            entry.needsNegotiation = true
+            void negotiatePeer(entry)
           }
         }
 
@@ -890,7 +1147,7 @@ export function useWebRTC({
         return { ok: false, error: msg }
       }
     },
-    [setScreenShareQuality, stopTabShare],
+    [negotiatePeer, setScreenShareQuality, stopTabShare],
   )
 
   // Clean up everything on unmount

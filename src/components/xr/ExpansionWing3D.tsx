@@ -22,6 +22,8 @@ import {
 } from '../../constants/expansionRooms'
 import { ROOM_SIZE_SPECS } from '../../constants/hangout'
 import { fireplaceAudio } from '../../services/fireplaceAudio'
+import { playSpatialUiFeedback } from '../../services/soundboardAudio'
+import { setSpatialUiHovered } from '../../services/xrTracking'
 import type {
   CornholeBagRecord,
   CornholeState,
@@ -40,6 +42,7 @@ import type {
   RoomCustomizationState,
   RoomLightingConfig,
 } from '../../types/lounge'
+import { BoardroomWhiteboard3D } from './BoardroomWhiteboard3D'
 import type { LoungeMirrorCamPreset } from './CommandCenterRoom3D'
 
 const CommandCenterRoom3D = lazy(() =>
@@ -115,16 +118,16 @@ const SHARED_CABINET_MAT = new THREE.MeshStandardMaterial({
   color: '#522D1D',
   emissive: '#331A0F',
   emissiveIntensity: 0.48,
-  roughness: 0.62,
-  metalness: 0.12,
+  roughness: 0.35,
+  metalness: 0.1,
 })
 
 const SHARED_SHELF_MAT = new THREE.MeshStandardMaterial({
   color: '#6E3D26',
   emissive: '#452415',
   emissiveIntensity: 0.52,
-  roughness: 0.52,
-  metalness: 0.15,
+  roughness: 0.35,
+  metalness: 0.1,
 })
 
 const SHARED_LED_STRIP_MAT = new THREE.MeshBasicMaterial({
@@ -158,7 +161,10 @@ function ExecutiveLeatherChair({
       onPointerOut={() => setHovered(false)}
       onClick={(e) => {
         e.stopPropagation()
-        if (!takenByOther) onSelectSeat(seat.id)
+        if (!takenByOther) {
+          playSpatialUiFeedback('teleport')
+          onSelectSeat(seat.id)
+        }
       }}
     >
       {/* Brushed Gold 5-Star Base */}
@@ -168,8 +174,8 @@ function ExecutiveLeatherChair({
           color="#E5A93C"
           emissive="#785216"
           emissiveIntensity={0.35}
-          metalness={0.78}
-          roughness={0.24}
+          metalness={0.75}
+          roughness={0.25}
         />
       </mesh>
       <mesh position={[0, 0.22, 0]}>
@@ -179,7 +185,7 @@ function ExecutiveLeatherChair({
           emissive="#6B4A14"
           emissiveIntensity={0.35}
           metalness={0.75}
-          roughness={0.28}
+          roughness={0.25}
         />
       </mesh>
       {/* Tufted Cognac Saddle-Leather Executive Cushion */}
@@ -221,7 +227,7 @@ function ExecutiveLeatherChair({
             emissive="#855D14"
             emissiveIntensity={0.42}
             metalness={0.75}
-            roughness={0.24}
+            roughness={0.25}
           />
         </mesh>
       ))}
@@ -257,17 +263,20 @@ function ChesterfieldArmchair({
       onPointerOut={() => setHovered(false)}
       onClick={(e) => {
         e.stopPropagation()
-        if (!takenByOther) onSelectSeat(seat.id)
+        if (!takenByOther) {
+          playSpatialUiFeedback('teleport')
+          onSelectSeat(seat.id)
+        }
       }}
     >
-      {/* Plush Oxblood Leather Seat Base */}
+      {/* Plush Oxblood Matte Upholstery Seat Base */}
       <RoundedBox args={[0.86, 0.35, 0.8]} position={[0, 0.22, 0]} radius={0.06} smoothness={2}>
         <meshStandardMaterial
           color={hovered && !takenByOther ? '#B93838' : '#962929'}
           emissive="#5E1616"
           emissiveIntensity={0.52}
-          roughness={0.5}
-          metalness={0.12}
+          roughness={0.85}
+          metalness={0.05}
         />
       </RoundedBox>
       {/* Warm Tartan / Gold Accent Throw Cushion */}
@@ -276,7 +285,7 @@ function ChesterfieldArmchair({
           color="#D97706"
           emissive="#78350F"
           emissiveIntensity={0.42}
-          roughness={0.65}
+          roughness={0.85}
         />
       </RoundedBox>
       {/* Rolled Wingback Backrest */}
@@ -291,10 +300,10 @@ function ChesterfieldArmchair({
           color="#8A2424"
           emissive="#541313"
           emissiveIntensity={0.5}
-          roughness={0.52}
+          roughness={0.85}
         />
       </RoundedBox>
-      {/* Rolled Leather Arms + Brass Nailhead Trim */}
+      {/* Rolled Arms + Brass Nailhead Trim */}
       {[-0.39, 0.39].map((ax) => (
         <group key={ax}>
           <RoundedBox
@@ -307,7 +316,7 @@ function ChesterfieldArmchair({
               color="#912626"
               emissive="#591515"
               emissiveIntensity={0.5}
-              roughness={0.52}
+              roughness={0.85}
             />
           </RoundedBox>
           <mesh position={[ax, 0.48, -0.385]} raycast={noopRaycast}>
@@ -390,26 +399,62 @@ function DoorwaySign3D({
   label,
   sublabel,
   accent,
+  onClick,
 }: {
   position: [number, number, number]
   rotationY: number
   label: string
   sublabel: string
   accent: string
+  onClick?: () => void
 }) {
+  const [hovered, setHovered] = useState(false)
   return (
-    <group position={position} rotation={[0, rotationY, 0]}>
+    <group
+      position={position}
+      rotation={[0, rotationY, 0]}
+      scale={hovered ? 1.04 : 1}
+      onPointerOver={
+        onClick
+          ? (e) => {
+              e.stopPropagation()
+              setHovered(true)
+              setSpatialUiHovered(true, `door-sign-${label}`)
+            }
+          : undefined
+      }
+      onPointerOut={
+        onClick
+          ? () => {
+              setHovered(false)
+              setSpatialUiHovered(false, `door-sign-${label}`)
+            }
+          : undefined
+      }
+      onClick={
+        onClick
+          ? (e) => {
+              e.stopPropagation()
+              playSpatialUiFeedback('teleport')
+              onClick()
+            }
+          : undefined
+      }
+    >
+      <RoundedBox args={[1.76, 0.34, 0.026]} radius={0.024} smoothness={2} position={[0, 0, -0.005]}>
+        <meshStandardMaterial color="#1E293B" metalness={0.75} roughness={0.25} />
+      </RoundedBox>
       <RoundedBox args={[1.72, 0.3, 0.03]} radius={0.02} smoothness={2}>
-        <meshBasicMaterial color="#0F172A" />
+        <meshBasicMaterial color={hovered ? '#1E293B' : '#0F172A'} />
       </RoundedBox>
       <mesh position={[0, 0.13, 0.018]}>
         <planeGeometry args={[1.6, 0.018]} />
-        <meshBasicMaterial color={accent} />
+        <meshBasicMaterial color={hovered ? '#FDE047' : accent} />
       </mesh>
       <Text
         position={[0, 0.035, 0.02]}
         fontSize={0.074}
-        color="#F8FAFC"
+        color={hovered ? '#FDE047' : '#F8FAFC'}
         anchorX="center"
         anchorY="middle"
       >
@@ -418,7 +463,7 @@ function DoorwaySign3D({
       <Text
         position={[0, -0.065, 0.02]}
         fontSize={0.044}
-        color="#CBD5E1"
+        color={hovered ? '#F8FAFC' : '#CBD5E1'}
         anchorX="center"
         anchorY="middle"
       >
@@ -526,18 +571,33 @@ export function ExpansionWing3D({
   const [crackleAudioOn, setCrackleAudioOn] = useState(() => fireplaceAudio.isPlaying())
   const [loungeCamPreset, setLoungeCamPreset] =
     useState<LoungeMirrorCamPreset>('wide')
+  const [hoveredDirId, setHoveredDirId] = useState<string | null>(null)
+  const [hoveredBezelBtn, setHoveredBezelBtn] = useState<string | null>(null)
 
-  // Sightline-safe room visibility flags (lazy-loads heavy rear rooms on first approach, then culls via visible)
-  const isRearWingZone =
-    activeLoungeWing === 'command-center' ||
-    activeLoungeWing === 'game-room' ||
-    activeLoungeWing === 'shooting-range' ||
-    activeLoungeWing === 'outdoor-deck'
-  const isFrontRoomsVisible = !isRearWingZone
+  // Fine-grained sightline-safe per-room visibility flags:
+  // When in the Hallway, doorways look into adjacent rooms; when inside a specific room, cull non-active rooms & lights!
+  const isHallway = activeLoungeWing === 'hallway'
+  const isBoardroomVisible =
+    activeLoungeWing === 'boardroom' ||
+    isHallway ||
+    activeLoungeWing === 'main-lounge'
+  const isLibraryVisible =
+    activeLoungeWing === 'library' ||
+    isHallway ||
+    activeLoungeWing === 'main-lounge'
+  const isCommandCenterVisible =
+    activeLoungeWing === 'command-center' || isHallway
+  const isGameRoomVisible = activeLoungeWing === 'game-room' || isHallway
+  const isShootingRangeVisible =
+    activeLoungeWing === 'shooting-range' || isHallway
+  const isOutdoorDeckVisible =
+    activeLoungeWing === 'outdoor-deck' || isHallway
+  const isFrontRoomsVisible = isBoardroomVisible || isLibraryVisible
   const isRearRoomsVisible =
-    activeLoungeWing !== 'main-lounge' &&
-    activeLoungeWing !== 'boardroom' &&
-    activeLoungeWing !== 'library'
+    isCommandCenterVisible ||
+    isGameRoomVisible ||
+    isShootingRangeVisible ||
+    isOutdoorDeckVisible
 
   const [rearRoomsActivated, setRearRoomsActivated] = useState(isRearRoomsVisible)
   useEffect(() => {
@@ -556,6 +616,16 @@ export function ExpansionWing3D({
             ? 'gameroom'
             : 'wide',
     )
+  }
+
+  const jumpToRoomId = (roomId: ExpansionRoomDestination['id']) => {
+    const dest = wingLayout.destinations.find((d) => d.id === roomId)
+    if (!dest) return
+    if (onJumpToDestination) {
+      onJumpToDestination(dest)
+    } else if (onTeleportToFloor) {
+      onTeleportToFloor(dest.spawnPosition)
+    }
   }
 
   // Real-time 3D Internal Security Camera Render Targets (480x270 each, Quest 3 safe)
@@ -626,43 +696,50 @@ export function ExpansionWing3D({
     const masterGain = Math.max(0.25, lighting.brightness || 1.0)
 
     if (wingFrontLightRef.current) {
-      wingFrontLightRef.current.intensity = THREE.MathUtils.lerp(
-        wingFrontLightRef.current.intensity,
-        22.0 * masterGain,
-        lerpAlpha,
-      )
-      wingFrontLightRef.current.color.lerp(targetAmbientColor, lerpAlpha)
+      wingFrontLightRef.current.visible = isFrontRoomsVisible || isHallway
+      if (wingFrontLightRef.current.visible) {
+        wingFrontLightRef.current.intensity = THREE.MathUtils.lerp(
+          wingFrontLightRef.current.intensity,
+          22.0 * masterGain,
+          lerpAlpha,
+        )
+        wingFrontLightRef.current.color.lerp(targetAmbientColor, lerpAlpha)
+      }
     }
 
     if (wingRearLightRef.current) {
-      wingRearLightRef.current.intensity = THREE.MathUtils.lerp(
-        wingRearLightRef.current.intensity,
-        19.5 * masterGain,
-        lerpAlpha,
-      )
-      wingRearLightRef.current.color.lerp(targetAmbientColor, lerpAlpha)
+      wingRearLightRef.current.visible = isRearRoomsVisible || isHallway
+      if (wingRearLightRef.current.visible) {
+        wingRearLightRef.current.intensity = THREE.MathUtils.lerp(
+          wingRearLightRef.current.intensity,
+          19.5 * masterGain,
+          lerpAlpha,
+        )
+        wingRearLightRef.current.color.lerp(targetAmbientColor, lerpAlpha)
+      }
     }
 
-    if (isFrontRoomsVisible && hearthFlameRef.current && wingState.libraryFireLit) {
+    if (isLibraryVisible && hearthFlameRef.current && wingState.libraryFireLit) {
       hearthFlameRef.current.scale.y =
         0.95 + Math.sin(t * 10.5) * 0.14 + Math.cos(t * 16.0) * 0.06
       hearthFlameRef.current.scale.x = 0.96 + Math.sin(t * 7.2) * 0.06
     }
 
     if (hearthLightRef.current) {
-      hearthLightRef.current.intensity = wingState.libraryFireLit
-        ? (16.5 + Math.sin(t * 11.0) * 2.5) * Math.max(0.55, masterGain)
-        : 0
+      hearthLightRef.current.visible = isLibraryVisible && wingState.libraryFireLit
+      hearthLightRef.current.intensity =
+        isLibraryVisible && wingState.libraryFireLit
+          ? (16.5 + Math.sin(t * 11.0) * 2.5) * Math.max(0.55, masterGain)
+          : 0
     }
 
     // Only render the 4 off-screen internal security camera targets when the local player can see a security cam monitor
     const shouldRenderSecurityCams =
       activeLoungeWing === 'command-center' ||
-      activeLoungeWing === 'hallway' ||
       (!hasMainVideoFrames &&
         (activeLoungeWing === 'boardroom' || activeLoungeWing === 'game-room'))
 
-    if (shouldRenderSecurityCams && t - lastMirrorRenderRef.current >= 0.18) {
+    if (shouldRenderSecurityCams && t - lastMirrorRenderRef.current >= 0.25) {
       lastMirrorRenderRef.current = t
 
       const camOrder: readonly LoungeMirrorCamPreset[] = [
@@ -698,18 +775,24 @@ export function ExpansionWing3D({
 
       const wingGroup = wingGroupRef.current
       const prevWingVisible = wingGroup ? wingGroup.visible : true
-      const gameRoomObj =
-        currentCam === 'gameroom' ? scene.getObjectByName('wing-game-room') : null
+      const gameRoomObj = scene.getObjectByName('wing-game-room')
       const prevGameRoomVisible = gameRoomObj ? gameRoomObj.visible : true
+      const mainLoungeObj = scene.getObjectByName('main-cinema-lounge-root')
+      const prevMainLoungeVisible = mainLoungeObj ? mainLoungeObj.visible : true
+      const barGamesObj = scene.getObjectByName('bar-games-corner-root')
+      const prevBarGamesVisible = barGamesObj ? barGamesObj.visible : true
       const prevTarget = gl.getRenderTarget()
       const prevXrEnabled = gl.xr.enabled
       const prevAutoClear = gl.autoClear
 
       try {
-        // Hide wingGroup only when looking into Main Lounge so the back wall doesn't block the lens;
-        // keep wingGroup & wing-game-room visible when rendering the Game Room internal cam!
+        // Temporarily enable only the room targeted by this camera snapshot so offscreen rendering stays lightweight
         if (wingGroup) wingGroup.visible = currentCam === 'gameroom'
-        if (gameRoomObj) gameRoomObj.visible = true
+        if (gameRoomObj) gameRoomObj.visible = currentCam === 'gameroom'
+        if (mainLoungeObj) mainLoungeObj.visible = currentCam !== 'gameroom'
+        if (barGamesObj) {
+          barGamesObj.visible = currentCam === 'wide' || currentCam === 'games'
+        }
         gl.xr.enabled = false
         gl.autoClear = true
         gl.setRenderTarget(loungeCamTargets[currentCam])
@@ -721,6 +804,8 @@ export function ExpansionWing3D({
         gl.autoClear = prevAutoClear
         if (wingGroup) wingGroup.visible = prevWingVisible
         if (gameRoomObj) gameRoomObj.visible = prevGameRoomVisible
+        if (mainLoungeObj) mainLoungeObj.visible = prevMainLoungeVisible
+        if (barGamesObj) barGamesObj.visible = prevBarGamesVisible
       }
     }
   })
@@ -734,7 +819,10 @@ export function ExpansionWing3D({
   }, [participants])
 
   const boardroomSeats = useMemo(
-    () => computedSeats.filter((s) => s.roomWing === 'boardroom'),
+    () =>
+      computedSeats.filter(
+        (s) => s.roomWing === 'boardroom' && s.stationKind !== 'chalkboard',
+      ),
     [computedSeats],
   )
   const librarySeats = useMemo(
@@ -751,6 +839,8 @@ export function ExpansionWing3D({
     BOARDROOM_STRATEGY_SLIDES[0]
   const boardroomShowingMirror =
     wingState.boardroomScreenMode === 'mirror-lounge'
+  const boardroomShowingWhiteboard =
+    wingState.boardroomScreenMode === 'whiteboard'
 
   // Scale architectural self-illumination smoothly with the user's lighting brightness slider
   const emissiveBoost = Math.max(0.28, Math.min(1.5, lighting.brightness || 1.0))
@@ -1020,9 +1110,10 @@ export function ExpansionWing3D({
           <DoorwaySign3D
             position={[-13.48, 3.3, rangeZ]}
             rotationY={Math.PI / 2}
-            label="🎯 TACTICAL SHOOTING RANGE"
+            label="🎯 SHOOTING RANGE"
             sublabel="Armory · 4 Booths · 35m Live-Fire Bay"
             accent="#F97316"
+            onClick={() => jumpToRoomId('shooting-range')}
           />
         </group>
 
@@ -1080,34 +1171,38 @@ export function ExpansionWing3D({
           />
         </mesh>
 
-        {/* Illuminated Overhead Wayfinding Signs in the Hallway */}
+        {/* Illuminated Overhead Wayfinding Signs in the Hallway (Clickable Fast-Travel Portals) */}
         <DoorwaySign3D
           position={[-1.55, 3.32, boardZ]}
           rotationY={Math.PI / 2}
           label="💼 EXECUTIVE BOARDROOM"
           sublabel="9-Seat Strategy Table · Presentation Wall"
           accent="#F59E0B"
+          onClick={() => jumpToRoomId('boardroom')}
         />
         <DoorwaySign3D
           position={[-1.55, 3.32, rangeZ]}
           rotationY={Math.PI / 2}
-          label="🎯 TACTICAL RANGE CORRIDOR"
+          label="🎯 SHOOTING RANGE"
           sublabel="2nd Hallway to Ballistics Range →"
           accent="#F97316"
+          onClick={() => jumpToRoomId('shooting-range')}
         />
         <DoorwaySign3D
           position={[1.55, 3.32, z0 + 5.4]}
           rotationY={-Math.PI / 2}
-          label="🔥 COZY LIBRARY & HEARTH"
+          label="🔥 QUIET LIBRARY & HEARTH"
           sublabel="Quiet Zone (Stream Auto-Mutes) · Study"
           accent="#EA580C"
+          onClick={() => jumpToRoomId('library')}
         />
         <DoorwaySign3D
           position={[-1.55, 3.32, z0 + 15.0]}
           rotationY={Math.PI / 2}
-          label="🛰 COMMAND & CONTROL"
+          label="🛰 COMMAND CENTER"
           sublabel="Aux Screen · ESPN Sports · Weather & News"
           accent="#38BDF8"
+          onClick={() => jumpToRoomId('command-center')}
         />
         <DoorwaySign3D
           position={[1.55, 3.32, z0 + 15.0]}
@@ -1115,19 +1210,21 @@ export function ExpansionWing3D({
           label="🕹 THE GAME ROOM"
           sublabel="Holotable Sanctum · Neon Arcade · Stream Mirror"
           accent="#A855F7"
+          onClick={() => jumpToRoomId('game-room')}
         />
         <DoorwaySign3D
           position={[0, 3.42, z0 + HALLWAY_LENGTH - 0.12]}
           rotationY={Math.PI}
-          label="🏔 OUTDOOR LAKE & MOUNTAIN DECK"
+          label="🏔 OUTDOOR LAKE DECK"
           sublabel="Step outside to Alpine Vista, Firepit & Cornhole ↑"
           accent="#34D399"
+          onClick={() => jumpToRoomId('outdoor-deck')}
         />
 
         {/* Interactive 3D Clubhouse Directory & Lighting Control Board ([1.55, 1.72, z0 + 2.15]) */}
         <group position={[1.55, 1.72, z0 + 2.15]} rotation={[0, -Math.PI / 2, 0]}>
           <RoundedBox args={[1.64, 1.56, 0.04]} radius={0.025} smoothness={2}>
-            <meshStandardMaterial color="#0F172A" metalness={0.45} roughness={0.4} />
+            <meshStandardMaterial color="#0F172A" metalness={0.75} roughness={0.25} />
           </RoundedBox>
           <Text
             position={[0, 0.63, 0.026]}
@@ -1149,58 +1246,98 @@ export function ExpansionWing3D({
           </Text>
           {wingLayout.destinations
             .filter((d) => d.id !== 'hallway')
-            .map((dest, idx) => (
-              <group
-                key={dest.id}
-                position={[0, 0.38 - idx * 0.132, 0.026]}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  if (onJumpToDestination) {
-                    onJumpToDestination(dest)
-                  } else if (onTeleportToFloor) {
-                    onTeleportToFloor(dest.spawnPosition)
-                  }
-                }}
-              >
-                <RoundedBox args={[1.44, 0.112, 0.015]} radius={0.018} smoothness={2}>
-                  <meshBasicMaterial color="#1E293B" />
-                </RoundedBox>
-                <Text
-                  position={[-0.65, 0, 0.012]}
-                  fontSize={0.042}
-                  color="#F8FAFC"
-                  anchorX="left"
-                  anchorY="middle"
+            .map((dest, idx) => {
+              const isHovered = hoveredDirId === `dir-${dest.id}`
+              const isCurrentRoom = activeLoungeWing === dest.id
+              return (
+                <group
+                  key={dest.id}
+                  position={[0, 0.38 - idx * 0.132, 0.026]}
+                  scale={isHovered ? 1.04 : 1}
+                  onPointerOver={(e) => {
+                    e.stopPropagation()
+                    setHoveredDirId(`dir-${dest.id}`)
+                    setSpatialUiHovered(true, `dir-${dest.id}`)
+                  }}
+                  onPointerOut={() => {
+                    setHoveredDirId((prev) =>
+                      prev === `dir-${dest.id}` ? null : prev,
+                    )
+                    setSpatialUiHovered(false, `dir-${dest.id}`)
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    playSpatialUiFeedback('teleport')
+                    if (onJumpToDestination) {
+                      onJumpToDestination(dest)
+                    } else if (onTeleportToFloor) {
+                      onTeleportToFloor(dest.spawnPosition)
+                    }
+                  }}
                 >
-                  {`${dest.emoji} ${dest.title}`}
-                </Text>
-                <Text
-                  position={[0.65, 0, 0.012]}
-                  fontSize={0.038}
-                  color={dest.accentColor}
-                  anchorX="right"
-                  anchorY="middle"
-                >
-                  GO →
-                </Text>
-              </group>
-            ))}
+                  <RoundedBox args={[1.44, 0.112, 0.015]} radius={0.018} smoothness={2}>
+                    <meshBasicMaterial
+                      color={
+                        isCurrentRoom
+                          ? '#0F3156'
+                          : isHovered
+                            ? '#334155'
+                            : '#1E293B'
+                      }
+                    />
+                  </RoundedBox>
+                  <Text
+                    position={[-0.65, 0, 0.012]}
+                    fontSize={0.042}
+                    color={isHovered ? '#FDE047' : '#F8FAFC'}
+                    anchorX="left"
+                    anchorY="middle"
+                  >
+                    {`${dest.emoji} ${dest.title}`}
+                  </Text>
+                  <Text
+                    position={[0.65, 0, 0.012]}
+                    fontSize={0.038}
+                    color={isHovered ? '#FDE047' : dest.accentColor}
+                    anchorX="right"
+                    anchorY="middle"
+                  >
+                    {isCurrentRoom ? 'HERE ●' : 'TELEPORT →'}
+                  </Text>
+                </group>
+              )
+            })}
 
-          {/* 3D Quick Lighting Controls on Hallway Directory Board */}
+          {/* 3D Quick Lighting Controls on Hallway Directory Board (All 5 Presets) */}
           <group position={[0, -0.57, 0.026]}>
             {[
               { id: 'daylight' as LightingPresetId, label: '☀️ Bright', b: 1.45 },
               { id: 'cozy' as LightingPresetId, label: '🕯 Warm', b: 1.05 },
               { id: 'neon-pub' as LightingPresetId, label: '⚡ Neon', b: 0.92 },
+              { id: 'midnight-lofi' as LightingPresetId, label: '🌙 Lo-Fi', b: 0.72 },
               { id: 'movie' as LightingPresetId, label: '🎬 Dim', b: 0.48 },
             ].map((lt, idx) => {
               const active = lighting.preset === lt.id
+              const isHovered = hoveredDirId === `lt-${lt.id}`
               return (
                 <group
                   key={lt.id}
-                  position={[-0.54 + idx * 0.36, 0, 0]}
+                  position={[-0.58 + idx * 0.29, 0, 0]}
+                  scale={isHovered ? 1.04 : 1}
+                  onPointerOver={(e) => {
+                    e.stopPropagation()
+                    setHoveredDirId(`lt-${lt.id}`)
+                    setSpatialUiHovered(true, `lt-${lt.id}`)
+                  }}
+                  onPointerOut={() => {
+                    setHoveredDirId((prev) =>
+                      prev === `lt-${lt.id}` ? null : prev,
+                    )
+                    setSpatialUiHovered(false, `lt-${lt.id}`)
+                  }}
                   onClick={(e) => {
                     e.stopPropagation()
+                    playSpatialUiFeedback('ui-click')
                     if (onApplyLightingPreset) {
                       onApplyLightingPreset(lt.id)
                     } else if (onUpdateLighting) {
@@ -1208,12 +1345,20 @@ export function ExpansionWing3D({
                     }
                   }}
                 >
-                  <RoundedBox args={[0.33, 0.125, 0.015]} radius={0.016}>
-                    <meshBasicMaterial color={active ? '#E5A93C' : '#1E293B'} />
+                  <RoundedBox args={[0.27, 0.125, 0.015]} radius={0.016}>
+                    <meshBasicMaterial
+                      color={
+                        active
+                          ? '#E5A93C'
+                          : isHovered
+                            ? '#334155'
+                            : '#1E293B'
+                      }
+                    />
                   </RoundedBox>
                   <Text
                     position={[0, 0, 0.012]}
-                    fontSize={0.036}
+                    fontSize={0.032}
                     color={active ? '#080A0D' : '#F8FAFC'}
                     anchorX="center"
                     anchorY="middle"
@@ -1243,8 +1388,8 @@ export function ExpansionWing3D({
                 color="#D4A54E"
                 emissive="#785418"
                 emissiveIntensity={0.4}
-                metalness={0.65}
-                roughness={0.32}
+                metalness={0.75}
+                roughness={0.25}
               />
             </RoundedBox>
             <mesh position={[0, 0, 0.018]} raycast={noopRaycast}>
@@ -1272,7 +1417,7 @@ export function ExpansionWing3D({
       {/* 2. FANCY EXECUTIVE BOARD ROOM (West Wing Front, x -11.2..-1.65)     */}
       {/* =================================================================== */}
       <WingRoomErrorBoundary roomName="Executive Boardroom">
-      <group name="wing-executive-boardroom" visible={isFrontRoomsVisible}>
+      <group name="wing-executive-boardroom" visible={isBoardroomVisible}>
         {/* Warm Travertine Floor + Navy/Gold Wool Executive Carpet */}
         <mesh
           position={[-6.425, 0.005, boardZ]}
@@ -1310,7 +1455,7 @@ export function ExpansionWing3D({
             color="#1E293B"
             emissive="#111827"
             emissiveIntensity={0.45 * emissiveBoost}
-            roughness={0.88}
+            roughness={0.85}
           />
         </mesh>
 
@@ -1340,8 +1485,8 @@ export function ExpansionWing3D({
               color="#E5A93C"
               emissive="#8A5E18"
               emissiveIntensity={0.45}
-              metalness={0.82}
-              roughness={0.2}
+              metalness={0.75}
+              roughness={0.25}
             />
           </mesh>
           <mesh position={[0, -0.045, 0]}>
@@ -1394,7 +1539,7 @@ export function ExpansionWing3D({
               emissive="#785418"
               emissiveIntensity={0.4}
               metalness={0.75}
-              roughness={0.26}
+              roughness={0.25}
             />
           </RoundedBox>
           <mesh position={[0, 0, 0.028]}>
@@ -1423,21 +1568,80 @@ export function ExpansionWing3D({
           })}
         </group>
 
-        {/* South Wall Executive Credenza Sideboard + Espresso Decanter Set */}
-        <group position={[-6.4, 0, z0 + 7.75]}>
-          <RoundedBox args={[3.8, 0.84, 0.54]} position={[0, 0.42, 0]} radius={0.03}>
+        {/* South Wall Low Executive Credenza + Large Persistent Interactive Dry-Erase Whiteboard */}
+        <group position={[-6.4, 0, z0 + 7.82]}>
+          <RoundedBox args={[3.8, 0.76, 0.42]} position={[0, 0.38, 0]} radius={0.03}>
             <meshStandardMaterial
               color="#5C341E"
               emissive="#3A2011"
               emissiveIntensity={0.48 * emissiveBoost}
-              roughness={0.5}
-              metalness={0.18}
+              roughness={0.35}
+              metalness={0.1}
             />
           </RoundedBox>
-          <mesh position={[0, 0.85, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={noopRaycast}>
-            <planeGeometry args={[3.68, 0.46]} />
+          <mesh position={[0, 0.765, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={noopRaycast}>
+            <planeGeometry args={[3.68, 0.34]} />
             <meshBasicMaterial color="#F8FAFC" />
           </mesh>
+        </group>
+
+        {/* Large 4.68m × 2.22m Persistent Interactive Whiteboard Mounted on the Boardroom South Wall */}
+        <BoardroomWhiteboard3D
+          position={[-6.4, 2.2, z0 + 8.03]}
+          rotationY={Math.PI}
+          surfaceId="boardroom-south-wall-whiteboard"
+          wingState={wingState}
+          localDisplayName={localDisplayName}
+          isStandingAtBoard={localSeatId === 'wing:boardroom-whiteboard'}
+          onStandAtBoard={() => onSelectSeat('wing:boardroom-whiteboard')}
+          onUpdateWingState={onUpdateWingState}
+        />
+
+        {/* Interactive Floor Standing Mat in Front of the South Wall Whiteboard */}
+        <group
+          position={[-6.4, 0.016, boardZ + 1.48]}
+          onClick={(e) => {
+            e.stopPropagation()
+            playSpatialUiFeedback('teleport')
+            onSelectSeat('wing:boardroom-whiteboard')
+          }}
+        >
+          <RoundedBox
+            args={[1.56, 0.012, 0.52]}
+            radius={0.005}
+            smoothness={2}
+          >
+            <meshStandardMaterial
+              color={
+                localSeatId === 'wing:boardroom-whiteboard'
+                  ? '#0F3156'
+                  : '#1E293B'
+              }
+              roughness={0.85}
+            />
+          </RoundedBox>
+          <mesh position={[0, 0.008, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={noopRaycast}>
+            <ringGeometry args={[0.18, 0.22, 24]} />
+            <meshBasicMaterial
+              color={
+                localSeatId === 'wing:boardroom-whiteboard'
+                  ? '#38BDF8'
+                  : '#E5A93C'
+              }
+            />
+          </mesh>
+          <Text
+            position={[0, 0.01, 0]}
+            rotation={[Math.PI / 2, Math.PI, 0]}
+            fontSize={0.046}
+            color="#F8FAFC"
+            anchorX="center"
+            anchorY="middle"
+          >
+            {localSeatId === 'wing:boardroom-whiteboard'
+              ? '📝 STANDING AT WHITEBOARD'
+              : '📝 CLICK TO STAND AT WHITEBOARD'}
+          </Text>
         </group>
 
         {/* Grand 4.8m Burl Walnut & Calacatta Gold Marble Conference Table */}
@@ -1450,8 +1654,8 @@ export function ExpansionWing3D({
                 color="#4E2B19"
                 emissive="#2E180D"
                 emissiveIntensity={0.45 * emissiveBoost}
-                roughness={0.5}
-                metalness={0.3}
+                roughness={0.35}
+                metalness={0.1}
               />
             </mesh>
           ))}
@@ -1461,8 +1665,8 @@ export function ExpansionWing3D({
               color="#6B3A20"
               emissive="#452412"
               emissiveIntensity={0.5 * emissiveBoost}
-              roughness={0.32}
-              metalness={0.22}
+              roughness={0.35}
+              metalness={0.1}
             />
           </RoundedBox>
           {/* Center Calacatta Gold Marble Inlay + Brass Conference Pods */}
@@ -1483,8 +1687,8 @@ export function ExpansionWing3D({
                 color="#E5A93C"
                 emissive="#8A6421"
                 emissiveIntensity={0.45}
-                metalness={0.82}
-                roughness={0.22}
+                metalness={0.75}
+                roughness={0.25}
               />
             </mesh>
           ))}
@@ -1504,15 +1708,15 @@ export function ExpansionWing3D({
           )}
         </group>
 
-        {/* West Wall Interactive Executive Presentation / Lounge-Mirror Screen */}
+        {/* West Wall Interactive Executive Presentation / Lounge-Mirror / Synced Whiteboard Screen */}
         <group position={[-11.05, 2.02, boardZ]} rotation={[0, Math.PI / 2, 0]}>
           <RoundedBox args={[3.86, 2.26, 0.05]} radius={0.03} smoothness={2}>
             <meshStandardMaterial
               color="#2A1B12"
               emissive="#1A100A"
               emissiveIntensity={0.4}
-              metalness={0.55}
-              roughness={0.35}
+              metalness={0.75}
+              roughness={0.25}
             />
           </RoundedBox>
 
@@ -1558,6 +1762,18 @@ export function ExpansionWing3D({
                 </Text>
               </group>
             </group>
+          ) : boardroomShowingWhiteboard ? (
+            <BoardroomWhiteboard3D
+              position={[0, 0.06, 0.024]}
+              rotationY={0}
+              scale={0.81}
+              surfaceId="boardroom-west-screen-whiteboard"
+              wingState={wingState}
+              localDisplayName={localDisplayName}
+              isStandingAtBoard={localSeatId === 'wing:boardroom-whiteboard'}
+              onStandAtBoard={() => onSelectSeat('wing:boardroom-whiteboard')}
+              onUpdateWingState={onUpdateWingState}
+            />
           ) : (
             <group position={[0, 0.06, 0.029]}>
               <mesh>
@@ -1608,23 +1824,42 @@ export function ExpansionWing3D({
             </group>
           )}
 
-          {/* Bottom Bezel Controls: Strategy Slides vs Live Lounge Mirror */}
+          {/* Bottom Bezel Controls: Strategy Slides vs Whiteboard vs Live Lounge Mirror */}
           <group position={[0, -0.99, 0.032]}>
             <group
-              position={[-1.12, 0, 0]}
+              position={[-1.34, 0, 0]}
+              scale={hoveredBezelBtn === 'board-agenda' ? 1.04 : 1}
+              onPointerOver={(e) => {
+                e.stopPropagation()
+                setHoveredBezelBtn('board-agenda')
+                setSpatialUiHovered(true, 'board-agenda')
+              }}
+              onPointerOut={() => {
+                setHoveredBezelBtn((prev) =>
+                  prev === 'board-agenda' ? null : prev,
+                )
+                setSpatialUiHovered(false, 'board-agenda')
+              }}
               onClick={(e) => {
                 e.stopPropagation()
+                playSpatialUiFeedback('ui-click')
                 onUpdateWingState({ boardroomScreenMode: 'agenda' })
               }}
             >
-              <RoundedBox args={[1.05, 0.13, 0.015]} radius={0.018}>
+              <RoundedBox args={[0.88, 0.13, 0.015]} radius={0.018}>
                 <meshBasicMaterial
-                  color={wingState.boardroomScreenMode === 'agenda' ? '#E5A93C' : '#1E293B'}
+                  color={
+                    wingState.boardroomScreenMode === 'agenda'
+                      ? '#E5A93C'
+                      : hoveredBezelBtn === 'board-agenda'
+                        ? '#334155'
+                        : '#1E293B'
+                  }
                 />
               </RoundedBox>
               <Text
                 position={[0, 0, 0.012]}
-                fontSize={0.05}
+                fontSize={0.044}
                 color={wingState.boardroomScreenMode === 'agenda' ? '#080A0D' : '#F8FAFC'}
                 anchorX="center"
                 anchorY="middle"
@@ -1634,9 +1869,22 @@ export function ExpansionWing3D({
             </group>
 
             <group
-              position={[0.02, 0, 0]}
+              position={[-0.45, 0, 0]}
+              scale={hoveredBezelBtn === 'board-next' ? 1.04 : 1}
+              onPointerOver={(e) => {
+                e.stopPropagation()
+                setHoveredBezelBtn('board-next')
+                setSpatialUiHovered(true, 'board-next')
+              }}
+              onPointerOut={() => {
+                setHoveredBezelBtn((prev) =>
+                  prev === 'board-next' ? null : prev,
+                )
+                setSpatialUiHovered(false, 'board-next')
+              }}
               onClick={(e) => {
                 e.stopPropagation()
+                playSpatialUiFeedback('ui-click')
                 onUpdateWingState({
                   boardroomScreenMode: 'agenda',
                   boardroomAgendaIndex:
@@ -1645,13 +1893,17 @@ export function ExpansionWing3D({
                 })
               }}
             >
-              <RoundedBox args={[0.98, 0.13, 0.015]} radius={0.018}>
-                <meshBasicMaterial color="#1E293B" />
+              <RoundedBox args={[0.78, 0.13, 0.015]} radius={0.018}>
+                <meshBasicMaterial
+                  color={
+                    hoveredBezelBtn === 'board-next' ? '#334155' : '#1E293B'
+                  }
+                />
               </RoundedBox>
               <Text
                 position={[0, 0, 0.012]}
-                fontSize={0.05}
-                color="#F8FAFC"
+                fontSize={0.044}
+                color={hoveredBezelBtn === 'board-next' ? '#FDE047' : '#F8FAFC'}
                 anchorX="center"
                 anchorY="middle"
               >
@@ -1660,24 +1912,85 @@ export function ExpansionWing3D({
             </group>
 
             <group
-              position={[1.18, 0, 0]}
+              position={[0.42, 0, 0]}
+              scale={hoveredBezelBtn === 'board-whiteboard' ? 1.04 : 1}
+              onPointerOver={(e) => {
+                e.stopPropagation()
+                setHoveredBezelBtn('board-whiteboard')
+                setSpatialUiHovered(true, 'board-whiteboard')
+              }}
+              onPointerOut={() => {
+                setHoveredBezelBtn((prev) =>
+                  prev === 'board-whiteboard' ? null : prev,
+                )
+                setSpatialUiHovered(false, 'board-whiteboard')
+              }}
               onClick={(e) => {
                 e.stopPropagation()
-                onUpdateWingState({ boardroomScreenMode: 'mirror-lounge' })
+                playSpatialUiFeedback('ui-click')
+                onUpdateWingState({ boardroomScreenMode: 'whiteboard' })
               }}
             >
-              <RoundedBox args={[1.12, 0.13, 0.015]} radius={0.018}>
+              <RoundedBox args={[0.84, 0.13, 0.015]} radius={0.018}>
                 <meshBasicMaterial
                   color={
-                    wingState.boardroomScreenMode === 'mirror-lounge'
-                      ? '#38BDF8'
-                      : '#1E293B'
+                    wingState.boardroomScreenMode === 'whiteboard'
+                      ? '#34D399'
+                      : hoveredBezelBtn === 'board-whiteboard'
+                        ? '#334155'
+                        : '#1E293B'
                   }
                 />
               </RoundedBox>
               <Text
                 position={[0, 0, 0.012]}
-                fontSize={0.05}
+                fontSize={0.044}
+                color={
+                  wingState.boardroomScreenMode === 'whiteboard'
+                    ? '#080A0D'
+                    : '#F8FAFC'
+                }
+                anchorX="center"
+                anchorY="middle"
+              >
+                📝 Whiteboard
+              </Text>
+            </group>
+
+            <group
+              position={[1.34, 0, 0]}
+              scale={hoveredBezelBtn === 'board-mirror' ? 1.04 : 1}
+              onPointerOver={(e) => {
+                e.stopPropagation()
+                setHoveredBezelBtn('board-mirror')
+                setSpatialUiHovered(true, 'board-mirror')
+              }}
+              onPointerOut={() => {
+                setHoveredBezelBtn((prev) =>
+                  prev === 'board-mirror' ? null : prev,
+                )
+                setSpatialUiHovered(false, 'board-mirror')
+              }}
+              onClick={(e) => {
+                e.stopPropagation()
+                playSpatialUiFeedback('ui-click')
+                onUpdateWingState({ boardroomScreenMode: 'mirror-lounge' })
+              }}
+            >
+              <RoundedBox args={[0.88, 0.13, 0.015]} radius={0.018}>
+                <meshBasicMaterial
+                  color={
+                    wingState.boardroomScreenMode === 'mirror-lounge'
+                      ? '#38BDF8'
+                      : hoveredBezelBtn === 'board-mirror'
+                        ? '#334155'
+                        : '#1E293B'
+                  }
+                />
+              </RoundedBox>
+              <Text
+                position={[0, 0, 0.012]}
+                fontSize={0.044}
                 color={
                   wingState.boardroomScreenMode === 'mirror-lounge'
                     ? '#080A0D'
@@ -1706,10 +2019,10 @@ export function ExpansionWing3D({
       </WingRoomErrorBoundary>
 
       {/* =================================================================== */}
-      {/* 3. COZY LIBRARY & CRACKLING FIREPLACE (East Wing Front, x 1.65..11.2) */}
+      {/* 3. QUIET LIBRARY & CRACKLING FIREPLACE (East Wing Front, x 1.65..11.2) */}
       {/* =================================================================== */}
-      <WingRoomErrorBoundary roomName="Cozy Library">
-      <group name="wing-cozy-library" visible={isFrontRoomsVisible}>
+      <WingRoomErrorBoundary roomName="Quiet Library">
+      <group name="wing-cozy-library" visible={isLibraryVisible}>
         {/* Warm Honey-Oak Parquet Floor + Ornate Crimson & Gold Persian Rug */}
         <mesh
           position={[6.425, 0.005, libZ]}
@@ -1747,7 +2060,7 @@ export function ExpansionWing3D({
             color="#991B1B"
             emissive="#5E1010"
             emissiveIntensity={0.48 * emissiveBoost}
-            roughness={0.88}
+            roughness={0.85}
           />
         </mesh>
         <mesh
@@ -1760,7 +2073,7 @@ export function ExpansionWing3D({
             color="#B91C1C"
             emissive="#701313"
             emissiveIntensity={0.48 * emissiveBoost}
-            roughness={0.88}
+            roughness={0.85}
           />
         </mesh>
         {/* Center Persian Medallion */}
@@ -1880,7 +2193,8 @@ export function ExpansionWing3D({
               color="#6B371E"
               emissive="#422010"
               emissiveIntensity={0.5 * emissiveBoost}
-              roughness={0.48}
+              roughness={0.35}
+              metalness={0.1}
             />
           </RoundedBox>
           <mesh position={[0, 1.38, 0.56]} raycast={noopRaycast}>
@@ -1947,6 +2261,9 @@ export function ExpansionWing3D({
 
           {/* Interactive Mantel Controls Plaque (Flame & Crackling Audio) */}
           <group position={[0, 1.88, 0.28]}>
+            <RoundedBox args={[1.72, 0.44, 0.026]} radius={0.024} position={[0, 0, -0.005]}>
+              <meshStandardMaterial color="#1E293B" metalness={0.75} roughness={0.25} />
+            </RoundedBox>
             <RoundedBox args={[1.68, 0.4, 0.03]} radius={0.02}>
               <meshBasicMaterial color="#0F172A" />
             </RoundedBox>
@@ -1957,18 +2274,37 @@ export function ExpansionWing3D({
               anchorX="center"
               anchorY="middle"
             >
-              🔥 FIRESIDE HEARTH CONTROLS
+              🔥 FIRESIDE HEARTH · QUIET ZONE (STREAM AUTO-MUTED)
             </Text>
             <group
               position={[-0.39, -0.055, 0.02]}
+              scale={hoveredBezelBtn === 'lib-fire' ? 1.04 : 1}
+              onPointerOver={(e) => {
+                e.stopPropagation()
+                setHoveredBezelBtn('lib-fire')
+                setSpatialUiHovered(true, 'lib-fire')
+              }}
+              onPointerOut={() => {
+                setHoveredBezelBtn((prev) =>
+                  prev === 'lib-fire' ? null : prev,
+                )
+                setSpatialUiHovered(false, 'lib-fire')
+              }}
               onClick={(e) => {
                 e.stopPropagation()
+                playSpatialUiFeedback('ui-click')
                 onUpdateWingState({ libraryFireLit: !wingState.libraryFireLit })
               }}
             >
               <RoundedBox args={[0.72, 0.145, 0.015]} radius={0.016}>
                 <meshBasicMaterial
-                  color={wingState.libraryFireLit ? '#EA580C' : '#334155'}
+                  color={
+                    wingState.libraryFireLit
+                      ? '#EA580C'
+                      : hoveredBezelBtn === 'lib-fire'
+                        ? '#475569'
+                        : '#334155'
+                  }
                 />
               </RoundedBox>
               <Text
@@ -1984,14 +2320,35 @@ export function ExpansionWing3D({
 
             <group
               position={[0.39, -0.055, 0.02]}
+              scale={hoveredBezelBtn === 'lib-crackle' ? 1.04 : 1}
+              onPointerOver={(e) => {
+                e.stopPropagation()
+                setHoveredBezelBtn('lib-crackle')
+                setSpatialUiHovered(true, 'lib-crackle')
+              }}
+              onPointerOut={() => {
+                setHoveredBezelBtn((prev) =>
+                  prev === 'lib-crackle' ? null : prev,
+                )
+                setSpatialUiHovered(false, 'lib-crackle')
+              }}
               onClick={(e) => {
                 e.stopPropagation()
+                playSpatialUiFeedback('ui-click')
                 const playing = fireplaceAudio.toggle()
                 setCrackleAudioOn(playing)
               }}
             >
               <RoundedBox args={[0.72, 0.145, 0.015]} radius={0.016}>
-                <meshBasicMaterial color={crackleAudioOn ? '#34D399' : '#1E293B'} />
+                <meshBasicMaterial
+                  color={
+                    crackleAudioOn
+                      ? '#34D399'
+                      : hoveredBezelBtn === 'lib-crackle'
+                        ? '#334155'
+                        : '#1E293B'
+                  }
+                />
               </RoundedBox>
               <Text
                 position={[0, 0, 0.012]}
@@ -2013,7 +2370,8 @@ export function ExpansionWing3D({
               color="#5C341E"
               emissive="#381E10"
               emissiveIntensity={0.48 * emissiveBoost}
-              roughness={0.42}
+              roughness={0.35}
+              metalness={0.1}
             />
           </RoundedBox>
           <mesh position={[0, 0.27, 0]}>
@@ -2022,7 +2380,8 @@ export function ExpansionWing3D({
               color="#4A2816"
               emissive="#2B160B"
               emissiveIntensity={0.45 * emissiveBoost}
-              roughness={0.55}
+              roughness={0.35}
+              metalness={0.1}
             />
           </mesh>
           {/* Brass Banker Lamp */}
@@ -2078,7 +2437,7 @@ export function ExpansionWing3D({
                 localSeatId={localSeatId}
                 participants={participants}
                 cinemaVolume={cinemaVolume}
-                visible={isRearRoomsVisible}
+                visible={isCommandCenterVisible}
                 isActiveRoom={activeLoungeWing === 'command-center'}
                 onSelectSeat={onSelectSeat}
                 onTeleportToFloor={onTeleportToFloor}
@@ -2102,7 +2461,7 @@ export function ExpansionWing3D({
                 participants={participants}
                 holotableState={holotableState}
                 gameRoomStreamMuted={gameRoomStreamMuted}
-                visible={isRearRoomsVisible}
+                visible={isGameRoomVisible}
                 isActiveRoom={activeLoungeWing === 'game-room'}
                 onToggleGameRoomStreamMute={onToggleGameRoomStreamMute}
                 onSelectSeat={onSelectSeat}
@@ -2131,7 +2490,7 @@ export function ExpansionWing3D({
                 localSeatId={localSeatId}
                 localDisplayName={localDisplayName}
                 participants={participants}
-                visible={isRearRoomsVisible}
+                visible={isShootingRangeVisible}
                 isActiveRoom={activeLoungeWing === 'shooting-range'}
                 onSelectSeat={onSelectSeat}
                 onTeleportToFloor={onTeleportToFloor}
@@ -2151,7 +2510,7 @@ export function ExpansionWing3D({
                 participants={participants}
                 cornholeState={cornholeState}
                 localDisplayName={localDisplayName}
-                visible={isRearRoomsVisible}
+                visible={isOutdoorDeckVisible}
                 isActiveRoom={activeLoungeWing === 'outdoor-deck'}
                 onRecordCornholeThrow={onRecordCornholeThrow}
                 onResetCornhole={onResetCornhole}

@@ -8,9 +8,13 @@ import {
   shootingRangeAudio,
   type RangeWeaponId,
 } from '../../services/shootingRangeAudio'
+import { playSpatialUiFeedback } from '../../services/soundboardAudio'
 import {
   isControllerButtonPressed,
+  isSpatialUiHovered,
   readXRSpaceWorldPose,
+  setSpatialUiHovered,
+  triggerXRHapticPulse,
 } from '../../services/xrTracking'
 import type {
   ComputedSeat,
@@ -316,29 +320,60 @@ function createInitialTacticalTargets(): TacticalSilhouetteTarget[] {
   ]
 }
 
+const AERIAL_TARGET_SPECS: ReadonlyArray<{
+  id: string
+  kind: 'clay' | 'drone'
+  initialPosOffset: [number, number, number]
+  initialVel: [number, number, number]
+  radius: number
+}> = [
+  {
+    id: 'clay-1',
+    kind: 'clay',
+    initialPosOffset: [-11.65, 2.2, -2.2],
+    initialVel: [-3.2, 1.4, 2.4],
+    radius: 0.34,
+  },
+  {
+    id: 'drone-1',
+    kind: 'drone',
+    initialPosOffset: [-17.65, 2.5, 1.8],
+    initialVel: [2.4, 0.6, -2.8],
+    radius: 0.38,
+  },
+  {
+    id: 'clay-2',
+    kind: 'clay',
+    initialPosOffset: [-8.65, 1.9, 0.5],
+    initialVel: [-4.0, 1.8, -2.1],
+    radius: 0.34,
+  },
+]
+
+function createInitialAerialTargets(
+  firingLineX: number,
+  rangeZ: number,
+): AerialTarget[] {
+  return AERIAL_TARGET_SPECS.map((spec) => ({
+    id: spec.id,
+    kind: spec.kind,
+    pos: [
+      firingLineX + spec.initialPosOffset[0],
+      spec.initialPosOffset[1],
+      rangeZ + spec.initialPosOffset[2],
+    ],
+    vel: [...spec.initialVel] as [number, number, number],
+    radius: spec.radius,
+    active: true,
+  }))
+}
+
 function pulseControllerHaptics(
   controller: XRControllerState | undefined,
   intensity: number,
   durationMs: number,
 ): void {
-  const gp = controller?.inputSource?.gamepad as
-    | (Gamepad & {
-        hapticActuators?: Array<{
-          pulse?: (val: number, dur: number) => Promise<unknown> | void
-        }>
-      })
-    | undefined
-  const actuator = gp?.hapticActuators?.[0]
-  if (actuator && typeof actuator.pulse === 'function') {
-    try {
-      void actuator.pulse(
-        Math.max(0.05, Math.min(1, intensity)),
-        Math.max(10, Math.min(250, durationMs)),
-      )
-    } catch {
-      // Ignore on unsupported browsers
-    }
-  }
+  triggerXRHapticPulse(controller, intensity, durationMs)
 }
 
 interface RangeButton3DProps {
@@ -367,6 +402,11 @@ function RangeButton3D({
   const [hovered, setHovered] = useState(false)
   const bg = active ? accent : hovered ? '#334155' : '#0F172A'
   const fg = active ? '#040810' : '#F8FAFC'
+  const hoverId = `range-btn-${label}`
+
+  useEffect(() => {
+    return () => setSpatialUiHovered(false, hoverId)
+  }, [hoverId])
 
   return (
     <group
@@ -375,10 +415,16 @@ function RangeButton3D({
       onPointerOver={(e) => {
         e.stopPropagation()
         setHovered(true)
+        setSpatialUiHovered(true, hoverId)
       }}
-      onPointerOut={() => setHovered(false)}
+      onPointerOut={(e) => {
+        e.stopPropagation()
+        setHovered(false)
+        setSpatialUiHovered(false, hoverId)
+      }}
       onClick={(e) => {
         e.stopPropagation()
+        playSpatialUiFeedback('ui-click')
         onClick()
       }}
     >
@@ -715,32 +761,14 @@ export function ShootingRangeRoom3D({
   const [tacticalTargets, setTacticalTargets] = useState<
     TacticalSilhouetteTarget[]
   >(() => createInitialTacticalTargets())
-  const [aerialTargets, setAerialTargets] = useState<AerialTarget[]>([
-    {
-      id: 'clay-1',
-      kind: 'clay',
-      pos: [firingLineX - 11.65, 2.2, rangeZ - 2.2],
-      vel: [-3.2, 1.4, 2.4],
-      radius: 0.34,
-      active: true,
-    },
-    {
-      id: 'drone-1',
-      kind: 'drone',
-      pos: [firingLineX - 17.65, 2.5, rangeZ + 1.8],
-      vel: [2.4, 0.6, -2.8],
-      radius: 0.38,
-      active: true,
-    },
-    {
-      id: 'clay-2',
-      kind: 'clay',
-      pos: [firingLineX - 8.65, 1.9, rangeZ + 0.5],
-      vel: [-4.0, 1.8, -2.1],
-      radius: 0.34,
-      active: true,
-    },
-  ])
+  const aerialTargetsRef = useRef<AerialTarget[]>(
+    createInitialAerialTargets(firingLineX, rangeZ),
+  )
+  const [hoveredArmoryWeaponId, setHoveredArmoryWeaponId] =
+    useState<RangeWeaponId | null>(null)
+  const [hoveredBoothSeatId, setHoveredBoothSeatId] = useState<string | null>(
+    null,
+  )
   const [tracers, setTracers] = useState<BallisticTracer[]>([])
   const [popups, setPopups] = useState<ImpactPopup[]>([])
   const [muzzleFlashOn, setMuzzleFlashOn] = useState(false)
@@ -757,28 +785,43 @@ export function ShootingRangeRoom3D({
   const aerialGroupRefs = useRef<Record<string, THREE.Group | null>>({})
 
   const ammoRef = useRef(ammoInMag)
-  ammoRef.current = ammoInMag
   const isReloadingRef = useRef(isReloading)
-  isReloadingRef.current = isReloading
   const shotgunNeedsPumpRef = useRef(shotgunNeedsPump)
-  shotgunNeedsPumpRef.current = shotgunNeedsPump
   const equippedWeaponRef = useRef(equippedWeapon)
-  equippedWeaponRef.current = equippedWeapon
   const rangeModeRef = useRef(rangeMode)
-  rangeModeRef.current = rangeMode
   const carrierDistanceRef = useRef(carrierDistanceM)
-  carrierDistanceRef.current = carrierDistanceM
   const scoreRef = useRef(score)
-  scoreRef.current = score
   const highScoreRef = useRef(highScore)
-  highScoreRef.current = highScore
   const streakRef = useRef(streak)
-  streakRef.current = streak
   const bestStreakRef = useRef(bestStreak)
-  bestStreakRef.current = bestStreak
   const steelTargetsRef = useRef(steelTargets)
-  steelTargetsRef.current = steelTargets
   const twoHandActiveRef = useRef(true)
+
+  useEffect(() => {
+    ammoRef.current = ammoInMag
+    isReloadingRef.current = isReloading
+    shotgunNeedsPumpRef.current = shotgunNeedsPump
+    equippedWeaponRef.current = equippedWeapon
+    rangeModeRef.current = rangeMode
+    carrierDistanceRef.current = carrierDistanceM
+    scoreRef.current = score
+    highScoreRef.current = highScore
+    streakRef.current = streak
+    bestStreakRef.current = bestStreak
+    steelTargetsRef.current = steelTargets
+  }, [
+    ammoInMag,
+    bestStreak,
+    carrierDistanceM,
+    equippedWeapon,
+    highScore,
+    isReloading,
+    rangeMode,
+    score,
+    shotgunNeedsPump,
+    steelTargets,
+    streak,
+  ])
 
   const lastFireTimeRef = useRef(0)
   const recoilOffsetRef = useRef(0)
@@ -1209,7 +1252,7 @@ export function ShootingRangeRoom3D({
       // MODE 4: AERIAL CLAY PIGEONS & TACTICAL DRONE INTERCEPT
       // ---------------------------------------------------------------------
       if (mode === 'skeet-drones') {
-        for (const air of aerialTargets) {
+        for (const air of aerialTargetsRef.current) {
           if (!air.active) continue
           const toTargetX = air.pos[0] - origin.x
           const toTargetY = air.pos[1] - origin.y
@@ -1230,25 +1273,13 @@ export function ShootingRangeRoom3D({
           if (dist <= air.radius + 0.08) {
             shootingRangeAudio.playTargetHit('shatter')
             const pts = air.kind === 'drone' ? 250 : 175
-            setAerialTargets((prev) =>
-              prev.map((item) =>
-                item.id === air.id
-                  ? {
-                      ...item,
-                      pos: [
-                        firingLineX - (12 + Math.random() * 16),
-                        1.4 + Math.random() * 1.4,
-                        rangeZ + (Math.random() - 0.5) * 6.2,
-                      ],
-                      vel: [
-                        (Math.random() - 0.5) * 5.2,
-                        1.2 + Math.random() * 1.2,
-                        (Math.random() > 0.5 ? 1 : -1) * (2.2 + Math.random() * 1.6),
-                      ],
-                    }
-                  : item,
-              ),
-            )
+            air.pos[0] = firingLineX - (12 + Math.random() * 16)
+            air.pos[1] = 1.4 + Math.random() * 1.4
+            air.pos[2] = rangeZ + (Math.random() - 0.5) * 6.2
+            air.vel[0] = (Math.random() - 0.5) * 5.2
+            air.vel[1] = 1.2 + Math.random() * 1.2
+            air.vel[2] =
+              (Math.random() > 0.5 ? 1 : -1) * (2.2 + Math.random() * 1.6)
             return {
               hit: true,
               points: pts,
@@ -1278,7 +1309,7 @@ export function ShootingRangeRoom3D({
         color: '#64748B',
       }
     },
-    [aerialTargets, firingLineX, rangeZ, tacticalTargets],
+    [firingLineX, rangeZ, tacticalTargets],
   )
 
   // Execute a single discharge (with single bullet or 8-pellet shotgun spread)
@@ -1549,7 +1580,7 @@ export function ShootingRangeRoom3D({
   // 3. Motorized Target Carriers, Moving Silhouettes & Aerial Clay/Drone Flight
   // =========================================================================
   useFrame((_, delta) => {
-    if (!visible) return
+    if (!visible || !isActiveRoom) return
     const dt = Math.min(delta, 0.1)
     const nowMs = Date.now()
     const elapsedSec = performance.now() / 1000
@@ -1604,7 +1635,7 @@ export function ShootingRangeRoom3D({
 
     // 3. Step Aerial Clay Pigeons & Drones
     if (rangeModeRef.current === 'skeet-drones' && isActiveRoom) {
-      for (const air of aerialTargets) {
+      for (const air of aerialTargetsRef.current) {
         air.pos[0] += air.vel[0] * dt
         air.pos[1] += air.vel[1] * dt
         air.pos[2] += air.vel[2] * dt
@@ -1699,14 +1730,14 @@ export function ShootingRangeRoom3D({
           // =================================================================
           // 2-CONTROLLER CONFIGURATION (Rifles, Shotguns, Sniper Long Guns)
           // Rear Controller = Pistol Grip & Trigger
-          // Front Controller = Foregrip / Barrel Vector Stabilization
+          // Front Controller = Foregrip / Barrel Vector Stabilization (Squeeze/Grip)
           // =================================================================
           const distHands = hasSecondary
             ? scratchPrimaryPos.distanceTo(scratchSecondaryPos)
             : 0
           const offhandSqueeze = isControllerButtonPressed(
             secondaryCtrl,
-            ['xr-standard-squeeze', 'xr-standard-trigger'],
+            ['xr-standard-squeeze'],
             1,
           )
           const naturalTwoHandReach =
@@ -1778,23 +1809,30 @@ export function ShootingRangeRoom3D({
         weaponGrp.quaternion.multiply(scratchRecoilQuat)
         weaponGrp.translateZ(recoilOffsetRef.current)
 
+        // Check whether the barrel is aimed downrange (-X) and not hovering over any 3D UI
+        const barrelDirX = scratchBarrelDir
+          .set(0, 0, -1)
+          .applyQuaternion(weaponGrp.quaternion).x
+        const aimingDownrange = barrelDirX < -0.25 && !isSpatialUiHovered()
+
         // Poll Primary VR Trigger (`xr-standard-trigger`, button 0) to Fire
         const triggerPressed = isControllerButtonPressed(
           primaryCtrl,
           ['xr-standard-trigger'],
           0,
         )
-        if (triggerPressed) {
+        if (triggerPressed && aimingDownrange) {
           if (!prevTriggerPressedRef.current || spec.automatic) {
             handlePullTrigger()
           }
         }
         prevTriggerPressedRef.current = triggerPressed
 
-        // Poll Reload (`a-button` / `x-button`, button 4)
+        // Poll Right A Button (`a-button`, button 4 on right controller) for Reload
+        // (Left X is reserved globally for VR Floor Teleport)
         const reloadPressed = isControllerButtonPressed(
-          primaryCtrl,
-          ['a-button', 'x-button'],
+          rightController ?? primaryCtrl,
+          ['a-button'],
           4,
         )
         if (reloadPressed && !prevReloadPressedRef.current) {
@@ -1802,10 +1840,11 @@ export function ShootingRangeRoom3D({
         }
         prevReloadPressedRef.current = reloadPressed
 
-        // Poll Quick-Swap Weapon (`b-button` / `y-button`, button 5)
+        // Poll Right B Button (`b-button`, button 5 on right controller) for Quick-Swap Weapon
+        // (Left Y is reserved globally for Toggle Control Dock)
         const swapPressed = isControllerButtonPressed(
-          primaryCtrl,
-          ['b-button', 'y-button'],
+          rightController ?? primaryCtrl,
+          ['b-button'],
           5,
         )
         if (swapPressed && !prevSwapPressedRef.current) {
@@ -1866,18 +1905,20 @@ export function ShootingRangeRoom3D({
     }
   })
 
-  // Pointer move & click on the downrange target bay for seamless Desktop/Mobile & VR Ray shooting
+  // Pointer move & click on the downrange target bay for seamless Desktop/Mobile & VR Hand-Tracking shooting
   const handleRangePointerMove = useCallback((e: ThreeEvent<PointerEvent>) => {
     desktopAimWorldRef.current.copy(e.point)
   }, [])
 
   const handleRangePointerDown = useCallback(
     (e: ThreeEvent<PointerEvent>) => {
-      if (inVR) return // In VR, physical trigger in useFrame handles firing cleanly
+      // When VR controllers are active, physical trigger in useFrame handles firing;
+      // when using WebXR Hand Tracking (no controller gamepads), allow pinch-to-fire via pointer down!
+      if (inVR && (rightController || leftController)) return
       e.stopPropagation()
       handlePullTrigger(e.point)
     },
-    [handlePullTrigger, inVR],
+    [handlePullTrigger, inVR, leftController, rightController],
   )
 
   const accuracyPct =
@@ -2030,13 +2071,28 @@ export function ShootingRangeRoom3D({
             const rowIdx = idx % 3
             const rowY = 0.36 - rowIdx * 0.56
             const selected = equippedWeaponId === w.id
+            const isHovered = hoveredArmoryWeaponId === w.id
 
             return (
               <group
                 key={w.id}
                 position={[colX, rowY, 0.04]}
+                scale={isHovered ? 1.03 : 1}
+                onPointerOver={(e) => {
+                  e.stopPropagation()
+                  setHoveredArmoryWeaponId(w.id)
+                  setSpatialUiHovered(true, `armory-card-${w.id}`)
+                }}
+                onPointerOut={(e) => {
+                  e.stopPropagation()
+                  setHoveredArmoryWeaponId((prev) =>
+                    prev === w.id ? null : prev,
+                  )
+                  setSpatialUiHovered(false, `armory-card-${w.id}`)
+                }}
                 onClick={(e) => {
                   e.stopPropagation()
+                  playSpatialUiFeedback('ui-click')
                   handleSelectWeapon(w.id)
                 }}
               >
@@ -2046,14 +2102,16 @@ export function ShootingRangeRoom3D({
                   smoothness={2}
                 >
                   <meshBasicMaterial
-                    color={selected ? '#1E293B' : '#0F172A'}
+                    color={
+                      selected ? '#1E293B' : isHovered ? '#17253B' : '#0F172A'
+                    }
                   />
                 </RoundedBox>
                 {/* Selection Border Stripe */}
                 <mesh position={[-0.87, 0, 0.015]} raycast={noopRaycast}>
                   <boxGeometry args={[0.03, 0.42, 0.01]} />
                   <meshBasicMaterial
-                    color={selected ? '#FACC15' : w.accentColor}
+                    color={selected || isHovered ? '#FACC15' : w.accentColor}
                   />
                 </mesh>
 
@@ -2072,7 +2130,7 @@ export function ShootingRangeRoom3D({
                 <Text
                   position={[-0.02, 0.11, 0.02]}
                   fontSize={0.052}
-                  color={selected ? '#FACC15' : '#F8FAFC'}
+                  color={selected || isHovered ? '#FACC15' : '#F8FAFC'}
                   anchorX="left"
                   anchorY="middle"
                 >
@@ -2408,12 +2466,26 @@ export function ShootingRangeRoom3D({
         {boothSeats.map((seat, idx) => {
           const isLocal = localSeatId === seat.id
           const occupant = seatOccupants.get(seat.id)
+          const isHovered = hoveredBoothSeatId === seat.id
           return (
             <group
               key={seat.id}
               position={seat.position}
+              onPointerOver={(e) => {
+                e.stopPropagation()
+                setHoveredBoothSeatId(seat.id)
+                setSpatialUiHovered(true, `booth-seat-${seat.id}`)
+              }}
+              onPointerOut={(e) => {
+                e.stopPropagation()
+                setHoveredBoothSeatId((prev) =>
+                  prev === seat.id ? null : prev,
+                )
+                setSpatialUiHovered(false, `booth-seat-${seat.id}`)
+              }}
               onClick={(e) => {
                 e.stopPropagation()
+                playSpatialUiFeedback('ui-click')
                 onSelectSeat(seat.id)
               }}
             >
@@ -2423,14 +2495,22 @@ export function ShootingRangeRoom3D({
                 radius={0.01}
               >
                 <meshBasicMaterial
-                  color={isLocal ? '#EF4444' : occupant ? '#F59E0B' : '#1E293B'}
+                  color={
+                    isLocal
+                      ? '#EF4444'
+                      : occupant
+                        ? '#F59E0B'
+                        : isHovered
+                          ? '#334155'
+                          : '#1E293B'
+                  }
                 />
               </RoundedBox>
               <Text
                 position={[0.22, 0.03, 0]}
                 rotation={[-Math.PI / 2, 0, Math.PI / 2]}
                 fontSize={0.075}
-                color="#F8FAFC"
+                color={isHovered ? '#FDE68A' : '#F8FAFC'}
                 anchorX="center"
                 anchorY="middle"
               >
@@ -2906,13 +2986,17 @@ export function ShootingRangeRoom3D({
         {/* MODE 4 TARGETS: AERIAL CLAY PIGEONS & TACTICAL DRONES             */}
         {/* ================================================================= */}
         <group visible={rangeMode === 'skeet-drones'}>
-          {aerialTargets.map((air) => (
+          {AERIAL_TARGET_SPECS.map((air) => (
             <group
               key={air.id}
               ref={(el) => {
                 aerialGroupRefs.current[air.id] = el
               }}
-              position={air.pos}
+              position={[
+                firingLineX + air.initialPosOffset[0],
+                air.initialPosOffset[1],
+                rangeZ + air.initialPosOffset[2],
+              ]}
             >
               {air.kind === 'clay' ? (
                 <mesh raycast={noopRaycast}>

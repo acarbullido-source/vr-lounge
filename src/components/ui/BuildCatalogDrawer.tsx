@@ -107,19 +107,19 @@ export function BuildCatalogDrawer({
   return (
     <section
       id="hangout-customize-drawer"
-      className="pointer-events-auto lounge-panel mx-auto mb-3 w-full max-w-4xl rounded-2xl p-4 sm:p-5"
+      className="pointer-events-auto lounge-panel mx-auto mb-3 w-full max-w-4xl rounded-3xl border border-white/10 bg-slate-900/80 p-4 shadow-2xl sm:p-5"
     >
       {/* Top Header & Sub-Tabs */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#f4f1ea]/10 pb-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
         <div className="flex flex-wrap items-center gap-1.5">
           <button
             id="btn-studio-tab-furniture"
             type="button"
             onClick={() => setActiveTab('furniture')}
-            className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
+            className={`lounge-btn inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold ${
               activeTab === 'furniture'
-                ? 'bg-[#e5a93c] text-[#080a0d]'
-                : 'bg-[#141922] text-[#c7c2b8] hover:text-[#f4f1ea]'
+                ? 'bg-[#e5a93c] text-[#080a0d] shadow-sm'
+                : 'border border-white/10 bg-zinc-900/85 text-[#c7c2b8] hover:bg-slate-800/85 hover:text-[#f4f1ea]'
             }`}
           >
             <Sofa className="h-3.5 w-3.5" />
@@ -130,10 +130,10 @@ export function BuildCatalogDrawer({
             id="btn-studio-tab-layout"
             type="button"
             onClick={() => setActiveTab('layout')}
-            className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
+            className={`lounge-btn inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold ${
               activeTab === 'layout'
-                ? 'bg-[#e5a93c] text-[#080a0d]'
-                : 'bg-[#141922] text-[#c7c2b8] hover:text-[#f4f1ea]'
+                ? 'bg-[#e5a93c] text-[#080a0d] shadow-sm'
+                : 'border border-white/10 bg-zinc-900/85 text-[#c7c2b8] hover:bg-slate-800/85 hover:text-[#f4f1ea]'
             }`}
           >
             <Maximize2 className="h-3.5 w-3.5" />
@@ -144,10 +144,10 @@ export function BuildCatalogDrawer({
             id="btn-studio-tab-screen"
             type="button"
             onClick={() => setActiveTab('screen')}
-            className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
+            className={`lounge-btn inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold ${
               activeTab === 'screen'
-                ? 'bg-[#e5a93c] text-[#080a0d]'
-                : 'bg-[#141922] text-[#c7c2b8] hover:text-[#f4f1ea]'
+                ? 'bg-[#e5a93c] text-[#080a0d] shadow-sm'
+                : 'border border-white/10 bg-zinc-900/85 text-[#c7c2b8] hover:bg-slate-800/85 hover:text-[#f4f1ea]'
             }`}
           >
             <Tv className="h-3.5 w-3.5" />
@@ -158,10 +158,10 @@ export function BuildCatalogDrawer({
             id="btn-studio-tab-mood"
             type="button"
             onClick={() => setActiveTab('mood')}
-            className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
+            className={`lounge-btn inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold ${
               activeTab === 'mood'
-                ? 'bg-[#e5a93c] text-[#080a0d]'
-                : 'bg-[#141922] text-[#c7c2b8] hover:text-[#f4f1ea]'
+                ? 'bg-[#e5a93c] text-[#080a0d] shadow-sm'
+                : 'border border-white/10 bg-zinc-900/85 text-[#c7c2b8] hover:bg-slate-800/85 hover:text-[#f4f1ea]'
             }`}
           >
             <Lightbulb className="h-3.5 w-3.5" />
@@ -174,10 +174,10 @@ export function BuildCatalogDrawer({
             id="btn-toggle-3d-build-gizmo"
             type="button"
             onClick={() => onToggleBuildMode(!buildMode)}
-            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition ${
+            className={`lounge-btn inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold ${
               buildMode
                 ? 'border-[#22d3ee] bg-[#22d3ee]/15 text-[#22d3ee]'
-                : 'border-[#f4f1ea]/12 bg-[#141922] text-[#c7c2b8] hover:text-[#f4f1ea]'
+                : 'border-white/10 bg-zinc-900/85 text-[#c7c2b8] hover:bg-slate-800/85 hover:text-[#f4f1ea]'
             }`}
           >
             <Hammer className="h-3.5 w-3.5" />
@@ -188,7 +188,7 @@ export function BuildCatalogDrawer({
             id="btn-close-studio-drawer"
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1 text-[#8a867e] hover:text-[#f4f1ea]"
+            className="lounge-btn rounded-lg p-1.5 text-[#8a867e] hover:bg-white/10 hover:text-[#f4f1ea]"
           >
             <X className="h-4 w-4" />
           </button>
@@ -216,10 +216,10 @@ export function BuildCatalogDrawer({
                   id={`btn-cat-${cat}`}
                   type="button"
                   onClick={() => setCatFilter(cat)}
-                  className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                  className={`lounge-btn rounded-lg px-2.5 py-1 text-xs font-medium ${
                     catFilter === cat
-                      ? 'bg-[#f4f1ea] text-[#080a0d]'
-                      : 'bg-[#141922] text-[#c7c2b8] hover:text-[#f4f1ea]'
+                      ? 'bg-[#f4f1ea] text-[#080a0d] shadow-sm'
+                      : 'border border-white/10 bg-zinc-900/85 text-[#c7c2b8] hover:text-[#f4f1ea]'
                   }`}
                 >
                   {label}
@@ -234,7 +234,7 @@ export function BuildCatalogDrawer({
                   id={`btn-spawn-${entry.id}`}
                   type="button"
                   onClick={() => onSpawnFurniture(entry.id)}
-                  className="flex flex-col justify-between rounded-xl border border-[#f4f1ea]/10 bg-[#080a0d]/75 p-2.5 text-left transition hover:border-[#e5a93c]/60 hover:bg-[#121824]"
+                  className="lounge-btn flex flex-col justify-between rounded-xl border border-white/10 bg-zinc-900/85 p-2.5 text-left hover:border-[#e5a93c]/60 hover:bg-slate-800/85"
                 >
                   <div className="flex items-center justify-between gap-1">
                     <span className="text-xs font-semibold text-[#f4f1ea]">

@@ -121,21 +121,21 @@ export function ShuffleboardTable3D({
         radius={0.025}
         smoothness={2}
       >
-        <meshStandardMaterial color="#2C1610" roughness={0.52} metalness={0.18} />
+        <meshStandardMaterial color="#2C1610" roughness={0.35} metalness={0.1} />
       </RoundedBox>
       {[-1.08, 0, 1.08].map((lz) => (
         <group key={lz} position={[0, 0.34, lz]}>
           <mesh position={[-0.22, 0, 0]}>
             <boxGeometry args={[0.08, 0.68, 0.12]} />
-            <meshStandardMaterial color="#1E1410" roughness={0.6} />
+            <meshStandardMaterial color="#1E1410" roughness={0.35} metalness={0.1} />
           </mesh>
           <mesh position={[0.22, 0, 0]}>
             <boxGeometry args={[0.08, 0.68, 0.12]} />
-            <meshStandardMaterial color="#1E1410" roughness={0.6} />
+            <meshStandardMaterial color="#1E1410" roughness={0.35} metalness={0.1} />
           </mesh>
           <mesh position={[0, -0.14, 0]}>
             <boxGeometry args={[0.48, 0.05, 0.06]} />
-            <meshStandardMaterial color="#E5A93C" metalness={0.65} roughness={0.3} />
+            <meshStandardMaterial color="#E5A93C" metalness={0.75} roughness={0.25} />
           </mesh>
         </group>
       ))}
@@ -146,7 +146,7 @@ export function ShuffleboardTable3D({
         <meshStandardMaterial color="#0F172A" roughness={0.85} />
       </mesh>
 
-      {/* Glossy Butcher-Block Maple Playfield (Click anywhere on board to slide puck!) */}
+      {/* Warm Satin Butcher-Block Maple Playfield (Click anywhere on board to slide puck!) */}
       <mesh
         name="shuffleboard-playfield"
         position={[0, 0.816, 0]}
@@ -161,7 +161,7 @@ export function ShuffleboardTable3D({
         }}
       >
         <boxGeometry args={[0.41, 0.022, 2.48]} />
-        <meshStandardMaterial color="#DFB178" roughness={0.18} metalness={0.08} />
+        <meshStandardMaterial color="#DFB178" roughness={0.35} metalness={0.1} />
       </mesh>
 
       {/* Scoring Zone Lines & 1-2-3-4 Numbers at North End (localZ < -0.35) */}
@@ -208,7 +208,7 @@ export function ShuffleboardTable3D({
         <group key={p.id} position={[p.localX, 0.836, p.localZ]}>
           <mesh>
             <cylinderGeometry args={[0.032, 0.034, 0.018, 18]} />
-            <meshStandardMaterial color="#CBD5E1" metalness={0.78} roughness={0.22} />
+            <meshStandardMaterial color="#CBD5E1" metalness={0.75} roughness={0.25} />
           </mesh>
           <mesh position={[0, 0.01, 0]}>
             <cylinderGeometry args={[0.024, 0.024, 0.004, 16]} />
@@ -225,7 +225,7 @@ export function ShuffleboardTable3D({
       >
         <mesh>
           <cylinderGeometry args={[0.032, 0.034, 0.018, 18]} />
-          <meshStandardMaterial color="#F8FAFC" metalness={0.82} roughness={0.18} />
+          <meshStandardMaterial color="#F8FAFC" metalness={0.75} roughness={0.25} />
         </mesh>
         <mesh position={[0, 0.01, 0]}>
           <cylinderGeometry args={[0.024, 0.024, 0.004, 16]} />
@@ -240,7 +240,7 @@ export function ShuffleboardTable3D({
         <group position={[aimX, 0.836, 1.08]}>
           <mesh>
             <cylinderGeometry args={[0.032, 0.034, 0.018, 18]} />
-            <meshStandardMaterial color="#E2E8F0" metalness={0.75} roughness={0.22} />
+            <meshStandardMaterial color="#E2E8F0" metalness={0.75} roughness={0.25} />
           </mesh>
           <mesh position={[0, 0.01, 0]}>
             <cylinderGeometry args={[0.024, 0.024, 0.004, 16]} />
@@ -263,7 +263,10 @@ export function ShuffleboardTable3D({
           <meshStandardMaterial color="#E5A93C" metalness={0.75} roughness={0.25} />
         </mesh>
 
-        {/* Scoreboard Display Header (Double-Sided Readability) */}
+        {/* Scoreboard Display Header (Double-Sided Readability + Brushed Metallic Outer Bezel) */}
+        <RoundedBox args={[0.78, 0.34, 0.036]} radius={0.024} smoothness={2} position={[0, 0, -0.004]}>
+          <meshStandardMaterial color="#1E293B" metalness={0.75} roughness={0.25} />
+        </RoundedBox>
         <RoundedBox args={[0.74, 0.3, 0.04]} radius={0.02} smoothness={2}>
           <meshBasicMaterial color="#090E18" />
         </RoundedBox>

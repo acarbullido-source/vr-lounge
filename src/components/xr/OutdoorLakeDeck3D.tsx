@@ -6,6 +6,8 @@ import {
   OUTDOOR_SKY_PRESETS,
   type ExpansionWingLayout,
 } from '../../constants/expansionRooms'
+import { playSpatialUiFeedback } from '../../services/soundboardAudio'
+import { setSpatialUiHovered } from '../../services/xrTracking'
 import type { CornholeBagRecord, CornholeState } from '../../types/barGames'
 import type {
   ComputedSeat,
@@ -48,6 +50,7 @@ function CedarAdirondackChair({
       onClick={(e) => {
         e.stopPropagation()
         if (!takenByOther) {
+          playSpatialUiFeedback('teleport')
           onSelectSeat(seat.id)
         }
       }}
@@ -357,6 +360,7 @@ export function OutdoorLakeDeck3D({
   cornholeState,
   localDisplayName,
   visible = true,
+  isActiveRoom = false,
   onRecordCornholeThrow,
   onResetCornhole,
   onSelectSeat,
@@ -368,6 +372,8 @@ export function OutdoorLakeDeck3D({
     OUTDOOR_SKY_PRESETS[wingState.outdoorSkyPreset] ??
     OUTDOOR_SKY_PRESETS['golden-sunset']
   const brightnessScale = Math.max(0.6, Math.min(1.65, lighting.brightness))
+  const [hoveredSkyPreset, setHoveredSkyPreset] =
+    useState<OutdoorSkyPresetId | null>(null)
 
   const shimmer1Ref = useRef<THREE.Mesh>(null)
   const shimmer2Ref = useRef<THREE.Mesh>(null)
@@ -383,7 +389,7 @@ export function OutdoorLakeDeck3D({
   const cloudGroupRef = useRef<THREE.Group>(null)
 
   useFrame(({ clock }) => {
-    if (!visible) return
+    if (!visible || !isActiveRoom) return
     const t = clock.getElapsedTime()
     if (shimmer1Ref.current) {
       shimmer1Ref.current.scale.x = 1 + Math.sin(t * 1.4) * 0.14
@@ -839,17 +845,32 @@ export function OutdoorLakeDeck3D({
           ).map((presetId, idx) => {
             const spec = OUTDOOR_SKY_PRESETS[presetId]
             const active = wingState.outdoorSkyPreset === presetId
+            const isHovered = hoveredSkyPreset === presetId
             return (
               <group
                 key={presetId}
                 position={[-0.32 + idx * 0.32, -0.05, 0.02]}
+                scale={isHovered ? 1.05 : 1}
+                onPointerOver={(e) => {
+                  e.stopPropagation()
+                  setHoveredSkyPreset(presetId)
+                  setSpatialUiHovered(true, `outdoor-sky-${presetId}`)
+                }}
+                onPointerOut={(e) => {
+                  e.stopPropagation()
+                  setHoveredSkyPreset((prev) => (prev === presetId ? null : prev))
+                  setSpatialUiHovered(false, `outdoor-sky-${presetId}`)
+                }}
                 onClick={(e) => {
                   e.stopPropagation()
+                  playSpatialUiFeedback('ui-click')
                   onUpdateWingState({ outdoorSkyPreset: presetId })
                 }}
               >
                 <RoundedBox args={[0.29, 0.17, 0.015]} radius={0.018} smoothness={2}>
-                  <meshBasicMaterial color={active ? '#E5A93C' : '#1E293B'} />
+                  <meshBasicMaterial
+                    color={active ? '#E5A93C' : isHovered ? '#334155' : '#1E293B'}
+                  />
                 </RoundedBox>
                 <Text
                   position={[0, 0, 0.012]}

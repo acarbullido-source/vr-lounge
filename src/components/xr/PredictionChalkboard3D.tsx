@@ -41,6 +41,7 @@ function ChalkButton({
   return (
     <group
       position={position}
+      scale={hovered ? 1.04 : 1}
       pointerEventsType={{ deny: 'grab' }}
       onPointerOver={(e) => {
         e.stopPropagation()
@@ -52,6 +53,16 @@ function ChalkButton({
         onClick()
       }}
     >
+      {hovered && (
+        <RoundedBox
+          args={[width + 0.006, height + 0.006, 0.012]}
+          radius={0.016}
+          smoothness={2}
+          position={[0, 0, -0.0015]}
+        >
+          <meshBasicMaterial color="#FDE68A" transparent opacity={0.75} />
+        </RoundedBox>
+      )}
       <RoundedBox args={[width, height, 0.014]} radius={0.014} smoothness={2}>
         <meshBasicMaterial color={hovered ? hoverFill : fill} />
       </RoundedBox>
@@ -101,21 +112,26 @@ export function PredictionChalkboard3D({
       position={chalkboardCenter}
       rotation={[0, Math.PI, 0]}
     >
-      {/* Warm Oak Chalkboard Frame */}
+      {/* Brushed Metallic Outer Mounting Bezel */}
+      <RoundedBox args={[1.59, 1.27, 0.036]} position={[0, 0, -0.005]} radius={0.028} smoothness={2}>
+        <meshStandardMaterial color="#27272A" roughness={0.25} metalness={0.75} />
+      </RoundedBox>
+
+      {/* Warm Satin Oak Chalkboard Frame */}
       <RoundedBox args={[1.56, 1.24, 0.042]} radius={0.024} smoothness={2}>
-        <meshStandardMaterial color="#3A2416" roughness={0.65} metalness={0.1} />
+        <meshStandardMaterial color="#3A2416" roughness={0.35} metalness={0.1} />
       </RoundedBox>
 
       {/* Matte Slate Chalkboard Writing Surface */}
       <mesh position={[0, 0, 0.022]}>
         <planeGeometry args={[1.46, 1.14]} />
-        <meshStandardMaterial color="#14231C" roughness={0.92} metalness={0.02} />
+        <meshStandardMaterial color="#14231C" roughness={0.85} metalness={0.04} />
       </mesh>
 
       {/* Lower Wooden Chalk Tray + Colored Chalk Sticks */}
       <mesh position={[0, -0.59, 0.055]}>
         <boxGeometry args={[1.42, 0.028, 0.075]} />
-        <meshStandardMaterial color="#4A2E1B" roughness={0.6} />
+        <meshStandardMaterial color="#4A2E1B" roughness={0.35} metalness={0.1} />
       </mesh>
       <mesh position={[-0.32, -0.568, 0.058]} rotation={[0, 0.12, Math.PI / 2]}>
         <cylinderGeometry args={[0.007, 0.007, 0.08, 8]} />

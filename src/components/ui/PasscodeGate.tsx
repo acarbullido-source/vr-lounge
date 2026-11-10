@@ -81,21 +81,21 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
   return (
     <div
       id="vr-lounge-passcode-gate"
-      className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-gradient-to-b from-[#06080c]/92 via-[#080b10]/86 to-[#06080c]/95 p-4 backdrop-blur-md"
+      className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-gradient-to-b from-slate-950/92 via-zinc-950/88 to-slate-950/95 p-4 backdrop-blur-xl"
     >
       <div
-        className={`lounge-panel w-full max-w-md rounded-3xl border border-[#f4f1ea]/14 p-6 shadow-2xl transition-transform sm:p-7 ${
+        className={`lounge-panel w-full max-w-md rounded-3xl border border-white/10 bg-slate-900/80 p-6 shadow-2xl transition-all duration-200 sm:p-7 ${
           shake ? 'translate-x-1.5 border-[#e05a47]/70' : ''
         }`}
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#e5a93c]/40 bg-[#e5a93c]/15 text-[#e5a93c]">
+          <div className="flex items-center gap-3.5">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#e5a93c]/40 bg-[#e5a93c]/15 text-[#e5a93c] shadow-inner">
               <Lock className="h-5 w-5" />
             </div>
             <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-[#e5a93c]">
+              <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.2em] text-[#e5a93c]">
                 Private Hangout Gate
               </p>
               <h1
@@ -111,13 +111,13 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
             id="btn-passcode-mode-toggle"
             type="button"
             onClick={() => setShowAlphaPad((v) => !v)}
-            className="rounded-xl border border-[#f4f1ea]/12 bg-[#141922] px-2.5 py-1.5 text-[11px] font-medium text-[#c7c2b8] transition hover:border-[#e5a93c]/50 hover:text-[#f4f1ea]"
+            className="lounge-btn rounded-xl border border-white/10 bg-zinc-900/85 px-3 py-1.5 text-[11px] font-semibold tracking-wide text-[#c7c2b8] shadow-sm hover:border-[#e5a93c]/50 hover:bg-slate-800/80 hover:text-[#f4f1ea]"
           >
             {showAlphaPad ? '123 Pad' : 'ABC Pad'}
           </button>
         </div>
 
-        <p className="mt-2.5 text-xs leading-relaxed text-[#c7c2b8]">
+        <p className="mt-3 text-xs leading-relaxed text-[#c7c2b8]/90">
           Enter your private group passcode using the VR-friendly touch keypad or your keyboard.
           This headset or browser will stay unlocked automatically.
         </p>
@@ -151,7 +151,7 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
               type="button"
               onClick={() => setShowCode((s) => !s)}
               aria-label={showCode ? 'Hide passcode' : 'Show passcode'}
-              className="absolute right-3 rounded-lg p-1.5 text-[#8a867e] hover:text-[#f4f1ea]"
+              className="lounge-btn absolute right-3 rounded-lg p-1.5 text-[#8a867e] hover:bg-white/5 hover:text-[#f4f1ea]"
             >
               {showCode ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
@@ -161,7 +161,7 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
             <p
               id="passcode-error-banner"
               role="alert"
-              className="mt-2.5 rounded-xl border border-[#e05a47]/40 bg-[#e05a47]/12 px-3 py-2 text-center text-xs font-medium text-[#f28b7b]"
+              className="mt-2.5 rounded-xl border border-[#e05a47]/40 bg-[#e05a47]/12 px-3 py-2 text-center text-xs font-medium text-[#f28b7b] shadow-sm"
             >
               {errorMsg}
             </p>
@@ -176,7 +176,7 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
                   id={`btn-keypad-${digit}`}
                   type="button"
                   onClick={() => appendChar(digit)}
-                  className="flex h-14 items-center justify-center rounded-2xl border border-[#f4f1ea]/12 bg-[#131924] font-mono text-xl font-semibold text-[#f4f1ea] transition hover:border-[#e5a93c]/60 hover:bg-[#1c2536] active:scale-[0.97]"
+                  className="lounge-btn flex h-14 items-center justify-center rounded-2xl border border-white/10 bg-slate-900/85 font-mono text-xl font-semibold text-[#f4f1ea] shadow-sm hover:border-[#e5a93c]/60 hover:bg-slate-800/90 active:scale-[0.97]"
                 >
                   {digit}
                 </button>
@@ -188,7 +188,7 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
                   setCode('')
                   setErrorMsg(null)
                 }}
-                className="flex h-14 items-center justify-center rounded-2xl border border-[#f4f1ea]/10 bg-[#0e131c] text-xs font-semibold uppercase tracking-wider text-[#c7c2b8] transition hover:border-[#e05a47]/50 hover:text-[#f4f1ea] active:scale-[0.97]"
+                className="lounge-btn flex h-14 items-center justify-center rounded-2xl border border-white/10 bg-zinc-900/85 text-xs font-semibold uppercase tracking-wider text-[#c7c2b8] shadow-sm hover:border-[#e05a47]/50 hover:bg-zinc-800/90 hover:text-[#f4f1ea] active:scale-[0.97]"
               >
                 Clear
               </button>
@@ -196,7 +196,7 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
                 id="btn-keypad-0"
                 type="button"
                 onClick={() => appendChar('0')}
-                className="flex h-14 items-center justify-center rounded-2xl border border-[#f4f1ea]/12 bg-[#131924] font-mono text-xl font-semibold text-[#f4f1ea] transition hover:border-[#e5a93c]/60 hover:bg-[#1c2536] active:scale-[0.97]"
+                className="lounge-btn flex h-14 items-center justify-center rounded-2xl border border-white/10 bg-slate-900/85 font-mono text-xl font-semibold text-[#f4f1ea] shadow-sm hover:border-[#e5a93c]/60 hover:bg-slate-800/90 active:scale-[0.97]"
               >
                 0
               </button>
@@ -208,7 +208,7 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
                   setCode((prev) => prev.slice(0, -1))
                   setErrorMsg(null)
                 }}
-                className="flex h-14 items-center justify-center rounded-2xl border border-[#f4f1ea]/10 bg-[#0e131c] text-[#c7c2b8] transition hover:border-[#e5a93c]/50 hover:text-[#f4f1ea] active:scale-[0.97]"
+                className="lounge-btn flex h-14 items-center justify-center rounded-2xl border border-white/10 bg-zinc-900/85 text-[#c7c2b8] shadow-sm hover:border-[#e5a93c]/50 hover:bg-zinc-800/90 hover:text-[#f4f1ea] active:scale-[0.97]"
               >
                 <Delete className="h-5 w-5" />
               </button>
@@ -221,7 +221,7 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
                     key={d}
                     type="button"
                     onClick={() => appendChar(d)}
-                    className="flex h-10 items-center justify-center rounded-lg border border-[#f4f1ea]/10 bg-[#131924] font-mono text-xs font-semibold text-[#f4f1ea] hover:border-[#e5a93c]/60"
+                    className="lounge-btn flex h-10 items-center justify-center rounded-lg border border-white/10 bg-slate-900/85 font-mono text-xs font-semibold text-[#f4f1ea] hover:border-[#e5a93c]/60 hover:bg-slate-800/90"
                   >
                     {d}
                   </button>
@@ -235,7 +235,7 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
                       id={`btn-keypad-${ch.toLowerCase()}`}
                       type="button"
                       onClick={() => appendChar(ch)}
-                      className="flex h-10 min-w-[30px] flex-1 items-center justify-center rounded-lg border border-[#f4f1ea]/10 bg-[#131924] font-mono text-xs font-semibold text-[#f4f1ea] hover:border-[#e5a93c]/60"
+                      className="lounge-btn flex h-10 min-w-[30px] flex-1 items-center justify-center rounded-lg border border-white/10 bg-slate-900/85 font-mono text-xs font-semibold text-[#f4f1ea] hover:border-[#e5a93c]/60 hover:bg-slate-800/90"
                     >
                       {ch}
                     </button>
@@ -250,7 +250,7 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
                     setCode('')
                     setErrorMsg(null)
                   }}
-                  className="h-10 rounded-xl border border-[#f4f1ea]/10 bg-[#0e131c] text-xs font-medium text-[#c7c2b8] hover:text-[#f4f1ea]"
+                  className="lounge-btn h-10 rounded-xl border border-white/10 bg-zinc-900/85 text-xs font-medium text-[#c7c2b8] hover:border-[#e05a47]/50 hover:text-[#f4f1ea]"
                 >
                   Clear
                 </button>
@@ -261,7 +261,7 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
                     setCode((prev) => prev.slice(0, -1))
                     setErrorMsg(null)
                   }}
-                  className="flex h-10 items-center justify-center gap-1.5 rounded-xl border border-[#f4f1ea]/10 bg-[#0e131c] text-xs font-medium text-[#c7c2b8] hover:text-[#f4f1ea]"
+                  className="lounge-btn flex h-10 items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-zinc-900/85 text-xs font-medium text-[#c7c2b8] hover:border-[#e5a93c]/50 hover:text-[#f4f1ea]"
                 >
                   <Delete className="h-4 w-4" /> Backspace
                 </button>
@@ -273,7 +273,7 @@ export function PasscodeGate({ onUnlocked }: PasscodeGateProps) {
             id="btn-unlock-lounge"
             type="submit"
             disabled={verifying}
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#e5a93c] px-4 py-3.5 text-sm font-semibold text-[#080a0d] shadow-lg transition hover:bg-[#f2be5c] active:scale-[0.99] disabled:opacity-60"
+            className="lounge-btn mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#e5a93c] px-4 py-3.5 text-sm font-semibold text-[#080a0d] shadow-lg shadow-[#e5a93c]/15 hover:bg-[#f2be5c] active:scale-[0.99] disabled:opacity-50"
           >
             <ShieldCheck className="h-4 w-4" />
             <span>
