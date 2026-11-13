@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ParticipantProfile, WebRTCSignalMessage } from '../types/lounge'
+import type {
+  AvatarPose6DoF,
+  NesWireEvent,
+  ParticipantProfile,
+  WebRTCSignalMessage,
+} from '../types/lounge'
 
 interface PeerEntry {
   userId: string
@@ -243,6 +248,8 @@ export interface UseWebRTCOptions {
   selectedMicId: string
   sendSignal: (signal: WebRTCSignalMessage) => void
   onScreenShareEndedByBrowser?: () => void
+  onPeerDataPose?: (pose: AvatarPose6DoF) => void
+  onPeerDataNesInput?: (event: Extract<NesWireEvent, { kind: 'nes-input' }>) => void
 }
 
 export function useWebRTC({
@@ -255,6 +262,8 @@ export function useWebRTC({
   selectedMicId,
   sendSignal,
   onScreenShareEndedByBrowser,
+  onPeerDataPose,
+  onPeerDataNesInput,
 }: UseWebRTCOptions) {
   const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([])
   const [audioOutputs, setAudioOutputs] = useState<MediaDeviceInfo[]>([])
@@ -277,6 +286,8 @@ export function useWebRTC({
   const joinedRef = useRef(joined)
   const sendSignalRef = useRef(sendSignal)
   const onEndedCallbackRef = useRef(onScreenShareEndedByBrowser)
+  const onPeerDataPoseRef = useRef(onPeerDataPose)
+  const onPeerDataNesInputRef = useRef(onPeerDataNesInput)
 
   useEffect(() => {
     isMutedRef.current = isMuted
@@ -293,6 +304,14 @@ export function useWebRTC({
   useEffect(() => {
     onEndedCallbackRef.current = onScreenShareEndedByBrowser
   }, [onScreenShareEndedByBrowser])
+
+  useEffect(() => {
+    onPeerDataPoseRef.current = onPeerDataPose
+  }, [onPeerDataPose])
+
+  useEffect(() => {
+    onPeerDataNesInputRef.current = onPeerDataNesInput
+  }, [onPeerDataNesInput])
 
   const refreshDevices = useCallback(async () => {
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) {
@@ -659,12 +678,46 @@ export function useWebRTC({
         }
       }
 
-      // Impolite peer creates a lightweight data channel so negotiation always starts
-      // even if a spectator joins without a microphone
+      const bindSyncDataChannel = (dc: RTCDataChannel) => {
+        entry.keepAliveChannel = dc
+        dc.onmessage = (msgEv) => {
+          if (typeof msgEv.data !== 'string') return
+          try {
+            const parsed = JSON.parse(msgEv.data) as {
+              t?: string
+              p?: unknown
+            }
+            if (parsed.t === 'pose' && parsed.p && typeof parsed.p === 'object') {
+              const pose = parsed.p as AvatarPose6DoF
+              if (pose.userId === remoteUserId) {
+                onPeerDataPoseRef.current?.(pose)
+              }
+            } else if (parsed.t === 'nes-in' && parsed.p && typeof parsed.p === 'object') {
+              const ev = parsed.p as Extract<NesWireEvent, { kind: 'nes-input' }>
+              if (ev.senderId === remoteUserId && ev.kind === 'nes-input') {
+                onPeerDataNesInputRef.current?.(ev)
+              }
+            }
+          } catch {
+            // Ignore malformed P2P data channel packets
+          }
+        }
+      }
+
+      // Impolite peer creates an unordered, low-latency data channel for P2P 6DoF poses & NES inputs
       if (!isPolite) {
-        entry.keepAliveChannel = pc.createDataChannel('vr-lounge-sync', {
-          ordered: false,
-        })
+        bindSyncDataChannel(
+          pc.createDataChannel('vr-lounge-sync', {
+            ordered: false,
+            maxRetransmits: 0,
+          }),
+        )
+      }
+
+      pc.ondatachannel = (ev) => {
+        if (ev.channel.label === 'vr-lounge-sync') {
+          bindSyncDataChannel(ev.channel)
+        }
       }
 
       pc.onicecandidate = (ev) => {
@@ -1233,6 +1286,29 @@ export function useWebRTC({
     }
   }, [stopTabShare])
 
+  // Broadcasts 6DoF avatar pose directly over open peer-to-peer WebRTC DataChannels.
+  // Returns true if all remote peers have an open DataChannel (so zero cloud relay messages are needed).
+  const broadcastPoseOverDataChannel = useCallback(
+    (pose: AvatarPose6DoF, expectedRemotePeerCount: number): boolean => {
+      if (expectedRemotePeerCount <= 0) return true
+      const packet = JSON.stringify({ t: 'pose', p: pose })
+      let deliveredCount = 0
+      for (const entry of peersRef.current.values()) {
+        const dc = entry.keepAliveChannel
+        if (dc && dc.readyState === 'open') {
+          try {
+            dc.send(packet)
+            deliveredCount++
+          } catch {
+            // Ignore transient buffer full error
+          }
+        }
+      }
+      return deliveredCount >= expectedRemotePeerCount
+    },
+    [],
+  )
+
   return {
     audioInputs,
     audioOutputs,
@@ -1247,6 +1323,7 @@ export function useWebRTC({
     acquireMicrophone,
     refreshDevices,
     handleWebRTCSignal,
+    broadcastPoseOverDataChannel,
     startTabShare,
     stopTabShare,
   }

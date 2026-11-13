@@ -332,7 +332,10 @@ export function useRoomSession(
         (isNesOnScreen && isSlotOpen) ||
         pres.activePresenterId === localUserId
 
-      if (!canBroadcastInput) return
+      const hasRemotePeers = participantsRef.current.some(
+        (p) => p.userId !== localUserId,
+      )
+      if (!canBroadcastInput || !hasRemotePeers) return
 
       svc.broadcastNesEvent({
         kind: 'nes-input',
@@ -388,10 +391,16 @@ export function useRoomSession(
     }, 650)
 
     const intervalId = window.setInterval(() => {
+      if (
+        typeof document !== 'undefined' &&
+        document.visibilityState === 'hidden'
+      ) {
+        return
+      }
       if (resolveAuthoritativeNesDriverId() === localUserId) {
         void broadcastLiveNesCheckpoint()
       }
-    }, 2500)
+    }, 4000)
 
     return () => {
       window.clearTimeout(initialTimer)
@@ -430,11 +439,6 @@ export function useRoomSession(
     const onVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
         flushLayoutToStorage()
-      } else if (document.visibilityState === 'visible') {
-        if (serviceRef.current) {
-          void serviceRef.current.updatePresence(localProfileRef.current)
-          serviceRef.current.requestRoomState()
-        }
       }
     }
 

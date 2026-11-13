@@ -998,7 +998,7 @@ export function useMediaScreen({
           Number.isFinite(videoElement.duration) ? videoElement.duration : 0,
         )
       }
-    }, 2000)
+    }, 6000)
 
     return () => {
       window.clearInterval(heartbeat)

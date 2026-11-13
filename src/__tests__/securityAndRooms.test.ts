@@ -51,6 +51,7 @@ import {
   lockDevicePasscode,
   verifyAndUnlockPasscode,
 } from '../services/passcode'
+import { shouldSendRealtimeEnvelopeToSupabase } from '../services/realtime'
 import {
   clearSpatialUiHoverPrefix,
   isSpatialDrawingSurfaceActive,
@@ -985,6 +986,56 @@ describe('VR Lounge Security, E2EE, Anti-Impersonation & Physics Regression Suit
     )
     assert.equal(loadPersistedBoardroomWhiteboard('ROOM-ALPHA')?.strokes.length, 1)
     assert.equal(loadPersistedBoardroomWhiteboard('ROOM-BETA'), null)
+  })
+
+  it('17. gates Supabase Realtime broadcasts when solo, hibernated, or offloaded to MQTT/WebRTC', () => {
+    // 1. Solo user in room -> 0 pose or NES input packets sent to Supabase
+    assert.equal(
+      shouldSendRealtimeEnvelopeToSupabase('pose-update', {}, false, false, false),
+      false,
+    )
+    assert.equal(
+      shouldSendRealtimeEnvelopeToSupabase(
+        'nes-event',
+        { kind: 'nes-input', player: 1, buttonsMask: 1 },
+        false,
+        false,
+        false,
+      ),
+      false,
+    )
+
+    // 2. Multi-user room with MQTT connected -> high-frequency pose & nes-input offloaded from Supabase
+    assert.equal(
+      shouldSendRealtimeEnvelopeToSupabase('pose-update', {}, true, true, false),
+      false,
+    )
+    assert.equal(
+      shouldSendRealtimeEnvelopeToSupabase(
+        'nes-event',
+        { kind: 'nes-input', player: 1, buttonsMask: 4 },
+        true,
+        true,
+        false,
+      ),
+      false,
+    )
+
+    // 3. Multi-user room when MQTT is offline -> falls back to Supabase so movement/inputs still work
+    assert.equal(
+      shouldSendRealtimeEnvelopeToSupabase('pose-update', {}, false, true, false),
+      true,
+    )
+
+    // 4. Hibernated background tab -> blocks all periodic traffic except presence-leave teardown
+    assert.equal(
+      shouldSendRealtimeEnvelopeToSupabase('presence-announce', {}, false, true, true),
+      false,
+    )
+    assert.equal(
+      shouldSendRealtimeEnvelopeToSupabase('presence-leave', {}, false, true, true),
+      true,
+    )
   })
 })
 

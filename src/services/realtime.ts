@@ -81,7 +81,8 @@ interface PresenceRecord {
 }
 
 const PRESENCE_TTL_MS = 75_000
-const PRESENCE_HEARTBEAT_MS = 2400
+const PRESENCE_HEARTBEAT_MS = 15_000
+const IDLE_HIBERNATION_MS = 15 * 60 * 1000
 
 const PUBLIC_WSS_BROKERS = [
   'wss://broker.emqx.io:8084/mqtt',
@@ -134,6 +135,36 @@ function shortPacketId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+export function shouldSendRealtimeEnvelopeToSupabase(
+  type: RelayEnvelopeType,
+  payload: unknown,
+  mqttConnected: boolean,
+  hasRemotePeers: boolean,
+  isHibernated = false,
+): boolean {
+  if (isHibernated && type !== 'presence-leave') {
+    return false
+  }
+  // Never consume Supabase Realtime quota for high-frequency 6DoF avatar poses when solo,
+  // or when the free TLS MQTT bus is connected to deliver them with zero quota usage.
+  if (type === 'pose-update') {
+    if (!hasRemotePeers) return false
+    if (mqttConnected) return false
+    return true
+  }
+  // Offload rapid NES controller button bitmask packets to MQTT when connected
+  if (
+    type === 'nes-event' &&
+    payload &&
+    typeof payload === 'object' &&
+    (payload as { kind?: string }).kind === 'nes-input'
+  ) {
+    if (!hasRemotePeers) return false
+    if (mqttConnected) return false
+  }
+  return true
+}
+
 async function resolveActiveMasterKeyHex(roomCode: string): Promise<string | null> {
   const unlockedKey = getUnlockedRoomMasterKeyHex()
   if (unlockedKey) return unlockedKey
@@ -176,6 +207,9 @@ export class RoomRealtimeService {
   private heartbeatWorker: Worker | null = null
   private heartbeatWorkerUrl: string | null = null
   private lifecycleAttached = false
+  private lastUserActivityAt = Date.now()
+  private hiddenSinceAt: number | null = null
+  private hibernated = false
   private presenceMap = new Map<string, PresenceRecord>()
   private seenPacketIds = new Set<string>()
   private lastAnnounceReplyByPeer = new Map<string, number>()
@@ -195,11 +229,86 @@ export class RoomRealtimeService {
     this.mode = hasSupabaseCredentials() ? 'supabase' : 'cloud-relay'
   }
 
+  public hasActiveRemotePeers(): boolean {
+    const now = Date.now()
+    for (const [uid, rec] of this.presenceMap.entries()) {
+      if (uid !== this.localUserId && now - rec.lastSeen < PRESENCE_TTL_MS) {
+        return true
+      }
+    }
+    return false
+  }
+
+  public isHibernated(): boolean {
+    return this.hibernated
+  }
+
+  private enterIdleHibernation(): void {
+    if (this.destroyed || this.hibernated) return
+    this.hibernated = true
+    if (this.supabaseReconnectTimer !== null) {
+      clearTimeout(this.supabaseReconnectTimer)
+      this.supabaseReconnectTimer = null
+    }
+    if (this.supabaseChannel) {
+      const client = getSupabaseClient()
+      const ch = this.supabaseChannel
+      this.supabaseChannel = null
+      void ch.untrack().catch(() => undefined)
+      if (client) {
+        void client.removeChannel(ch).catch(() => undefined)
+      }
+    }
+    if (this.mqttClient) {
+      try {
+        this.mqttClient.end(true)
+      } catch {
+        // Ignore cleanup error
+      }
+      this.mqttClient = null
+    }
+    this.callbacks.onConnectionStatus?.(false)
+  }
+
+  private handleUserActivity = (): void => {
+    this.lastUserActivityAt = Date.now()
+    if (this.hibernated && !this.destroyed) {
+      this.handleNetworkOrVisibilityWake()
+    }
+  }
+
   private runHeartbeatTick = (): void => {
     if (this.destroyed) return
+    const now = Date.now()
+    const isDocHidden =
+      typeof document !== 'undefined' && document.visibilityState === 'hidden'
+
+    if (isDocHidden) {
+      if (this.hiddenSinceAt === null) {
+        this.hiddenSinceAt = now
+      }
+    } else {
+      this.hiddenSinceAt = null
+    }
+
+    const hiddenDuration = this.hiddenSinceAt !== null ? now - this.hiddenSinceAt : 0
+    const idleDuration = now - this.lastUserActivityAt
+    const isActivelyPresenting = Boolean(this.currentProfile.inVR)
+
+    if (
+      !isActivelyPresenting &&
+      (hiddenDuration >= IDLE_HIBERNATION_MS ||
+        (!this.hasActiveRemotePeers() && idleDuration >= IDLE_HIBERNATION_MS))
+    ) {
+      this.enterIdleHibernation()
+      return
+    }
+
+    if (this.hibernated) return
+
     this.presenceMap.set(this.localUserId, {
       profile: this.currentProfile,
-      lastSeen: Date.now(),
+      lastSeen: now,
     })
     void this.publishEncrypted('presence-announce', this.currentProfile)
     this.emitPresenceRoster()
@@ -264,6 +373,9 @@ export class RoomRealtimeService {
     window.addEventListener('beforeunload', this.handleWindowUnload)
     window.addEventListener('pagehide', this.handleWindowUnload)
     window.addEventListener('online', this.handleNetworkOrVisibilityWake)
+    window.addEventListener('pointerdown', this.handleUserActivity, { passive: true })
+    window.addEventListener('keydown', this.handleUserActivity, { passive: true })
+    window.addEventListener('touchstart', this.handleUserActivity, { passive: true })
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', this.handleVisibilityChange)
     }
@@ -275,21 +387,32 @@ export class RoomRealtimeService {
     window.removeEventListener('beforeunload', this.handleWindowUnload)
     window.removeEventListener('pagehide', this.handleWindowUnload)
     window.removeEventListener('online', this.handleNetworkOrVisibilityWake)
+    window.removeEventListener('pointerdown', this.handleUserActivity)
+    window.removeEventListener('keydown', this.handleUserActivity)
+    window.removeEventListener('touchstart', this.handleUserActivity)
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.handleVisibilityChange)
     }
   }
 
   private handleVisibilityChange = (): void => {
-    if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-      this.handleNetworkOrVisibilityWake()
+    if (typeof document !== 'undefined') {
+      if (document.visibilityState === 'visible') {
+        this.hiddenSinceAt = null
+        this.lastUserActivityAt = Date.now()
+        this.handleNetworkOrVisibilityWake()
+      } else if (document.visibilityState === 'hidden') {
+        this.hiddenSinceAt = Date.now()
+      }
     }
   }
 
   private handleNetworkOrVisibilityWake = (): void => {
     if (this.destroyed || !this.masterKeyHex || !this.topicToken) return
-    this.runHeartbeatTick()
-    this.requestRoomState()
+    const wasHibernated = this.hibernated
+    this.hibernated = false
+    this.hiddenSinceAt = null
+    this.lastUserActivityAt = Date.now()
 
     if (this.mode === 'supabase') {
       const chState = (this.supabaseChannel as unknown as { state?: string } | null)?.state
@@ -299,8 +422,15 @@ export class RoomRealtimeService {
           void client.removeChannel(this.supabaseChannel).catch(() => undefined)
           this.supabaseChannel = null
         }
+        if (wasHibernated || !this.mqttClient) {
+          void this.connectMqttBroker(0, true)
+        }
         void this.connectSupabase()
+        return
       }
+    } else if (wasHibernated || !this.mqttClient) {
+      this.connectCloudRelayAndLocal()
+      return
     }
 
     if (this.mqttClient && !this.mqttClient.connected) {
@@ -310,6 +440,9 @@ export class RoomRealtimeService {
         // Ignore reconnect error; mqtt client manages its own backoff
       }
     }
+
+    this.runHeartbeatTick()
+    this.requestRoomState()
   }
 
   async connect(): Promise<void> {
@@ -364,12 +497,17 @@ export class RoomRealtimeService {
       senderId: this.localUserId,
       payload,
     }
-    // High-frequency 20Hz pose-update packets are already authenticated & encrypted
+    // High-frequency 20Hz pose-update and NES button input packets are already authenticated & encrypted
     // via room AES-256-GCM; skip redundant per-frame ECDSA P-256 signing overhead.
-    const signed: RelayEnvelope =
-      type === 'pose-update'
-        ? { ...baseEnvelope, ts: Date.now(), pubKey: '', sig: '' }
-        : await signRealtimeEnvelope(this.roomCode, baseEnvelope)
+    const isFastInputPacket =
+      type === 'pose-update' ||
+      (type === 'nes-event' &&
+        payload &&
+        typeof payload === 'object' &&
+        (payload as { kind?: string }).kind === 'nes-input')
+    const signed: RelayEnvelope = isFastInputPacket
+      ? { ...baseEnvelope, ts: Date.now(), pubKey: '', sig: '' }
+      : await signRealtimeEnvelope(this.roomCode, baseEnvelope)
     const wirePacket = await encryptRoomPayload(
       this.masterKeyHex,
       this.roomCode,
@@ -386,7 +524,13 @@ export class RoomRealtimeService {
       rawPacket,
     )
     if (!decrypted) return null
-    if (decrypted.type === 'pose-update') {
+    const isFastInputPacket =
+      decrypted.type === 'pose-update' ||
+      (decrypted.type === 'nes-event' &&
+        decrypted.payload &&
+        typeof decrypted.payload === 'object' &&
+        (decrypted.payload as { kind?: string }).kind === 'nes-input')
+    if (isFastInputPacket) {
       if (
         typeof decrypted.senderId !== 'string' ||
         !decrypted.senderId ||
@@ -418,6 +562,23 @@ export class RoomRealtimeService {
         broadcast: { self: false, ack: false },
       },
     })
+
+    if (typeof BroadcastChannel !== 'undefined' && this.topicToken) {
+      if (this.localChannel) {
+        this.localChannel.close()
+      }
+      const bc = new BroadcastChannel(`vr-lounge-bc-enc:${this.topicToken}`)
+      bc.onmessage = (ev: MessageEvent<EncryptedWirePacket>) => {
+        if (!this.destroyed && ev.data) {
+          void this.decodeAndVerifyPacket(ev.data).then((env) => {
+            if (env && !this.destroyed) {
+              this.handleRelayEnvelope(env)
+            }
+          })
+        }
+      }
+      this.localChannel = bc
+    }
 
     // Seed local presence and start periodic signed presence heartbeat
     this.presenceMap.set(this.localUserId, {
@@ -858,11 +1019,30 @@ export class RoomRealtimeService {
     allowDuringTeardown = false,
   ): Promise<void> {
     if ((this.destroyed && !allowDuringTeardown) || !this.masterKeyHex) return
+    if (this.hibernated && !allowDuringTeardown) {
+      if (type === 'pose-update' || type === 'presence-announce') return
+      this.handleNetworkOrVisibilityWake()
+    }
+
+    const hasRemotePeers = this.hasActiveRemotePeers()
+    if (type === 'pose-update' && !hasRemotePeers) {
+      return
+    }
+
     const built = await this.buildEncryptedPacket(type, payload).catch(() => null)
     if (!built || (this.destroyed && !allowDuringTeardown)) return
     const { wirePacket } = built
 
-    if (this.supabaseChannel && this.mode === 'supabase') {
+    const mqttConnected = Boolean(this.mqttClient?.connected)
+    const sendToSupabase = shouldSendRealtimeEnvelopeToSupabase(
+      type,
+      payload,
+      mqttConnected,
+      hasRemotePeers,
+      this.hibernated && !allowDuringTeardown,
+    )
+
+    if (this.supabaseChannel && this.mode === 'supabase' && sendToSupabase) {
       await this.supabaseChannel
         .send({
           type: 'broadcast',
@@ -872,23 +1052,17 @@ export class RoomRealtimeService {
         .catch(() => undefined)
     }
 
-    // Publish all packets on MQTT in cloud-relay mode, AND also dual-publish
-    // critical WebRTC signaling & control packets in supabase mode for zero-drop reliability.
-    if (
-      this.mqttClient?.connected &&
-      (this.mode !== 'supabase' || type !== 'pose-update')
-    ) {
+    // Publish all packets on MQTT in cloud-relay mode, AND also publish
+    // offloaded high-frequency packets (pose-update, nes-input) + critical control packets in supabase mode.
+    if (mqttConnected) {
       const qos =
         type === 'webrtc-signal' || type === 'presence-announce' || type === 'presence-leave'
           ? 1
           : 0
-      this.mqttClient.publish(this.mqttTopic, JSON.stringify(wirePacket), { qos })
+      this.mqttClient!.publish(this.mqttTopic, JSON.stringify(wirePacket), { qos })
     }
 
-    if (
-      this.localChannel &&
-      (type !== 'pose-update' || (!this.mqttClient?.connected && !this.supabaseChannel))
-    ) {
+    if (this.localChannel) {
       try {
         this.localChannel.postMessage(wirePacket)
       } catch {

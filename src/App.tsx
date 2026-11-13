@@ -99,6 +99,7 @@ import {
 import type { YouTubeVideoItem } from './services/youtube'
 import { exitVRSession, xrStore } from './store/xrStore'
 import type {
+  AvatarPose6DoF,
   ComputedSeat,
   ExpansionWingSyncedState,
   FurnitureCatalogId,
@@ -1664,6 +1665,15 @@ export function App() {
     }
   }, [roomIsLocalPresenter, roomPresenterState.screenMode, roomUpdatePresenterMedia])
 
+  const handlePeerDataPose = useCallback(
+    (pose: AvatarPose6DoF) => {
+      if (pose.userId !== room.localUserId) {
+        room.remotePosesRef.current.set(pose.userId, pose)
+      }
+    },
+    [room.localUserId, room.remotePosesRef],
+  )
+
   const webrtc = useWebRTC({
     joined: room.joined,
     inVRSession,
@@ -1674,13 +1684,31 @@ export function App() {
     selectedMicId,
     sendSignal: room.sendWebRTCSignal,
     onScreenShareEndedByBrowser: handleScreenShareEndedByBrowser,
+    onPeerDataPose: handlePeerDataPose,
   })
 
   const {
     localScreenStream: webrtcLocalScreenStream,
     startTabShare: webrtcStartTabShare,
     stopTabShare: webrtcStopTabShare,
+    broadcastPoseOverDataChannel: webrtcBroadcastPoseP2P,
   } = webrtc
+
+  const handleBroadcastPose = useCallback(
+    (pose: AvatarPose6DoF) => {
+      const remoteCount = room.participants.filter(
+        (p) => p.userId !== room.localUserId,
+      ).length
+      if (remoteCount <= 0) return
+      // Send directly over peer-to-peer WebRTC DataChannels first (0 relay/Supabase quota).
+      // Only fall back to the room bus if at least one remote peer's DataChannel is not open yet.
+      const deliveredToAllPeersP2P = webrtcBroadcastPoseP2P(pose, remoteCount)
+      if (!deliveredToAllPeersP2P) {
+        room.broadcastPose(pose)
+      }
+    },
+    [room, webrtcBroadcastPoseP2P],
+  )
 
   useEffect(() => {
     signalHandlerRef.current = webrtc.handleWebRTCSignal
@@ -1688,6 +1716,7 @@ export function App() {
 
   const handlePresenterHeartbeatProgress = useCallback(
     (currentTime: number, duration: number) => {
+      if (room.participants.length <= 1) return
       roomUpdatePresenterMedia(
         {
           currentTime,
@@ -1696,7 +1725,7 @@ export function App() {
         false,
       )
     },
-    [roomUpdatePresenterMedia],
+    [room.participants.length, roomUpdatePresenterMedia],
   )
 
   const media = useMediaScreen({
@@ -2796,7 +2825,7 @@ export function App() {
                 remoteVoiceStreams={webrtc.remoteVoiceStreams}
                 voiceVolume={voiceVolume}
                 selectedSpeakerId={selectedSpeakerId}
-                broadcastPose={room.broadcastPose}
+                broadcastPose={handleBroadcastPose}
                 spectralGhostUserIds={Object.values(
                   barGames.adventureState.players,
                 )

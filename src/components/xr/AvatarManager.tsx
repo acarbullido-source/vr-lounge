@@ -588,6 +588,16 @@ export function AvatarManager({
 
   // Pre-allocated scratch math objects (zero per-frame heap allocations)
   const lastBroadcastTimeRef = useRef(0)
+  const lastSentPoseSnapshotRef = useRef<{
+    headPos: [number, number, number]
+    headQuat: [number, number, number, number]
+    leftPos: [number, number, number] | null
+    rightPos: [number, number, number] | null
+    seatId: string | undefined
+    inVR: boolean
+    isFlying: boolean
+    sentAtElapsed: number
+  } | null>(null)
   const scratchHeadPos = useMemo(() => new THREE.Vector3(), [])
   const scratchHeadQuat = useMemo(() => new THREE.Quaternion(), [])
   const scratchLeftPos = useMemo(() => new THREE.Vector3(), [])
@@ -595,7 +605,12 @@ export function AvatarManager({
   const scratchRightPos = useMemo(() => new THREE.Vector3(), [])
   const scratchRightQuat = useMemo(() => new THREE.Quaternion(), [])
 
-  // Throttled ~20Hz (50ms) local 6DoF capture & broadcast
+  const remoteParticipants = useMemo(
+    () => participants.filter((p) => p.userId !== localProfile.userId),
+    [localProfile.userId, participants],
+  )
+
+  // Throttled ~20Hz (50ms) local 6DoF capture & broadcast with delta-threshold compression
   useFrame(({ clock }) => {
     // Update local VR Spectral Ghost hand overlays every frame if local player is a Spectral Ghost
     if (inXRSession && isLocalSpectralGhost) {
@@ -616,7 +631,8 @@ export function AvatarManager({
       if (localRightGhostHandRef.current) localRightGhostHandRef.current.visible = false
     }
 
-    if (!joined) return
+    // Never broadcast 6DoF poses when not joined or when alone in the room (0 remote participants)
+    if (!joined || remoteParticipants.length === 0) return
     const nowElapsed = clock.elapsedTime
     if (nowElapsed - lastBroadcastTimeRef.current < 0.05) return
     lastBroadcastTimeRef.current = nowElapsed
@@ -741,35 +757,85 @@ export function AvatarManager({
       }
     }
 
+    const headPosTuple: [number, number, number] = [
+      Number(scratchHeadPos.x.toFixed(4)),
+      Number(scratchHeadPos.y.toFixed(4)),
+      Number(scratchHeadPos.z.toFixed(4)),
+    ]
+    const headQuatTuple: [number, number, number, number] = [
+      Number(scratchHeadQuat.x.toFixed(4)),
+      Number(scratchHeadQuat.y.toFixed(4)),
+      Number(scratchHeadQuat.z.toFixed(4)),
+      Number(scratchHeadQuat.w.toFixed(4)),
+    ]
+    const effectiveSeatId = isRoaming ? FREE_ROAM_SEAT_ID : seat.id
+    const effectiveFlying = Boolean(isFlying && isRoaming)
+
+    // Delta-threshold compression: if head and hands have not moved (>1.5mm) or rotated (>0.0025 rad)
+    // and seat/VR/fly state is unchanged, only send a periodic 5.0s keepalive snapshot.
+    const prevSnap = lastSentPoseSnapshotRef.current
+    if (prevSnap && nowElapsed - prevSnap.sentAtElapsed < 5.0) {
+      const headMoved =
+        Math.abs(headPosTuple[0] - prevSnap.headPos[0]) > 0.0015 ||
+        Math.abs(headPosTuple[1] - prevSnap.headPos[1]) > 0.0015 ||
+        Math.abs(headPosTuple[2] - prevSnap.headPos[2]) > 0.0015
+      const headRotated =
+        Math.abs(headQuatTuple[0] - prevSnap.headQuat[0]) > 0.0025 ||
+        Math.abs(headQuatTuple[1] - prevSnap.headQuat[1]) > 0.0025 ||
+        Math.abs(headQuatTuple[2] - prevSnap.headQuat[2]) > 0.0025 ||
+        Math.abs(headQuatTuple[3] - prevSnap.headQuat[3]) > 0.0025
+      const leftPos = leftTransform?.position ?? null
+      const rightPos = rightTransform?.position ?? null
+      const leftMoved =
+        Boolean(leftPos) !== Boolean(prevSnap.leftPos) ||
+        (leftPos !== null &&
+          prevSnap.leftPos !== null &&
+          (Math.abs(leftPos[0] - prevSnap.leftPos[0]) > 0.002 ||
+            Math.abs(leftPos[1] - prevSnap.leftPos[1]) > 0.002 ||
+            Math.abs(leftPos[2] - prevSnap.leftPos[2]) > 0.002))
+      const rightMoved =
+        Boolean(rightPos) !== Boolean(prevSnap.rightPos) ||
+        (rightPos !== null &&
+          prevSnap.rightPos !== null &&
+          (Math.abs(rightPos[0] - prevSnap.rightPos[0]) > 0.002 ||
+            Math.abs(rightPos[1] - prevSnap.rightPos[1]) > 0.002 ||
+            Math.abs(rightPos[2] - prevSnap.rightPos[2]) > 0.002))
+      const metaChanged =
+        prevSnap.seatId !== effectiveSeatId ||
+        prevSnap.inVR !== inXRSession ||
+        prevSnap.isFlying !== effectiveFlying
+
+      if (!headMoved && !headRotated && !leftMoved && !rightMoved && !metaChanged) {
+        return
+      }
+    }
+
+    lastSentPoseSnapshotRef.current = {
+      headPos: headPosTuple,
+      headQuat: headQuatTuple,
+      leftPos: leftTransform?.position ?? null,
+      rightPos: rightTransform?.position ?? null,
+      seatId: effectiveSeatId,
+      inVR: inXRSession,
+      isFlying: effectiveFlying,
+      sentAtElapsed: nowElapsed,
+    }
+
     broadcastPose({
       userId: localProfile.userId,
       head: {
-        position: [
-          Number(scratchHeadPos.x.toFixed(4)),
-          Number(scratchHeadPos.y.toFixed(4)),
-          Number(scratchHeadPos.z.toFixed(4)),
-        ],
-        quaternion: [
-          Number(scratchHeadQuat.x.toFixed(4)),
-          Number(scratchHeadQuat.y.toFixed(4)),
-          Number(scratchHeadQuat.z.toFixed(4)),
-          Number(scratchHeadQuat.w.toFixed(4)),
-        ],
+        position: headPosTuple,
+        quaternion: headQuatTuple,
       },
       leftHand: leftTransform,
       rightHand: rightTransform,
       seatIndex: isRoaming ? -1 : seat.index,
-      seatId: isRoaming ? FREE_ROAM_SEAT_ID : seat.id,
+      seatId: effectiveSeatId,
       inVR: inXRSession,
-      isFlying: Boolean(isFlying && isRoaming),
+      isFlying: effectiveFlying,
       timestamp: Date.now(),
     })
   })
-
-  const remoteParticipants = useMemo(
-    () => participants.filter((p) => p.userId !== localProfile.userId),
-    [localProfile.userId, participants],
-  )
 
   return (
     <group name="avatar-manager">
